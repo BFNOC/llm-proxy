@@ -149,25 +149,49 @@ func (h *AdminHandler) updateUpstream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Read existing upstream to preserve fields not provided in the request.
+	existing, err := h.store.GetUpstream(id)
+	if err != nil {
+		jsonError(w, http.StatusNotFound, fmt.Sprintf("upstream %d not found", id))
+		return
+	}
+
 	var req struct {
-		Name     string `json:"name"`
-		BaseURL  string `json:"base_url"`
-		APIKey   string `json:"api_key"`
-		Priority int    `json:"priority"`
+		Name     *string `json:"name"`
+		BaseURL  *string `json:"base_url"`
+		APIKey   *string `json:"api_key"`
+		Priority *int    `json:"priority"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
 
-	if req.BaseURL != "" {
-		if err := validateBaseURL(req.BaseURL); err != nil {
+	name := existing.Name
+	if req.Name != nil {
+		name = *req.Name
+	}
+	baseURL := existing.BaseURL
+	if req.BaseURL != nil {
+		baseURL = *req.BaseURL
+	}
+	apiKey := existing.APIKey
+	if req.APIKey != nil && *req.APIKey != "" {
+		apiKey = *req.APIKey
+	}
+	priority := existing.Priority
+	if req.Priority != nil {
+		priority = *req.Priority
+	}
+
+	if baseURL != existing.BaseURL {
+		if err := validateBaseURL(baseURL); err != nil {
 			jsonError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 	}
 
-	upstream, err := h.store.UpdateUpstream(id, req.Name, req.BaseURL, req.APIKey, req.Priority)
+	upstream, err := h.store.UpdateUpstream(id, name, baseURL, apiKey, priority)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return

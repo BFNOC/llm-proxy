@@ -125,7 +125,7 @@ function loadUpstreams() {
     api('/upstreams').then(data => {
         const tbody = document.getElementById('upstreams-table');
         tbody.innerHTML = (data||[]).map(u =>
-            '<tr><td>'+u.id+'</td><td>'+esc(u.name)+'</td><td>'+esc(u.base_url)+'</td><td>'+u.priority+'</td><td><button onclick="deleteUpstream('+u.id+')">删除</button></td></tr>'
+            '<tr><td>'+u.id+'</td><td>'+esc(u.name)+'</td><td>'+esc(u.base_url)+'</td><td>'+u.priority+'</td><td><button onclick="editUpstream('+u.id+','+JSON.stringify(esc(u.name)).replace(/"/g,'&quot;')+','+JSON.stringify(esc(u.base_url)).replace(/"/g,'&quot;')+','+u.priority+')">编辑</button> <button onclick="deleteUpstream('+u.id+')">删除</button></td></tr>'
         ).join('');
     });
 }
@@ -139,6 +139,22 @@ function createUpstream(e) {
     })}).then(d => { if(d.error) alert(d.error); else { e.target.reset(); loadUpstreams(); }});
 }
 
+function editUpstream(id, name, url, priority) {
+    const newName = prompt('名称:', name);
+    if (newName === null) return;
+    const newUrl = prompt('地址:', url);
+    if (newUrl === null) return;
+    const newKey = prompt('API 密钥 (留空则不修改):', '');
+    if (newKey === null) return;
+    const newPriority = prompt('优先级 (0=最高):', priority);
+    if (newPriority === null) return;
+    const body = {name: newName, base_url: newUrl, priority: parseInt(newPriority||'0')};
+    if (newKey) body.api_key = newKey;
+    api('/upstreams/'+id, {method:'PUT', body: JSON.stringify(body)}).then(d => {
+        if(d.error) alert(d.error); else loadUpstreams();
+    });
+}
+
 function deleteUpstream(id) {
     if(!confirm('确定删除上游 '+id+' 吗？')) return;
     api('/upstreams/'+id, {method:'DELETE'}).then(() => loadUpstreams());
@@ -148,7 +164,7 @@ function loadKeys() {
     api('/keys').then(data => {
         const tbody = document.getElementById('keys-table');
         tbody.innerHTML = (data||[]).map(k =>
-            '<tr><td>'+k.id+'</td><td><code>'+esc(k.key_prefix)+'...</code></td><td>'+esc(k.name)+'</td><td>'+(k.rpm_limit||'不限')+'</td><td>'+(k.enabled?'<span class="badge badge-green">启用</span>':'<span class="badge badge-red">禁用</span>')+'</td><td><button onclick="toggleKey('+k.id+','+(!k.enabled)+')">切换</button> <button onclick="deleteKey('+k.id+')">删除</button></td></tr>'
+            '<tr><td>'+k.id+'</td><td><code>'+esc(k.key_prefix)+'...</code></td><td>'+esc(k.name)+'</td><td>'+(k.rpm_limit||'不限')+'</td><td>'+(k.enabled?'<span class="badge badge-green">启用</span>':'<span class="badge badge-red">禁用</span>')+'</td><td><button onclick="editKey('+k.id+','+JSON.stringify(esc(k.name)).replace(/"/g,'&quot;')+','+k.rpm_limit+')">编辑</button> <button onclick="toggleKey('+k.id+','+(!k.enabled)+')">切换</button> <button onclick="deleteKey('+k.id+')">删除</button></td></tr>'
         ).join('');
     });
 }
@@ -164,6 +180,16 @@ function createKey(e) {
         document.getElementById('new-key-display').style.display = 'block';
         e.target.reset(); loadKeys();
     });
+}
+
+function editKey(id, name, rpm) {
+    const newName = prompt('名称:', name);
+    if (newName === null) return;
+    const newRpm = prompt('每分钟请求限制 (0=不限):', rpm);
+    if (newRpm === null) return;
+    api('/keys/'+id, {method:'PUT', body: JSON.stringify({
+        name: newName, rpm_limit: parseInt(newRpm||'0')
+    })}).then(d => { if(d.error) alert(d.error); else loadKeys(); });
 }
 
 function toggleKey(id, enabled) {
