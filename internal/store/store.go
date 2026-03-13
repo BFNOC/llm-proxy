@@ -25,22 +25,14 @@ func NewStore(dbPath string, encryptionKey []byte) (*Store, error) {
 		return nil, fmt.Errorf("encryption key must be 32 bytes, got %d", len(encryptionKey))
 	}
 
-	db, err := sql.Open("sqlite", dbPath)
+	// Use DSN parameters to ensure PRAGMAs apply to every connection in the pool.
+	dsn := dbPath + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)"
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
-
-	pragmas := []string{
-		`PRAGMA journal_mode=WAL`,
-		`PRAGMA busy_timeout=5000`,
-		`PRAGMA foreign_keys=ON`,
-	}
-	for _, p := range pragmas {
-		if _, err = db.Exec(p); err != nil {
-			_ = db.Close()
-			return nil, fmt.Errorf("set pragma %q: %w", p, err)
-		}
-	}
+	// Single-instance deployment: limit pool to 1 connection for SQLite safety.
+	db.SetMaxOpenConns(1)
 
 	if err = RunMigrations(db); err != nil {
 		_ = db.Close()
@@ -125,7 +117,7 @@ func (s *Store) GetUpstream(id int64) (*UpstreamProvider, error) {
 func (s *Store) ListUpstreams() ([]UpstreamProvider, error) {
 	rows, err := s.db.Query(
 		`SELECT id, name, base_url, api_key, priority, created_at, updated_at
-		 FROM upstream_providers ORDER BY priority DESC, id ASC`,
+		 FROM upstream_providers ORDER BY priority ASC, id ASC`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query upstreams: %w", err)
