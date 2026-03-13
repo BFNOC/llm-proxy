@@ -1,0 +1,107 @@
+package store
+
+import (
+	"database/sql"
+	"fmt"
+)
+
+// migration represents a single schema migration step.
+type migration struct {
+	version int
+	up      string
+}
+
+var migrations = []migration{
+	{
+		version: 1,
+		up: `
+CREATE TABLE IF NOT EXISTS _meta (
+    schema_version INTEGER NOT NULL DEFAULT 0
+);
+
+INSERT INTO _meta (schema_version)
+SELECT 0 WHERE NOT EXISTS (SELECT 1 FROM _meta);
+
+CREATE TABLE IF NOT EXISTS upstream_providers (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT NOT NULL,
+    base_url   TEXT NOT NULL,
+    api_key    TEXT NOT NULL,
+    priority   INTEGER NOT NULL DEFAULT 0,
+    created_at DATETIME,
+    updated_at DATETIME
+);
+
+CREATE TABLE IF NOT EXISTS downstream_keys (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    key_hash   TEXT NOT NULL UNIQUE,
+    key_prefix TEXT NOT NULL,
+    name       TEXT NOT NULL,
+    rpm_limit  INTEGER NOT NULL DEFAULT 0 CHECK(rpm_limit >= 0),
+    enabled    BOOLEAN NOT NULL DEFAULT 1,
+    created_at DATETIME,
+    updated_at DATETIME
+);
+
+CREATE TABLE IF NOT EXISTS request_logs (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    downstream_key_id INTEGER NOT NULL,
+    provider_style    TEXT NOT NULL,
+    path              TEXT NOT NULL,
+    status_code       INTEGER NOT NULL,
+    latency_ms        INTEGER NOT NULL,
+    created_at        DATETIME NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_request_logs_created_at ON request_logs (created_at);
+CREATE INDEX IF NOT EXISTS idx_request_logs_key_id ON request_logs (downstream_key_id);
+`,
+	},
+}
+
+// RunMigrations applies all pending schema migrations in order.
+func RunMigrations(db *sql.DB) error {
+	// Ensure _meta table exists so we can read the current version.
+	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS _meta (schema_version INTEGER NOT NULL DEFAULT 0)`)
+	if err != nil {
+		return fmt.Errorf("create _meta table: %w", err)
+	}
+
+	// Seed the row if absent.
+	_, err = db.Exec(`INSERT INTO _meta (schema_version) SELECT 0 WHERE NOT EXISTS (SELECT 1 FROM _meta)`)
+	if err != nil {
+		return fmt.Errorf("seed _meta row: %w", err)
+	}
+
+	var currentVersion int
+	if err = db.QueryRow(`SELECT schema_version FROM _meta`).Scan(&currentVersion); err != nil {
+		return fmt.Errorf("read schema version: %w", err)
+	}
+
+	for _, m := range migrations {
+		if m.version <= currentVersion {
+			continue
+		}
+
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("begin migration %d: %w", m.version, err)
+		}
+
+		if _, err = tx.Exec(m.up); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("apply migration %d: %w", m.version, err)
+		}
+
+		if _, err = tx.Exec(`UPDATE _meta SET schema_version = ?`, m.version); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("update schema version to %d: %w", m.version, err)
+		}
+
+		if err = tx.Commit(); err != nil {
+			return fmt.Errorf("commit migration %d: %w", m.version, err)
+		}
+	}
+
+	return nil
+}
