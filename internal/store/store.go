@@ -251,6 +251,22 @@ func (s *Store) LookupKeyByHash(hash string) (*DownstreamKey, error) {
 	return &dk, nil
 }
 
+// LookupKeyByID retrieves a downstream key by its ID.
+func (s *Store) LookupKeyByID(id int64) (*DownstreamKey, error) {
+	row := s.db.QueryRow(
+		`SELECT id, key_hash, key_prefix, name, rpm_limit, enabled, created_at, updated_at
+		 FROM downstream_keys WHERE id=?`, id,
+	)
+	var dk DownstreamKey
+	if err := row.Scan(&dk.ID, &dk.KeyHash, &dk.KeyPrefix, &dk.Name, &dk.RPMLimit, &dk.Enabled, &dk.CreatedAt, &dk.UpdatedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("key %d not found", id)
+		}
+		return nil, fmt.Errorf("scan downstream key: %w", err)
+	}
+	return &dk, nil
+}
+
 // ListKeys returns all downstream keys ordered by creation time.
 func (s *Store) ListKeys() ([]DownstreamKey, error) {
 	return s.queryKeys(

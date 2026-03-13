@@ -97,6 +97,7 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
 </main>
 <script>
 let TOKEN = '';
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 const api = (path, opts={}) => fetch('/admin/api'+path, {
     ...opts,
     headers: {'Authorization':'Bearer '+TOKEN, 'Content-Type':'application/json', ...(opts.headers||{})}
@@ -124,7 +125,7 @@ function loadUpstreams() {
     api('/upstreams').then(data => {
         const tbody = document.getElementById('upstreams-table');
         tbody.innerHTML = (data||[]).map(u =>
-            '<tr><td>'+u.id+'</td><td>'+u.name+'</td><td>'+u.base_url+'</td><td>'+u.priority+'</td><td><button onclick="deleteUpstream('+u.id+')">Delete</button></td></tr>'
+            '<tr><td>'+u.id+'</td><td>'+esc(u.name)+'</td><td>'+esc(u.base_url)+'</td><td>'+u.priority+'</td><td><button onclick="deleteUpstream('+u.id+')">Delete</button></td></tr>'
         ).join('');
     });
 }
@@ -147,7 +148,7 @@ function loadKeys() {
     api('/keys').then(data => {
         const tbody = document.getElementById('keys-table');
         tbody.innerHTML = (data||[]).map(k =>
-            '<tr><td>'+k.id+'</td><td><code>'+k.key_prefix+'...</code></td><td>'+k.name+'</td><td>'+(k.rpm_limit||'unlimited')+'</td><td>'+(k.enabled?'<span class="badge badge-green">Active</span>':'<span class="badge badge-red">Disabled</span>')+'</td><td><button onclick="toggleKey('+k.id+','+(!k.enabled)+')">Toggle</button> <button onclick="deleteKey('+k.id+')">Delete</button></td></tr>'
+            '<tr><td>'+k.id+'</td><td><code>'+esc(k.key_prefix)+'...</code></td><td>'+esc(k.name)+'</td><td>'+(k.rpm_limit||'unlimited')+'</td><td>'+(k.enabled?'<span class="badge badge-green">Active</span>':'<span class="badge badge-red">Disabled</span>')+'</td><td><button onclick="toggleKey('+k.id+','+(!k.enabled)+')">Toggle</button> <button onclick="deleteKey('+k.id+')">Delete</button></td></tr>'
         ).join('');
     });
 }
@@ -182,7 +183,7 @@ function loadLogs(e) {
     api('/logs'+q).then(data => {
         const tbody = document.getElementById('logs-table');
         tbody.innerHTML = (data||[]).map(l =>
-            '<tr><td>'+l.ID+'</td><td>'+l.DownstreamKeyID+'</td><td>'+l.ProviderStyle+'</td><td>'+l.Path+'</td><td>'+l.StatusCode+'</td><td>'+l.LatencyMs+'ms</td><td>'+l.CreatedAt+'</td></tr>'
+            '<tr><td>'+l.ID+'</td><td>'+l.DownstreamKeyID+'</td><td>'+esc(l.ProviderStyle)+'</td><td>'+esc(l.Path)+'</td><td>'+l.StatusCode+'</td><td>'+l.LatencyMs+'ms</td><td>'+esc(l.CreatedAt)+'</td></tr>'
         ).join('');
     });
 }

@@ -186,6 +186,8 @@ func (h *AdminHandler) deleteUpstream(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// Trigger immediate probe to update active upstream if needed.
+	go h.prober.ProbeNow()
 	slog.Info("admin: deleted upstream", "id", id)
 	jsonOK(w, map[string]string{"status": "deleted"})
 }
@@ -261,22 +263,37 @@ func (h *AdminHandler) updateKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Read existing key to preserve fields not provided in the request.
+	existing, err := h.store.LookupKeyByID(id)
+	if err != nil {
+		jsonError(w, http.StatusNotFound, fmt.Sprintf("key %d not found", id))
+		return
+	}
+
 	var req struct {
-		Name     string `json:"name"`
-		RPMLimit int    `json:"rpm_limit"`
-		Enabled  *bool  `json:"enabled"` // pointer to distinguish absent from false
+		Name     *string `json:"name"`
+		RPMLimit *int    `json:"rpm_limit"`
+		Enabled  *bool   `json:"enabled"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
 
-	enabled := true
+	name := existing.Name
+	if req.Name != nil {
+		name = *req.Name
+	}
+	rpmLimit := existing.RPMLimit
+	if req.RPMLimit != nil {
+		rpmLimit = *req.RPMLimit
+	}
+	enabled := existing.Enabled
 	if req.Enabled != nil {
 		enabled = *req.Enabled
 	}
 
-	key, err := h.store.UpdateKey(id, req.Name, req.RPMLimit, enabled)
+	key, err := h.store.UpdateKey(id, name, rpmLimit, enabled)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -369,9 +386,13 @@ func (h *AdminHandler) queryLogs(w http.ResponseWriter, r *http.Request) {
 // --- Status ---
 
 func (h *AdminHandler) getStatus(w http.ResponseWriter, r *http.Request) {
+	var auditDropped int64
+	if h.auditLogger != nil {
+		auditDropped = h.auditLogger.DroppedCount()
+	}
 	status := map[string]interface{}{
 		"active_upstream_id": h.prober.GetCurrentID(),
-		"audit_dropped":      h.auditLogger.DroppedCount(),
+		"audit_dropped":      auditDropped,
 		"timestamp":          time.Now().UTC(),
 	}
 	jsonOK(w, status)

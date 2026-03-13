@@ -306,6 +306,7 @@ docker-compose-prod:
 	@ENVIRONMENT=production LLM_PROXY_PORT=80 docker run -d \
 		--name llm-proxy-production \
 		-p 80:80 \
+		-v llm-proxy-data:/data \
 		-e ENVIRONMENT=production \
 		-e ENCRYPTION_KEY \
 		-e ADMIN_TOKEN \

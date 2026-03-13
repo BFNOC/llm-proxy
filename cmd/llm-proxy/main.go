@@ -105,6 +105,11 @@ func main() {
 		fmt.Sscanf(v, "%d", &yamlConfig.Server.Port)
 	}
 
+	// Re-initialize logger with final config values (YAML + env overrides).
+	os.Setenv("LOG_LEVEL", yamlConfig.Logging.Level)
+	os.Setenv("LOG_FORMAT", yamlConfig.Logging.Format)
+	initLogger()
+
 	yamlConfig.LogConfiguration(slog.Default())
 
 	// Validate required env vars
@@ -119,7 +124,8 @@ func main() {
 	if len(encryptionKeyHex) == 64 {
 		encryptionKey, err = hex.DecodeString(encryptionKeyHex)
 		if err != nil {
-			encryptionKey = []byte(encryptionKeyHex)[:32]
+			slog.Error("ENCRYPTION_KEY is 64 chars but not valid hex", "error", err)
+			os.Exit(1)
 		}
 	} else if len(encryptionKeyHex) == 32 {
 		encryptionKey = []byte(encryptionKeyHex)
@@ -129,8 +135,8 @@ func main() {
 	}
 
 	adminToken := os.Getenv("ADMIN_TOKEN")
-	if adminToken == "" {
-		slog.Error("ADMIN_TOKEN environment variable is required")
+	if adminToken == "" && yamlConfig.Admin.Enabled {
+		slog.Error("ADMIN_TOKEN environment variable is required when admin is enabled")
 		os.Exit(1)
 	}
 
