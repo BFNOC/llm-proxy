@@ -2,8 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"io"
 	"log/slog"
@@ -14,26 +14,22 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Instawork/llm-proxy/internal/apikeys"
+	"github.com/Instawork/llm-proxy/internal/admin"
 	"github.com/Instawork/llm-proxy/internal/config"
-	"github.com/Instawork/llm-proxy/internal/cost"
 	"github.com/Instawork/llm-proxy/internal/middleware"
-	"github.com/Instawork/llm-proxy/internal/providers"
-	"github.com/Instawork/llm-proxy/internal/ratelimit"
+	"github.com/Instawork/llm-proxy/internal/proxy"
+	"github.com/Instawork/llm-proxy/internal/store"
 	"github.com/gorilla/mux"
 )
 
-// CustomPrettyHandler implements a custom slog.Handler for pretty local output
+// CustomPrettyHandler implements a custom slog.Handler for pretty local output.
 type CustomPrettyHandler struct {
 	level slog.Level
 	w     io.Writer
 }
 
 func NewCustomPrettyHandler(w io.Writer, level slog.Level) *CustomPrettyHandler {
-	return &CustomPrettyHandler{
-		level: level,
-		w:     w,
-	}
+	return &CustomPrettyHandler{level: level, w: w}
 }
 
 func (h *CustomPrettyHandler) Enabled(_ context.Context, level slog.Level) bool {
@@ -42,56 +38,28 @@ func (h *CustomPrettyHandler) Enabled(_ context.Context, level slog.Level) bool 
 
 func (h *CustomPrettyHandler) Handle(_ context.Context, r slog.Record) error {
 	timeStr := r.Time.Format("15:04:05")
-
-	// Build the message with all attributes inline
 	message := r.Message
 	var allAttrs []string
-
 	r.Attrs(func(a slog.Attr) bool {
 		allAttrs = append(allAttrs, fmt.Sprintf("%s=%v", a.Key, a.Value))
 		return true
 	})
-
-	// Add attributes to the message if any exist
 	if len(allAttrs) > 0 {
 		message = fmt.Sprintf("%s; %s", message, strings.Join(allAttrs, ", "))
 	}
-
 	_, err := fmt.Fprintf(h.w, "%s [%s] %s\n", r.Level.String(), timeStr, message)
 	return err
 }
 
-func (h *CustomPrettyHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	return h // Ignore attributes for pretty output
-}
-
-func (h *CustomPrettyHandler) WithGroup(name string) slog.Handler {
-	return h // Ignore groups for pretty output
-}
-
-var logger *slog.Logger
+func (h *CustomPrettyHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
+func (h *CustomPrettyHandler) WithGroup(_ string) slog.Handler      { return h }
 
 const (
-	// Version of the LLM Proxy
-	version = "1.0.0"
-
-	// Default port for the proxy server
+	version     = "2.0.0"
 	defaultPort = "9002"
 )
 
-// Global provider manager instance
-var globalProviderManager *providers.ProviderManager
-
-// Global cost tracker instance
-var globalCostTracker *cost.CostTracker
-
-// Global API key store instance
-var globalAPIKeyStore providers.APIKeyStore
-
-// Global rate limiter instance
-var globalRateLimiter ratelimit.RateLimiter
-
-func init() {
+func initLogger() {
 	logLevel := os.Getenv("LOG_LEVEL")
 	var level slog.Level
 	switch strings.ToLower(logLevel) {
@@ -105,578 +73,205 @@ func init() {
 		level = slog.LevelInfo
 	}
 
-	// Use pretty text format for local development, JSON for production
 	logFormat := os.Getenv("LOG_FORMAT")
 	var handler slog.Handler
-
 	if logFormat == "json" {
-		// JSON format for production/machine parsing with AWS CloudWatch compatible timestamp
-		handler = slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
-			Level: level,
-			ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
-				// Format time with consistent RFC3339 format for better log parsing
-				// This is more precise and timezone-aware than the basic AWS format
-				if a.Key == slog.TimeKey && len(groups) == 0 {
-					return slog.String(a.Key, a.Value.Time().Format("2006-01-02 15:04:05,"))
-				}
-				return a
-			},
-		})
+		handler = slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: level})
 	} else {
-		// Custom pretty format for local development (default)
 		handler = NewCustomPrettyHandler(os.Stderr, level)
 	}
 
-	logger = slog.New(handler)
-
-	// Set our custom logger as the default slog logger
-	// This ensures that any slog.Info() calls throughout the codebase use our configured logger
-	slog.SetDefault(logger)
+	slog.SetDefault(slog.New(handler))
 }
 
-// initializeCostTracker creates and configures the cost tracker with pricing data from config
-func initializeCostTracker(yamlConfig *config.YAMLConfig) *cost.CostTracker {
-	// Check if cost tracking is enabled
-	if !yamlConfig.Features.CostTracking.Enabled {
-		logger.Info("💰 Cost Tracker: Cost tracking is disabled in config")
-		return nil
+func main() {
+	initLogger()
+
+	yamlConfig, err := config.LoadEnvironmentConfig()
+	if err != nil {
+		slog.Warn("Failed to load config, using defaults", "error", err)
+		yamlConfig = config.GetDefaultYAMLConfig()
 	}
 
-	// Get all transport configurations
-	transportConfigs := yamlConfig.GetAllTransports()
-	if len(transportConfigs) == 0 {
-		logger.Error("💰 Cost Tracker: No transport configurations found")
-		return nil
+	// Override from env vars
+	if v := os.Getenv("LOG_LEVEL"); v != "" {
+		yamlConfig.Logging.Level = v
+	}
+	if v := os.Getenv("LOG_FORMAT"); v != "" {
+		yamlConfig.Logging.Format = v
+	}
+	if v := os.Getenv("PORT"); v != "" {
+		// Override port from env
+		fmt.Sscanf(v, "%d", &yamlConfig.Server.Port)
 	}
 
-	logger.Info("💰 Cost Tracker: Initializing transports", "transport_count", len(transportConfigs))
+	yamlConfig.LogConfiguration(slog.Default())
 
-	// Create all configured transports
-	var transports []cost.Transport
-	var failedTransports []string
+	// Validate required env vars
+	encryptionKeyHex := os.Getenv("ENCRYPTION_KEY")
+	if encryptionKeyHex == "" {
+		slog.Error("ENCRYPTION_KEY environment variable is required (32 bytes, hex or raw)")
+		os.Exit(1)
+	}
 
-	for i, transportConfig := range transportConfigs {
-		logger.Info("💰 Cost Tracker: Creating transport", "transport_index", i+1, "configured_type", transportConfig.Type)
-
-		// Log additional transport config details
-		switch transportConfig.Type {
-		case "dynamodb":
-			if transportConfig.DynamoDB != nil {
-				logger.Info("💰 Cost Tracker: DynamoDB configuration",
-					"table_name", transportConfig.DynamoDB.TableName,
-					"region", transportConfig.DynamoDB.Region)
-			}
-		case "file":
-			if transportConfig.File != nil {
-				logger.Info("💰 Cost Tracker: File configuration", "path", transportConfig.File.Path)
-			}
-		case "datadog":
-			if transportConfig.Datadog != nil {
-				logger.Info("💰 Cost Tracker: Datadog configuration",
-					"host", transportConfig.Datadog.Host,
-					"port", transportConfig.Datadog.Port,
-					"namespace", transportConfig.Datadog.Namespace)
-			}
-		}
-
-		transport, err := cost.CreateTransportFromConfig(&transportConfig, logger)
+	// Support both raw 32-byte string and hex-encoded
+	var encryptionKey []byte
+	if len(encryptionKeyHex) == 64 {
+		encryptionKey, err = hex.DecodeString(encryptionKeyHex)
 		if err != nil {
-			// Log the failed config details
-			switch transportConfig.Type {
-			case "dynamodb":
-				if transportConfig.DynamoDB != nil {
-					logger.Error("💰 Cost Tracker: Failed to create DynamoDB transport",
-						"configured_type", transportConfig.Type,
-						"table_name", transportConfig.DynamoDB.TableName,
-						"region", transportConfig.DynamoDB.Region,
-						"error", err)
-				} else {
-					logger.Error("💰 Cost Tracker: Failed to create transport", "configured_type", transportConfig.Type, "error", err)
-				}
-			case "file":
-				if transportConfig.File != nil {
-					logger.Error("💰 Cost Tracker: Failed to create file transport",
-						"configured_type", transportConfig.Type,
-						"path", transportConfig.File.Path,
-						"error", err)
-				} else {
-					logger.Error("💰 Cost Tracker: Failed to create transport", "configured_type", transportConfig.Type, "error", err)
-				}
-			case "datadog":
-				if transportConfig.Datadog != nil {
-					logger.Error("💰 Cost Tracker: Failed to create Datadog transport",
-						"configured_type", transportConfig.Type,
-						"host", transportConfig.Datadog.Host,
-						"port", transportConfig.Datadog.Port,
-						"error", err)
-				} else {
-					logger.Error("💰 Cost Tracker: Failed to create transport", "configured_type", transportConfig.Type, "error", err)
-				}
-			default:
-				logger.Error("💰 Cost Tracker: Failed to create transport", "configured_type", transportConfig.Type, "error", err)
-			}
-			failedTransports = append(failedTransports, transportConfig.Type)
-			continue
+			encryptionKey = []byte(encryptionKeyHex)[:32]
 		}
-
-		logger.Info("💰 Cost Tracker: Transport created successfully", "transport_type", transportConfig.Type)
-		transports = append(transports, transport)
-	}
-
-	// Check if we have at least one working transport
-	if len(transports) == 0 {
-		logger.Error("💰 Cost Tracker: No transports could be created, falling back to file transport")
-
-		// Fallback to file transport with env var or default
-		outputFile := os.Getenv("COST_TRACKING_FILE")
-		if outputFile == "" {
-			outputFile = "logs/cost-tracking.jsonl"
-		}
-
-		logger.Warn("💰 Cost Tracker: Falling back to file transport", "fallback_type", "file", "output_file", outputFile)
-		transport := cost.NewFileTransport(outputFile)
-		transports = append(transports, transport)
-		logger.Info("💰 Cost Tracker: Initialized with fallback", "actual_transport_type", "file", "output_file", outputFile)
-	}
-
-	// Create cost tracker with all working transports
-	costTracker := cost.NewCostTracker(transports...)
-
-	// Log successful initialization
-	transportTypes := make([]string, len(transports))
-	for i := range transports {
-		if i < len(transportConfigs) {
-			transportTypes[i] = transportConfigs[i].Type
-		}
-	}
-
-	if len(failedTransports) > 0 {
-		logger.Warn("💰 Cost Tracker: Initialized with some transport failures",
-			"successful_transports", transportTypes,
-			"failed_transports", failedTransports)
+	} else if len(encryptionKeyHex) == 32 {
+		encryptionKey = []byte(encryptionKeyHex)
 	} else {
-		logger.Info("💰 Cost Tracker: Initialized successfully",
-			"transport_types", transportTypes,
-			"transport_count", len(transports))
-	}
-
-	// Set up logger for the cost tracker
-	costTracker.SetLogger(logger)
-
-	// Configure async mode if enabled
-	if yamlConfig.Features.CostTracking.Async {
-		workers := yamlConfig.Features.CostTracking.Workers
-		if workers <= 0 {
-			workers = 5 // Default
-		}
-		queueSize := yamlConfig.Features.CostTracking.QueueSize
-		if queueSize <= 0 {
-			queueSize = 1000 // Default
-		}
-		flushInterval := yamlConfig.Features.CostTracking.FlushInterval
-		if flushInterval <= 0 {
-			flushInterval = 15 // Default
-		}
-
-		costTracker.ConfigureAsync(workers, queueSize, flushInterval)
-
-		// Start the async workers
-		if err := costTracker.StartAsyncWorkers(); err != nil {
-			logger.Error("💰 Cost Tracker: Failed to start async workers", "error", err)
-			logger.Warn("💰 Cost Tracker: Falling back to synchronous mode")
-			costTracker.SetSyncMode()
-		} else {
-			logger.Info("💰 Cost Tracker: Async mode enabled", "workers", workers, "queue_size", queueSize, "flush_interval_seconds", flushInterval)
-		}
-	} else {
-		logger.Info("💰 Cost Tracker: Synchronous mode enabled")
-	}
-
-	// Load pricing data from config for each provider and model
-	totalModelsConfigured := 0
-
-	for providerName, providerConfig := range yamlConfig.Providers {
-		if !providerConfig.Enabled {
-			continue
-		}
-
-		for modelName, modelConfig := range providerConfig.Models {
-			if !modelConfig.Enabled {
-				continue
-			}
-
-			if modelConfig.Pricing != nil {
-				// Convert YAML pricing to cost tracker format
-				modelPricing, ok := modelConfig.Pricing.(*config.ModelPricing)
-				if !ok {
-					logger.Warn("Could not parse pricing", "provider", providerName, "model", modelName)
-					continue
-				}
-
-				var costTrackerPricing cost.ModelPricing
-				for _, tier := range modelPricing.Tiers {
-					costTrackerPricing.Tiers = append(costTrackerPricing.Tiers, cost.PricingTier{
-						Threshold: tier.Threshold,
-						Input:     tier.Input,
-						Output:    tier.Output,
-					})
-				}
-
-				if modelPricing.Overrides != nil {
-					costTrackerPricing.Overrides = make(map[string]struct {
-						Input  float64 `json:"input"`
-						Output float64 `json:"output"`
-					})
-					for alias, override := range modelPricing.Overrides {
-						costTrackerPricing.Overrides[alias] = struct {
-							Input  float64 `json:"input"`
-							Output float64 `json:"output"`
-						}{Input: override.Input, Output: override.Output}
-					}
-				}
-
-				// Set pricing for main model name
-				costTracker.SetPricingForModel(providerName, modelName, &costTrackerPricing)
-				totalModelsConfigured++
-
-				// Set pricing for all aliases
-				for _, alias := range modelConfig.Aliases {
-					costTracker.SetPricingForModel(providerName, alias, &costTrackerPricing)
-					totalModelsConfigured++
-				}
-			} else {
-				logger.Warn("Model has no pricing configured", "provider", providerName, "model", modelName)
-			}
-		}
-	}
-
-	logger.Info("💰 Cost Tracker: Configured pricing", "total_models_configured", totalModelsConfigured)
-	return costTracker
-}
-
-// initializeAPIKeyStore creates and configures the API key store from config
-func initializeAPIKeyStore(yamlConfig *config.YAMLConfig) providers.APIKeyStore {
-	// Check if API key management is enabled
-	if !yamlConfig.Features.APIKeyManagement.Enabled {
-		logger.Info("🔑 API Key Store: API key management is disabled in config")
-		return nil
-	}
-
-	// Get API key management configuration
-	apiKeyConfig := yamlConfig.Features.APIKeyManagement
-	if apiKeyConfig.TableName == "" || apiKeyConfig.Region == "" {
-		logger.Error("🔑 API Key Store: Missing required configuration (table_name or region)")
-		return nil
-	}
-
-	logger.Info("🔑 API Key Store: Initializing API key store",
-		"table_name", apiKeyConfig.TableName,
-		"region", apiKeyConfig.Region)
-
-	// Create the API key store
-	store, err := apikeys.NewStore(apikeys.StoreConfig{
-		TableName: apiKeyConfig.TableName,
-		Region:    apiKeyConfig.Region,
-		Logger:    logger,
-	})
-	if err != nil {
-		logger.Error("🔑 API Key Store: Failed to create API key store", "error", err)
-		return nil
-	}
-
-	logger.Info("🔑 API Key Store: Successfully initialized API key store")
-	return store
-}
-
-// healthHandler provides a simple health check endpoint
-func healthHandler(w http.ResponseWriter, r *http.Request) {
-	health := map[string]interface{}{
-		"status":    "healthy",
-		"timestamp": time.Now().Unix(),
-		"providers": globalProviderManager.GetHealthStatus(),
-		"features": map[string]bool{
-			"cost_tracking": globalCostTracker != nil,
-		},
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(health)
-}
-
-// handleConfigValidation handles the --validate-config flag functionality
-func handleConfigValidation(validateConfigArg string) {
-	// Parse comma-separated file paths
-	filePaths := strings.Split(validateConfigArg, ",")
-	for i, path := range filePaths {
-		filePaths[i] = strings.TrimSpace(path)
-	}
-
-	fmt.Printf("Validating configuration files: %s\n", strings.Join(filePaths, ", "))
-
-	// Load and merge the configuration files using config package function
-	mergedConfig, err := config.LoadAndMergeConfigs(filePaths)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Configuration validation failed: %v\n", err)
+		slog.Error("ENCRYPTION_KEY must be exactly 32 bytes (or 64 hex chars)")
 		os.Exit(1)
 	}
 
-	// Print success message with summary
-	fmt.Printf("✅ Configuration validation successful!\n")
-	fmt.Printf("📊 Configuration summary:\n")
-	fmt.Printf("   - Enabled: %v\n", mergedConfig.Enabled)
-	fmt.Printf("   - Cost tracking: %v\n", mergedConfig.Features.CostTracking.Enabled)
-
-	if mergedConfig.Features.CostTracking.Enabled {
-		transports := mergedConfig.GetAllTransports()
-		fmt.Printf("   - Transports: %d configured\n", len(transports))
-		for i, transport := range transports {
-			fmt.Printf("     %d. Type: %s\n", i+1, transport.Type)
-		}
-	}
-
-	fmt.Printf("   - Providers: %d configured\n", len(mergedConfig.Providers))
-	for providerName, provider := range mergedConfig.Providers {
-		if provider.Enabled {
-			fmt.Printf("     - %s: %d models\n", providerName, len(provider.Models))
-		}
-	}
-
-	fmt.Printf("🎉 All configuration files are valid and merged successfully!\n")
-	os.Exit(0)
-}
-
-// handleVersionFlag handles the --version flag functionality
-func handleVersionFlag(yamlConfig *config.YAMLConfig) {
-	fmt.Printf("LLM Proxy version %s\n", version)
-	fmt.Println("Configuration:")
-
-	// Print configuration to stdout in a readable format
-	yamlConfig.LogConfiguration(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-	})))
-
-	// Also print as JSON for machine parsing
-	fmt.Println("\nConfiguration JSON:")
-	configJSON, err := json.MarshalIndent(yamlConfig, "", "  ")
-	if err != nil {
-		fmt.Printf("Error marshaling config to JSON: %v\n", err)
+	adminToken := os.Getenv("ADMIN_TOKEN")
+	if adminToken == "" {
+		slog.Error("ADMIN_TOKEN environment variable is required")
 		os.Exit(1)
 	}
-	fmt.Println(string(configJSON))
 
-	fmt.Println("Build successful - configuration loaded without errors")
-	os.Exit(0)
-}
-
-// runServer starts and runs the LLM proxy server
-func runServer(yamlConfig *config.YAMLConfig) {
-	// Get port from environment variable or use default
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = defaultPort
+	// Ensure data directory exists
+	dataDir := yamlConfig.Storage.SQLitePath
+	if idx := strings.LastIndex(dataDir, "/"); idx > 0 {
+		if err := os.MkdirAll(dataDir[:idx], 0o755); err != nil {
+			slog.Error("Failed to create data directory", "error", err)
+			os.Exit(1)
+		}
 	}
 
-	// Log configuration
-	yamlConfig.LogConfiguration(logger)
+	// Open SQLite store
+	db, err := store.NewStore(yamlConfig.Storage.SQLitePath, encryptionKey)
+	if err != nil {
+		slog.Error("Failed to open SQLite store", "error", err)
+		os.Exit(1)
+	}
+	defer db.Close()
+	slog.Info("SQLite store opened", "path", yamlConfig.Storage.SQLitePath)
 
-	// Create router
+	// Create key cache and load snapshot
+	keyCache := middleware.NewKeyCache()
+	if err := keyCache.Reload(db); err != nil {
+		slog.Error("Failed to load key cache", "error", err)
+		os.Exit(1)
+	}
+	slog.Info("Key cache loaded")
+
+	// Create per-key RPM limiter
+	rateLimiter := middleware.NewPerKeyRPMLimiter()
+
+	// Create dynamic proxy
+	dynamicProxy := proxy.NewDynamicProxy()
+
+	// Create upstream prober and start background goroutine
+	probeInterval := time.Duration(yamlConfig.Upstream.ProbeIntervalSeconds) * time.Second
+	probeTimeout := time.Duration(yamlConfig.Upstream.ProbeTimeoutSeconds) * time.Second
+	prober := proxy.NewUpstreamProber(db, dynamicProxy, probeInterval, probeTimeout)
+
+	proberCtx, proberCancel := context.WithCancel(context.Background())
+	go prober.Start(proberCtx)
+	slog.Info("Upstream prober started", "interval", probeInterval)
+
+	// Create audit logger
+	var auditLogger *middleware.AuditLogger
+	if yamlConfig.Audit.Enabled {
+		flushInterval := time.Duration(yamlConfig.Audit.FlushInterval) * time.Millisecond
+		auditLogger = middleware.NewAuditLogger(db, yamlConfig.Audit.ChannelBuffer, yamlConfig.Audit.BatchSize, flushInterval)
+		slog.Info("Audit logger started", "buffer", yamlConfig.Audit.ChannelBuffer, "batch_size", yamlConfig.Audit.BatchSize)
+	}
+
+	// Build router
 	r := mux.NewRouter()
 
-	// Initialize global provider manager
-	globalProviderManager = providers.NewProviderManager()
+	// Health endpoints (no auth)
+	r.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok"}) //nolint:errcheck
+	}).Methods("GET", "HEAD")
 
-	// Initialize cost tracker
-	globalCostTracker = initializeCostTracker(yamlConfig)
-	if globalCostTracker != nil {
-		globalCostTracker.SetLogger(logger)
-	}
-
-	// Initialize API key store if enabled
-	globalAPIKeyStore = initializeAPIKeyStore(yamlConfig)
-
-	// Initialize rate limiter if enabled
-	if yamlConfig.Features.RateLimiting.Enabled {
-		lim, err := ratelimit.Factory(yamlConfig)
-		if err != nil {
-			logger.Error("Failed to initialize rate limiter", "error", err)
-		} else {
-			globalRateLimiter = lim
-			logger.Info("Rate limiting: ENABLED",
-				"backend", yamlConfig.Features.RateLimiting.Backend,
-				"rpm", yamlConfig.Features.RateLimiting.Limits.RequestsPerMinute,
-				"tpm", yamlConfig.Features.RateLimiting.Limits.TokensPerMinute,
-				"rpd", yamlConfig.Features.RateLimiting.Limits.RequestsPerDay,
-				"tpd", yamlConfig.Features.RateLimiting.Limits.TokensPerDay)
+	r.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		status := map[string]interface{}{
+			"status":            "ok",
+			"active_upstream":   dynamicProxy.GetActiveUpstream() != nil,
+			"audit_dropped":     int64(0),
 		}
-	}
-
-	// Register providers
-	openAIProvider := providers.NewOpenAIProxy()
-	globalProviderManager.RegisterProvider(openAIProvider)
-
-	anthropicProvider := providers.NewAnthropicProxy()
-	globalProviderManager.RegisterProvider(anthropicProvider)
-
-	geminiProvider := providers.NewGeminiProxy()
-	globalProviderManager.RegisterProvider(geminiProvider)
-
-	// Add middleware (order matters for streaming)
-	r.Use(middleware.MetaURLRewritingMiddleware(globalProviderManager)) // URL rewriting must happen first
-
-	// Add API key validation middleware if API key management is enabled
-	if globalAPIKeyStore != nil {
-		r.Use(middleware.APIKeyValidationMiddleware(globalProviderManager, globalAPIKeyStore))
-	}
-
-	r.Use(middleware.LoggingMiddleware(globalProviderManager))
-	if globalRateLimiter != nil {
-		r.Use(middleware.RateLimitingMiddleware(globalProviderManager, yamlConfig, globalRateLimiter))
-	}
-	r.Use(middleware.CORSMiddleware(globalProviderManager))
-
-	// Create callbacks for cost tracking
-	var callbacks []middleware.MetadataCallback
-
-	// Add cost tracking callback if enabled
-	if globalCostTracker != nil {
-		costTrackingCallback := func(r *http.Request, metadata *providers.LLMResponseMetadata) {
-			if metadata.TotalTokens > 0 {
-				provider := middleware.GetProviderFromRequest(globalProviderManager, r)
-				userID := middleware.ExtractUserIDFromRequest(r, provider)
-				ipAddress := middleware.ExtractIPAddressFromRequest(r)
-				if err := globalCostTracker.TrackRequest(metadata, userID, ipAddress, r.URL.Path); err != nil {
-					logger.Warn("Failed to track request cost", "error", err)
-				}
-			}
+		if auditLogger != nil {
+			status["audit_dropped"] = auditLogger.DroppedCount()
 		}
-		callbacks = append(callbacks, costTrackingCallback)
+		if dynamicProxy.GetActiveUpstream() == nil {
+			status["status"] = "not_ready"
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}
+		json.NewEncoder(w).Encode(status) //nolint:errcheck
+	}).Methods("GET", "HEAD")
+
+	// Admin routes (separate subrouter, no CORS)
+	if yamlConfig.Admin.Enabled {
+		adminHandler := admin.NewAdminHandler(db, keyCache, rateLimiter, prober, auditLogger, adminToken)
+		adminHandler.RegisterRoutes(r)
+		slog.Info("Admin interface enabled", "dashboard", "/admin/", "api", "/admin/api/")
 	}
 
-	r.Use(middleware.TokenParsingMiddleware(globalProviderManager, callbacks...)) // Add token parsing middleware with callbacks
-	r.Use(middleware.StreamingMiddleware(globalProviderManager))
-
-	// Health check endpoint
-	r.HandleFunc("/health", healthHandler).Methods("GET", "HEAD")
-
-	// Register routes for all providers centrally
-	for name, provider := range globalProviderManager.GetAllProviders() {
-		// Direct provider routes
-		r.PathPrefix(fmt.Sprintf("/%s/", name)).Handler(provider.Proxy()).Methods("GET", "POST", "PUT", "DELETE", "OPTIONS")
-
-		// Meta routes with user ID pattern: /meta/{userID}/provider/
-		// These are handled by URLRewritingMiddleware which rewrites them to /provider/ before reaching here
-		r.PathPrefix(fmt.Sprintf("/meta/{userID}/%s/", name)).Handler(provider.Proxy()).Methods("GET", "POST", "PUT", "DELETE", "OPTIONS")
-
-		logger.Info("Registered provider routes", "provider", name,
-			"direct_path", fmt.Sprintf("/%s/", name),
-			"meta_path", fmt.Sprintf("/meta/{userID}/%s/", name))
+	// Proxy middleware chain for /v1/
+	proxyChain := http.Handler(dynamicProxy)
+	proxyChain = middleware.StreamingMiddleware()(proxyChain)
+	if auditLogger != nil {
+		proxyChain = middleware.AuditLogMiddleware(auditLogger)(proxyChain)
 	}
+	proxyChain = middleware.AuthRewriteMiddleware(dynamicProxy)(proxyChain)
+	proxyChain = middleware.RateLimitMiddleware(rateLimiter)(proxyChain)
+	proxyChain = middleware.KeyResolverMiddleware(keyCache)(proxyChain)
+	proxyChain = middleware.RequestClassifierMiddleware()(proxyChain)
+	proxyChain = middleware.CORSMiddleware()(proxyChain)
 
-	// Register extra routes for all providers (e.g., compatibility routes)
-	for name, provider := range globalProviderManager.GetAllProviders() {
-		provider.RegisterExtraRoutes(r)
-		logger.Info("Registered extra routes for provider", "provider", name)
-	}
+	r.PathPrefix("/v1/").Handler(proxyChain)
 
 	// Start server
-	logger.Info("Starting LLM Proxy server", "port", port)
-
-	// Log features
-	features := []string{"Streaming support", "CORS", "Request logging", "Token parsing"}
-	if globalCostTracker != nil {
-		features = append(features, "Cost tracking")
-	}
-	if globalRateLimiter != nil {
-		features = append(features, "Rate limiting")
-	}
-	logger.Info("Features enabled", "features", strings.Join(features, ", "))
-
-	logger.Info("Health check available", "url", "http://0.0.0.0:"+port+"/health")
-
-	// Log cost tracking status
-	if globalCostTracker != nil {
-		logger.Info("Cost tracking: ENABLED")
-	} else {
-		logger.Info("Cost tracking: DISABLED")
-	}
-
-	// Log registered providers
-	for name := range globalProviderManager.GetAllProviders() {
-		logger.Info("Registered provider", "provider", name)
-	}
-
-	logger.Info("OpenAI API endpoints available", "url", "http://0.0.0.0:"+port+"/openai/")
-	logger.Info("Anthropic API endpoints available", "url", "http://0.0.0.0:"+port+"/anthropic/")
-	logger.Info("Gemini API endpoints available", "url", "http://0.0.0.0:"+port+"/gemini/")
-	logger.Info("Meta routes with user ID available", "pattern", "http://0.0.0.0:"+port+"/meta/{userID}/{provider}/")
-
+	port := fmt.Sprintf("%d", yamlConfig.Server.Port)
 	server := &http.Server{
 		Addr:    "0.0.0.0:" + port,
 		Handler: r,
 	}
 
-	// Set up graceful shutdown
 	go func() {
-		logger.Info("🚀 Starting server", "address", "0.0.0.0:"+port)
+		slog.Info("Starting server", "address", "0.0.0.0:"+port, "version", version)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Error("Server failed to start", "error", err)
+			slog.Error("Server failed to start", "error", err)
+			os.Exit(1)
 		}
 	}()
 
-	// Set up signal handling for graceful shutdown
+	// Graceful shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	// Wait for shutdown signal
 	sig := <-sigChan
-	logger.Info("🛑 Received shutdown signal", "signal", sig.String())
+	slog.Info("Received shutdown signal", "signal", sig.String())
 
-	// Create a context with timeout for graceful shutdown
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Shutdown the HTTP server
-	logger.Info("🔄 Shutting down HTTP server...")
+	slog.Info("Shutting down HTTP server...")
 	if err := server.Shutdown(ctx); err != nil {
-		logger.Error("HTTP server shutdown failed", "error", err)
+		slog.Error("HTTP server shutdown failed", "error", err)
 	} else {
-		logger.Info("✅ HTTP server shut down successfully")
+		slog.Info("HTTP server shut down successfully")
 	}
 
-	// Stop async cost tracking workers and flush remaining records
-	if globalCostTracker != nil {
-		logger.Info("🔄 Stopping cost tracking workers and flushing queue...")
-		globalCostTracker.StopAsyncWorkers()
-		logger.Info("✅ Cost tracking workers stopped and queue flushed")
+	// Stop prober
+	proberCancel()
+	slog.Info("Upstream prober stopped")
+
+	// Drain audit logger
+	if auditLogger != nil {
+		slog.Info("Draining audit logger...")
+		auditLogger.Stop()
+		slog.Info("Audit logger drained")
 	}
 
-	logger.Info("👋 Server shutdown complete")
-}
-
-func main() {
-	// Parse command line flags
-	var showVersion bool
-	var validateConfig string
-	flag.BoolVar(&showVersion, "version", false, "Show version and configuration, then exit")
-	flag.StringVar(&validateConfig, "validate-config", "", "Validate configuration files (comma-separated paths) and exit")
-	flag.Parse()
-
-	// Handle config validation if requested
-	if validateConfig != "" {
-		handleConfigValidation(validateConfig)
-	}
-
-	// Load environment-based configuration (base.yml + environment-specific config)
-	yamlConfig, err := config.LoadEnvironmentConfig()
-	if err != nil {
-		logger.Warn("Failed to load environment config, using defaults", "error", err)
-		yamlConfig = config.GetDefaultYAMLConfig()
-	}
-
-	// Handle version flag if requested
-	if showVersion {
-		handleVersionFlag(yamlConfig)
-	}
-
-	// Start the server
-	runServer(yamlConfig)
+	slog.Info("Server shutdown complete")
 }

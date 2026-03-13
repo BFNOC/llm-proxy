@@ -13,9 +13,6 @@ SHELL := /bin/bash
 BINARY_NAME=llm-proxy
 BINARY_PATH=./bin/$(BINARY_NAME)
 MAIN_PATH=./cmd/llm-proxy
-KEYS_BINARY_NAME=llm-proxy-keys
-KEYS_BINARY_PATH=./bin/$(KEYS_BINARY_NAME)
-KEYS_MAIN_PATH=./cmd/llm-proxy-keys
 GO_VERSION=$(shell go version | cut -d' ' -f3)
 GIT_COMMIT=$(shell git rev-parse --short HEAD || echo "unknown")
 BUILD_TIME=$(shell date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -71,20 +68,14 @@ help:
 	@echo ""
 	@echo "$(GREEN)Building:$(NC)"
 	@echo "  build          - Build the proxy binary"
-	@echo "  build-keys     - Build the key management tool"
-	@echo "  build-all      - Build all binaries"
+	@echo "  build-all      - Build the proxy binary"
 	@echo "  clean          - Clean build artifacts"
 	@echo "  install        - Install dependencies"
 	@echo ""
 	@echo "$(GREEN)Testing:$(NC)"
 	@echo "  test           - Run unit tests"
 	@echo "  test-verbose   - Run unit tests with verbose output"
-	@echo "  test-integration - Run integration tests (requires API keys)"
-	@echo "  test-openai    - Run OpenAI tests only"
-	@echo "  test-anthropic - Run Anthropic tests only"
-	@echo "  test-gemini    - Run Gemini tests only"
-	@echo "  test-health    - Run health check tests"
-	@echo "  test-all       - Run all tests including integration"
+	@echo "  test-all       - Run all tests"
 	@echo ""
 	@echo "$(GREEN)Running:$(NC)"
 	@echo "  run            - Run the server (port 9002)"
@@ -99,17 +90,12 @@ help:
 	@echo "  docker-build-dev     - Build Docker image for development"
 	@echo "  docker-build-prod    - Build Docker image for production"
 	@echo "  docker-run           - Run Docker container (dev environment)"
-	@echo "  docker-run-prod      - Run Docker container (production)"
 	@echo "  docker-compose-up      - Start services with docker-compose (dev mode)"
 	@echo "  docker-compose-dev     - Start in development mode (live reload)"
 	@echo "  docker-compose-prod    - Start production container (port 80)"
-	@echo "  docker-compose-monitoring - Start services with Datadog monitoring"
-	@echo "  docker-compose-datadog - Start services with Datadog agent (alias)"
 	@echo "  docker-compose-down    - Stop development services"
-	@echo "  docker-stop-prod       - Stop production container"
 	@echo "  docker-compose-logs    - View development service logs"
 	@echo "  docker-logs-prod       - View production container logs"
-	@echo "  docker-pull-datadog    - Pull the Datadog agent image"
 	@echo "  docker-clean           - Clean Docker artifacts"
 	@echo "  vet            - Run go vet"
 	@echo "  check          - Run all code quality checks"
@@ -120,7 +106,6 @@ help:
 	@echo "  mod-tidy         - Clean up go.mod"
 	@echo "  version          - Show version information"
 	@echo "  env-check        - Check required environment variables"
-	@echo "  datadog-env-check - Check Datadog environment variables"
 
 # Build the proxy binary
 .PHONY: build
@@ -130,17 +115,9 @@ build:
 	@go build -ldflags="-X main.Version=$(GIT_COMMIT) -X main.BuildTime=$(BUILD_TIME)" -o $(BINARY_PATH) $(MAIN_PATH)
 	@echo "$(GREEN)✓ Build completed: $(BINARY_PATH)$(NC)"
 
-# Build the key management tool
-.PHONY: build-keys
-build-keys:
-	@echo "$(BLUE)Building $(KEYS_BINARY_NAME)...$(NC)"
-	@mkdir -p bin
-	@go build -ldflags="-X main.Version=$(GIT_COMMIT) -X main.BuildTime=$(BUILD_TIME)" -o $(KEYS_BINARY_PATH) $(KEYS_MAIN_PATH)
-	@echo "$(GREEN)✓ Build completed: $(KEYS_BINARY_PATH)$(NC)"
-
 # Build all binaries
 .PHONY: build-all
-build-all: build build-keys
+build-all: build
 	@echo "$(GREEN)✓ All binaries built successfully$(NC)"
 
 # Clean build artifacts
@@ -163,54 +140,19 @@ install:
 .PHONY: test
 test:
 	@echo "$(BLUE)Running unit tests...$(NC)"
-	@go test -v ./internal/... -short -skip "Integration"
+	@go test -v ./... -short -skip "Integration"
 	@echo "$(GREEN)✓ Unit tests completed$(NC)"
 
 # Run unit tests with verbose output
 .PHONY: test-verbose
 test-verbose:
 	@echo "$(BLUE)Running unit tests (verbose)...$(NC)"
-	@go test -v ./internal/... -short -skip "Integration"
+	@go test -v ./... -short -skip "Integration"
 	@echo "$(GREEN)✓ Verbose unit tests completed$(NC)"
 
-# Run integration tests (requires API keys)
-.PHONY: test-integration
-test-integration: env-check
-	@echo "$(BLUE)Running integration tests...$(NC)"
-	@go test -v ./internal/providers -run "Test(OpenAI|Anthropic|Gemini)Integration" -timeout 180s
-	@echo "$(GREEN)✓ Integration tests completed$(NC)"
-
-# Run OpenAI tests only
-.PHONY: test-openai
-test-openai:
-	@echo "$(BLUE)Running OpenAI tests...$(NC)"
-	@go test -v ./internal/providers -run "TestOpenAIIntegration" -timeout 90s
-	@echo "$(GREEN)✓ OpenAI tests completed$(NC)"
-
-# Run Anthropic tests only
-.PHONY: test-anthropic
-test-anthropic:
-	@echo "$(BLUE)Running Anthropic tests...$(NC)"
-	@go test -v ./internal/providers -run "TestAnthropicIntegration" -timeout 90s
-	@echo "$(GREEN)✓ Anthropic tests completed$(NC)"
-
-# Run Gemini tests only
-.PHONY: test-gemini
-test-gemini:
-	@echo "$(BLUE)Running Gemini tests...$(NC)"
-	@go test -v ./internal/providers -run "TestGeminiIntegration" -timeout 90s
-	@echo "$(GREEN)✓ Gemini tests completed$(NC)"
-
-# Run health check tests
-.PHONY: test-health
-test-health:
-	@echo "$(BLUE)Running health check tests...$(NC)"
-	@go test -v ./internal/providers -run "^Test(Health|Environment)" -short
-	@echo "$(GREEN)✓ Health check tests completed$(NC)"
-
-# Run all tests including integration
+# Run all tests
 .PHONY: test-all
-test-all: test test-integration
+test-all: test
 	@echo "$(GREEN)✓ All tests completed$(NC)"
 
 # Run the server
@@ -278,7 +220,7 @@ docker-build-prod:
 .PHONY: docker-run
 docker-run:
 	@echo "$(BLUE)Running Docker container (dev)...$(NC)"
-	@docker run -p 9002:9002 -e ENVIRONMENT=dev -e LOG_LEVEL=debug -e OPENAI_API_KEY -e ANTHROPIC_API_KEY -e GEMINI_API_KEY llm-proxy:dev
+	@docker run -p 9002:9002 -e ENVIRONMENT=dev -e LOG_LEVEL=debug -e ENCRYPTION_KEY -e ADMIN_TOKEN llm-proxy:dev
 
 # Check dependencies
 .PHONY: deps
@@ -307,7 +249,7 @@ version:
 env-check:
 	@echo "$(BLUE)Checking environment variables...$(NC)"
 	@missing=0; \
-	for key in OPENAI_API_KEY ANTHROPIC_API_KEY GEMINI_API_KEY; do \
+	for key in ENCRYPTION_KEY ADMIN_TOKEN; do \
 		if [ -z "$${!key}" ]; then \
 			echo "$(RED)✗ Missing: $$key$(NC)"; \
 			missing=1; \
@@ -316,32 +258,12 @@ env-check:
 		fi; \
 	done; \
 	if [ $$missing -eq 1 ]; then \
-		echo "$(YELLOW)⚠️  Some environment variables are missing.$(NC)"; \
-		echo "$(YELLOW)   Set them to run integration tests:$(NC)"; \
-		echo "$(YELLOW)   export OPENAI_API_KEY=your_openai_key$(NC)"; \
-		echo "$(YELLOW)   export ANTHROPIC_API_KEY=your_anthropic_key$(NC)"; \
-		echo "$(YELLOW)   export GEMINI_API_KEY=your_gemini_key$(NC)"; \
+		echo "$(YELLOW)Warning: Some environment variables are missing.$(NC)"; \
+		echo "$(YELLOW)   Set them before running:$(NC)"; \
+		echo "$(YELLOW)   export ENCRYPTION_KEY=your_encryption_key$(NC)"; \
+		echo "$(YELLOW)   export ADMIN_TOKEN=your_admin_token$(NC)"; \
 	else \
 		echo "$(GREEN)✓ All environment variables are set$(NC)"; \
-	fi
-
-# Check Datadog environment variables
-.PHONY: datadog-env-check
-datadog-env-check:
-	@echo "$(BLUE)Checking Datadog environment variables...$(NC)"
-	@if [ -z "$$DD_API_KEY" ]; then \
-		echo "$(RED)✗ Missing: DD_API_KEY$(NC)"; \
-		echo "$(YELLOW)⚠️  DD_API_KEY is required for Datadog monitoring.$(NC)"; \
-		echo "$(YELLOW)   Get your API key from: https://app.datadoghq.com/organization-settings/api-keys$(NC)"; \
-		echo "$(YELLOW)   Set it with: export DD_API_KEY=your_datadog_api_key$(NC)"; \
-		exit 1; \
-	else \
-		echo "$(GREEN)✓ Found: DD_API_KEY$(NC)"; \
-	fi; \
-	if [ -n "$$DD_SITE" ]; then \
-		echo "$(GREEN)✓ Using DD_SITE: $$DD_SITE$(NC)"; \
-	else \
-		echo "$(YELLOW)ℹ  Using default DD_SITE: datadoghq.com$(NC)"; \
 	fi
 
 # Quick start target
@@ -365,13 +287,6 @@ status:
 	@echo "Go version: $(GO_VERSION)"
 	@echo "Git commit: $(GIT_COMMIT)"
 
-# Run Docker containers for different environments
-.PHONY: docker-run-prod
-docker-run-prod:
-	@echo "$(BLUE)Running Docker container (production)...$(NC)"
-	@docker run --rm -p 80:80 -e ENVIRONMENT=production -e OPENAI_API_KEY -e ANTHROPIC_API_KEY -e GEMINI_API_KEY llm-proxy:production
-	@echo "$(GREEN)✓ Docker container started (production)$(NC)"
-
 .PHONY: docker-compose-up
 docker-compose-up: docker-compose-dev
 
@@ -392,45 +307,17 @@ docker-compose-prod:
 		--name llm-proxy-production \
 		-p 80:80 \
 		-e ENVIRONMENT=production \
-		-e OPENAI_API_KEY \
-		-e ANTHROPIC_API_KEY \
-		-e GEMINI_API_KEY \
-		-e DD_API_KEY \
+		-e ENCRYPTION_KEY \
+		-e ADMIN_TOKEN \
 		llm-proxy:production
 	@echo "$(GREEN)✓ Production service started$(NC)"
-	@echo "$(YELLOW)🚀 LLM Proxy available at: http://localhost:80$(NC)"
-
-.PHONY: docker-compose-monitoring
-docker-compose-monitoring: datadog-env-check docker-pull-datadog
-	@echo "$(BLUE)Starting services with Datadog monitoring...$(NC)"
-	@ENVIRONMENT=${ENVIRONMENT:-dev} LLM_PROXY_PORT=${LLM_PROXY_PORT:-9002} docker compose --profile monitoring up -d
-	@echo "$(GREEN)✓ Services with monitoring started$(NC)"
-	@echo "$(YELLOW)🚀 LLM Proxy available at: http://localhost:${LLM_PROXY_PORT:-9002}$(NC)"
-	@echo "$(YELLOW)📊 Datadog agent running on:$(NC)"
-	@echo "$(YELLOW)   - DogStatsD: localhost:8125$(NC)"
-	@echo "$(YELLOW)   - APM: localhost:8126$(NC)"
-
-.PHONY: docker-compose-datadog
-docker-compose-datadog: docker-compose-monitoring
-
-.PHONY: docker-pull-datadog
-docker-pull-datadog:
-	@echo "$(BLUE)Pulling Datadog agent image...$(NC)"
-	@docker pull datadog/agent:latest
-	@echo "$(GREEN)✓ Datadog agent image pulled$(NC)"
+	@echo "$(YELLOW)LLM Proxy available at: http://localhost:80$(NC)"
 
 .PHONY: docker-compose-down
 docker-compose-down:
 	@echo "$(BLUE)Stopping services...$(NC)"
 	@docker compose down
 	@echo "$(GREEN)✓ Services stopped$(NC)"
-
-.PHONY: docker-stop-prod
-docker-stop-prod:
-	@echo "$(BLUE)Stopping production service...$(NC)"
-	@docker stop llm-proxy-production || true
-	@docker rm llm-proxy-production || true
-	@echo "$(GREEN)✓ Production service stopped$(NC)"
 
 .PHONY: docker-compose-logs
 docker-compose-logs:
@@ -445,7 +332,5 @@ docker-logs-prod:
 docker-clean:
 	@echo "$(YELLOW)Cleaning Docker artifacts...$(NC)"
 	@docker compose down --rmi all --volumes --remove-orphans || true
-	@docker stop llm-proxy-production || true
-	@docker rm llm-proxy-production || true
 	@docker image rm llm-proxy:dev llm-proxy:production || true
 	@echo "$(GREEN)✓ Docker cleanup completed$(NC)"

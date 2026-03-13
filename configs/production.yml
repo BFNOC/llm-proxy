@@ -1,35 +1,10 @@
-# LLM Proxy Configuration
-# This file configures rate limiting, cost tracking, and model-specific settings
+server:
+  port: 80
 
-# Production configuration
+logging:
+  level: "info"
+  format: "json"
 
-enabled: true
-
-features:
-  cost_tracking:
-    enabled: true
-    async: true
-    workers: 8
-    queue_size: 500
-    flush_interval: 15
-    transports:
-      - type: "dynamodb"
-        dynamodb:
-          table_name: "llm-proxy-cost-tracking"
-          region: "us-west-2"
-      - type: "datadog"
-        datadog:
-          host: "localhost"
-          port: "8125"
-          namespace: "llm"
-          tags: ["env:prod", "service:llm-proxy", "team:platform"]
-          sample_rate: 1.0
-      - type: "file"
-        file:
-          path: "./logs/cost-tracking-backup.jsonl"
-  api_key_management:
-    enabled: true
-    table_name: "llm-proxy-api-keys"
-    region: "us-west-2"
-  rate_limiting:
-    enabled: false
+audit:
+  batch_size: 200
+  flush_interval_ms: 2000
