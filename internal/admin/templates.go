@@ -2,11 +2,11 @@ package admin
 
 // dashboardHTML is a minimal single-page admin dashboard.
 var dashboardHTML = []byte(`<!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LLM Proxy Admin</title>
+    <title>LLM Proxy 管理面板</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
     <style>
         .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
@@ -24,74 +24,74 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
 </head>
 <body>
 <main class="container">
-    <h1>LLM Proxy Admin</h1>
+    <h1>LLM Proxy 管理面板</h1>
 
     <div id="auth-section">
-        <label>Admin Token: <input type="password" id="admin-token" placeholder="Enter admin token"></label>
-        <button onclick="authenticate()">Connect</button>
+        <label>管理令牌: <input type="password" id="admin-token" placeholder="请输入管理令牌"></label>
+        <button onclick="authenticate()">连接</button>
     </div>
 
     <div id="main-section" style="display:none;">
         <nav class="tab-nav">
-            <button class="active" onclick="showTab('upstreams')">Upstreams</button>
-            <button onclick="showTab('keys')">Keys</button>
-            <button onclick="showTab('logs')">Logs</button>
-            <button onclick="showTab('status')">Status</button>
+            <button class="active" onclick="showTab('upstreams')">上游服务</button>
+            <button onclick="showTab('keys')">密钥管理</button>
+            <button onclick="showTab('logs')">请求日志</button>
+            <button onclick="showTab('status')">系统状态</button>
         </nav>
 
         <!-- Upstreams Tab -->
         <div id="tab-upstreams" class="tab-content active">
-            <h2>Upstream Providers</h2>
-            <details><summary>Add Upstream</summary>
+            <h2>上游服务商</h2>
+            <details><summary>添加上游</summary>
                 <form onsubmit="createUpstream(event)">
-                    <input name="name" placeholder="Name" required>
+                    <input name="name" placeholder="名称" required>
                     <input name="base_url" placeholder="https://api.example.com" required>
-                    <input name="api_key" placeholder="API Key" required type="password">
-                    <input name="priority" placeholder="Priority (0=highest)" type="number" value="0">
-                    <button type="submit">Create</button>
+                    <input name="api_key" placeholder="API 密钥" required type="password">
+                    <input name="priority" placeholder="优先级 (0=最高)" type="number" value="0">
+                    <button type="submit">创建</button>
                 </form>
             </details>
-            <table><thead><tr><th>ID</th><th>Name</th><th>Base URL</th><th>Priority</th><th>Actions</th></tr></thead>
+            <table><thead><tr><th>ID</th><th>名称</th><th>地址</th><th>优先级</th><th>操作</th></tr></thead>
             <tbody id="upstreams-table"></tbody></table>
         </div>
 
         <!-- Keys Tab -->
         <div id="tab-keys" class="tab-content">
-            <h2>Downstream Keys</h2>
-            <details><summary>Create Key</summary>
+            <h2>下游密钥</h2>
+            <details><summary>创建密钥</summary>
                 <form onsubmit="createKey(event)">
-                    <input name="name" placeholder="Key Name" required>
-                    <input name="rpm_limit" placeholder="RPM Limit (0=unlimited)" type="number" value="0">
-                    <button type="submit">Create</button>
+                    <input name="name" placeholder="密钥名称" required>
+                    <input name="rpm_limit" placeholder="每分钟请求限制 (0=不限)" type="number" value="0">
+                    <button type="submit">创建</button>
                 </form>
             </details>
             <div id="new-key-display" style="display:none;">
                 <article>
-                    <strong>New Key Created (copy now, shown once):</strong>
+                    <strong>密钥已创建（请立即复制，仅显示一次）:</strong>
                     <div class="key-display" id="new-key-value"></div>
                 </article>
             </div>
-            <table><thead><tr><th>ID</th><th>Prefix</th><th>Name</th><th>RPM</th><th>Status</th><th>Actions</th></tr></thead>
+            <table><thead><tr><th>ID</th><th>前缀</th><th>名称</th><th>RPM</th><th>状态</th><th>操作</th></tr></thead>
             <tbody id="keys-table"></tbody></table>
         </div>
 
         <!-- Logs Tab -->
         <div id="tab-logs" class="tab-content">
-            <h2>Request Logs</h2>
+            <h2>请求日志</h2>
             <form onsubmit="loadLogs(event)" style="display:flex;gap:8px;align-items:end;">
-                <label>Key ID: <input name="key_id" type="number" placeholder="All"></label>
-                <label>Limit: <input name="limit" type="number" value="50"></label>
-                <button type="submit">Load</button>
+                <label>密钥 ID: <input name="key_id" type="number" placeholder="全部"></label>
+                <label>条数: <input name="limit" type="number" value="50"></label>
+                <button type="submit">查询</button>
             </form>
-            <table><thead><tr><th>ID</th><th>Key</th><th>Style</th><th>Path</th><th>Status</th><th>Latency</th><th>Time</th></tr></thead>
+            <table><thead><tr><th>ID</th><th>密钥</th><th>风格</th><th>路径</th><th>状态码</th><th>延迟</th><th>时间</th></tr></thead>
             <tbody id="logs-table"></tbody></table>
         </div>
 
         <!-- Status Tab -->
         <div id="tab-status" class="tab-content">
-            <h2>System Status</h2>
+            <h2>系统状态</h2>
             <pre id="status-display"></pre>
-            <button onclick="loadStatus()">Refresh</button>
+            <button onclick="loadStatus()">刷新</button>
         </div>
     </div>
 </main>
@@ -106,11 +106,11 @@ const api = (path, opts={}) => fetch('/admin/api'+path, {
 function authenticate() {
     TOKEN = document.getElementById('admin-token').value;
     api('/status').then(d => {
-        if (d.error) { alert('Invalid token'); return; }
+        if (d.error) { alert('令牌无效'); return; }
         document.getElementById('auth-section').style.display = 'none';
         document.getElementById('main-section').style.display = 'block';
         loadUpstreams(); loadKeys();
-    }).catch(() => alert('Connection failed'));
+    }).catch(() => alert('连接失败'));
 }
 
 function showTab(name) {
@@ -125,7 +125,7 @@ function loadUpstreams() {
     api('/upstreams').then(data => {
         const tbody = document.getElementById('upstreams-table');
         tbody.innerHTML = (data||[]).map(u =>
-            '<tr><td>'+u.id+'</td><td>'+esc(u.name)+'</td><td>'+esc(u.base_url)+'</td><td>'+u.priority+'</td><td><button onclick="deleteUpstream('+u.id+')">Delete</button></td></tr>'
+            '<tr><td>'+u.id+'</td><td>'+esc(u.name)+'</td><td>'+esc(u.base_url)+'</td><td>'+u.priority+'</td><td><button onclick="deleteUpstream('+u.id+')">删除</button></td></tr>'
         ).join('');
     });
 }
@@ -140,7 +140,7 @@ function createUpstream(e) {
 }
 
 function deleteUpstream(id) {
-    if(!confirm('Delete upstream '+id+'?')) return;
+    if(!confirm('确定删除上游 '+id+' 吗？')) return;
     api('/upstreams/'+id, {method:'DELETE'}).then(() => loadUpstreams());
 }
 
@@ -148,7 +148,7 @@ function loadKeys() {
     api('/keys').then(data => {
         const tbody = document.getElementById('keys-table');
         tbody.innerHTML = (data||[]).map(k =>
-            '<tr><td>'+k.id+'</td><td><code>'+esc(k.key_prefix)+'...</code></td><td>'+esc(k.name)+'</td><td>'+(k.rpm_limit||'unlimited')+'</td><td>'+(k.enabled?'<span class="badge badge-green">Active</span>':'<span class="badge badge-red">Disabled</span>')+'</td><td><button onclick="toggleKey('+k.id+','+(!k.enabled)+')">Toggle</button> <button onclick="deleteKey('+k.id+')">Delete</button></td></tr>'
+            '<tr><td>'+k.id+'</td><td><code>'+esc(k.key_prefix)+'...</code></td><td>'+esc(k.name)+'</td><td>'+(k.rpm_limit||'不限')+'</td><td>'+(k.enabled?'<span class="badge badge-green">启用</span>':'<span class="badge badge-red">禁用</span>')+'</td><td><button onclick="toggleKey('+k.id+','+(!k.enabled)+')">切换</button> <button onclick="deleteKey('+k.id+')">删除</button></td></tr>'
         ).join('');
     });
 }
@@ -171,7 +171,7 @@ function toggleKey(id, enabled) {
 }
 
 function deleteKey(id) {
-    if(!confirm('Delete key '+id+'?')) return;
+    if(!confirm('确定删除密钥 '+id+' 吗？')) return;
     api('/keys/'+id, {method:'DELETE'}).then(() => loadKeys());
 }
 
