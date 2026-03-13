@@ -68,7 +68,13 @@ func (p *UpstreamProber) probeOnce() {
 	}
 
 	if len(upstreams) == 0 {
-		slog.Warn("prober: no upstreams configured")
+		if p.currentID > 0 {
+			p.proxy.ClearActiveUpstream()
+			p.currentID = 0
+			slog.Warn("prober: all upstreams removed, cleared active route")
+		} else {
+			slog.Warn("prober: no upstreams configured")
+		}
 		return
 	}
 
@@ -83,7 +89,13 @@ func (p *UpstreamProber) probeOnce() {
 		for _, u := range upstreams {
 			if u.ID == p.currentID {
 				if p.probeUpstream(u.BaseURL) {
-					return // current is healthy, no action needed
+					// Current upstream is healthy. Re-apply its config in case
+					// the admin updated the URL or API key since last probe.
+					parsed, err := url.Parse(u.BaseURL)
+					if err == nil {
+						p.proxy.SetActiveUpstream(parsed, u.APIKey)
+					}
+					return
 				}
 				slog.Warn("prober: current upstream unhealthy, switching",
 					"id", u.ID, "name", u.Name)
@@ -124,6 +136,11 @@ func (p *UpstreamProber) probeUpstream(baseURL string) bool {
 	}
 	resp.Body.Close()
 	return resp.StatusCode < 500
+}
+
+// ProbeNow triggers an immediate probe cycle. Useful after admin mutations.
+func (p *UpstreamProber) ProbeNow() {
+	p.probeOnce()
 }
 
 // GetCurrentID returns the ID of the upstream that is currently active.

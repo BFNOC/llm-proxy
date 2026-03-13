@@ -38,6 +38,11 @@ func (dp *DynamicProxy) SetActiveUpstream(baseURL *url.URL, apiKey string) {
 	dp.activeUpstream.Store(&ActiveUpstream{BaseURL: baseURL, APIKey: apiKey})
 }
 
+// ClearActiveUpstream removes the active upstream so the proxy returns 503.
+func (dp *DynamicProxy) ClearActiveUpstream() {
+	dp.activeUpstream.Store((*ActiveUpstream)(nil))
+}
+
 // GetActiveUpstream returns the currently active upstream, or nil if none has
 // been set yet.
 func (dp *DynamicProxy) GetActiveUpstream() *ActiveUpstream {
@@ -65,7 +70,12 @@ func (dp *DynamicProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			req.URL.Scheme = active.BaseURL.Scheme
 			req.URL.Host = active.BaseURL.Host
 			req.Host = active.BaseURL.Host
-			// Path stays as-is (/v1/... -> /v1/...)
+			// Prepend any path prefix from the upstream base URL.
+			// e.g. base_url="https://gw.example.com/openai" + req="/v1/chat/completions"
+			// -> "/openai/v1/chat/completions"
+			if active.BaseURL.Path != "" && active.BaseURL.Path != "/" {
+				req.URL.Path = strings.TrimRight(active.BaseURL.Path, "/") + req.URL.Path
+			}
 		},
 		Transport: dp.transport,
 		ModifyResponse: func(resp *http.Response) error {
