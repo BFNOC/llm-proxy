@@ -1,38 +1,40 @@
 package middleware
 
 import (
-	"log"
 	"net/http"
-
-	"github.com/Instawork/llm-proxy/internal/providers"
+	"strings"
 )
 
-// StreamingMiddleware ensures proper handling of streaming responses
-func StreamingMiddleware(providerManager *providers.ProviderManager) func(http.Handler) http.Handler {
+// StreamingMiddleware ensures proper handling of streaming responses.
+// It detects streaming by checking known streaming endpoints and wraps the
+// ResponseWriter with a flushing writer.
+func StreamingMiddleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Check if this is likely a streaming request using the provider manager
-			if providerManager.IsStreamingRequest(r) {
-				// Ensure we can flush the response
+			if isStreamingEndpoint(r) {
 				if flusher, ok := w.(http.Flusher); ok {
-					// Wrap the ResponseWriter to ensure proper flushing for streaming
-					streamingWriter := &streamingResponseWriter{
+					sw := &streamingResponseWriter{
 						ResponseWriter: w,
 						flusher:        flusher,
 					}
-					next.ServeHTTP(streamingWriter, r)
-				} else {
-					log.Printf("Warning: ResponseWriter does not support flushing for streaming request")
-					next.ServeHTTP(w, r)
+					next.ServeHTTP(sw, r)
+					return
 				}
-			} else {
-				next.ServeHTTP(w, r)
 			}
+			next.ServeHTTP(w, r)
 		})
 	}
 }
 
-// streamingResponseWriter wraps http.ResponseWriter to ensure proper flushing
+// isStreamingEndpoint returns true for endpoints known to support streaming.
+func isStreamingEndpoint(r *http.Request) bool {
+	path := r.URL.Path
+	return strings.HasSuffix(path, "/chat/completions") ||
+		strings.HasSuffix(path, "/messages") ||
+		strings.HasSuffix(path, "/completions")
+}
+
+// streamingResponseWriter wraps http.ResponseWriter to ensure proper flushing.
 type streamingResponseWriter struct {
 	http.ResponseWriter
 	flusher http.Flusher
@@ -40,7 +42,6 @@ type streamingResponseWriter struct {
 
 func (sw *streamingResponseWriter) Write(b []byte) (int, error) {
 	n, err := sw.ResponseWriter.Write(b)
-	// Flush immediately for streaming responses
 	sw.flusher.Flush()
 	return n, err
 }
