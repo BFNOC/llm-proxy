@@ -51,7 +51,7 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
                     <button type="submit">创建</button>
                 </form>
             </details>
-            <table><thead><tr><th>ID</th><th>名称</th><th>地址</th><th>优先级</th><th>操作</th></tr></thead>
+            <table><thead><tr><th>ID</th><th>名称</th><th>地址</th><th>优先级</th><th>状态</th><th>操作</th></tr></thead>
             <tbody id="upstreams-table"></tbody></table>
         </div>
 
@@ -83,7 +83,7 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
                 <label>条数: <input name="limit" type="number" value="50"></label>
                 <button type="submit">查询</button>
             </form>
-            <table><thead><tr><th>ID</th><th>密钥</th><th>风格</th><th>路径</th><th>状态码</th><th>延迟</th><th>时间</th></tr></thead>
+            <table><thead><tr><th>ID</th><th>密钥</th><th>上游</th><th>IP</th><th>风格</th><th>路径</th><th>状态码</th><th>延迟</th><th>时间</th></tr></thead>
             <tbody id="logs-table"></tbody></table>
         </div>
 
@@ -125,7 +125,7 @@ function loadUpstreams() {
     api('/upstreams').then(data => {
         const tbody = document.getElementById('upstreams-table');
         tbody.innerHTML = (data||[]).map(u =>
-            '<tr><td>'+u.id+'</td><td>'+esc(u.name)+'</td><td>'+esc(u.base_url)+'</td><td>'+u.priority+'</td><td><button onclick="editUpstream('+u.id+','+JSON.stringify(esc(u.name)).replace(/"/g,'&quot;')+','+JSON.stringify(esc(u.base_url)).replace(/"/g,'&quot;')+','+u.priority+')">编辑</button> <button onclick="deleteUpstream('+u.id+')">删除</button></td></tr>'
+            '<tr><td>'+u.id+'</td><td>'+esc(u.name)+'</td><td>'+esc(u.base_url)+'</td><td>'+u.priority+'</td><td>'+(u.enabled?'<span class="badge badge-green">启用</span>':'<span class="badge badge-red">禁用</span>')+'</td><td><button onclick="toggleUpstream('+u.id+','+(!u.enabled)+')">切换</button> <button onclick="editUpstream('+u.id+','+JSON.stringify(esc(u.name)).replace(/"/g,'&quot;')+','+JSON.stringify(esc(u.base_url)).replace(/"/g,'&quot;')+','+u.priority+')">编辑</button> <button onclick="deleteUpstream('+u.id+')">删除</button></td></tr>'
         ).join('');
     });
 }
@@ -158,6 +158,12 @@ function editUpstream(id, name, url, priority) {
 function deleteUpstream(id) {
     if(!confirm('确定删除上游 '+id+' 吗？')) return;
     api('/upstreams/'+id, {method:'DELETE'}).then(() => loadUpstreams());
+}
+
+function toggleUpstream(id, enabled) {
+    api('/upstreams/'+id, {method:'PUT', body: JSON.stringify({enabled:enabled})}).then(d => {
+        if(d.error) alert(d.error); else loadUpstreams();
+    });
 }
 
 function loadKeys() {
@@ -209,7 +215,7 @@ function loadLogs(e) {
     api('/logs'+q).then(data => {
         const tbody = document.getElementById('logs-table');
         tbody.innerHTML = (data||[]).map(l =>
-            '<tr><td>'+l.ID+'</td><td>'+l.DownstreamKeyID+'</td><td>'+esc(l.ProviderStyle)+'</td><td>'+esc(l.Path)+'</td><td>'+l.StatusCode+'</td><td>'+l.LatencyMs+'ms</td><td>'+esc(l.CreatedAt)+'</td></tr>'
+            '<tr><td>'+l.ID+'</td><td>'+l.DownstreamKeyID+'</td><td>'+esc(l.UpstreamName||'-')+'</td><td>'+esc(l.ClientIP||'-')+'</td><td>'+esc(l.ProviderStyle)+'</td><td>'+esc(l.Path)+'</td><td>'+l.StatusCode+'</td><td>'+l.LatencyMs+'ms</td><td>'+esc(l.CreatedAt)+'</td></tr>'
         ).join('');
     });
 }

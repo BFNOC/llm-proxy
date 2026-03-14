@@ -17,7 +17,17 @@ import (
 func ExtractDownstreamKey(r *http.Request, style ProviderStyle) string {
 	switch style {
 	case StyleAnthropic:
-		return r.Header.Get("x-api-key")
+		if key := r.Header.Get("x-api-key"); key != "" {
+			return key
+		}
+		// Fallback: some clients (e.g. Claude Code) send Anthropic requests
+		// with Authorization: Bearer instead of x-api-key.
+		authHeader := r.Header.Get("Authorization")
+		const bearerPrefix = "Bearer "
+		if strings.HasPrefix(authHeader, bearerPrefix) {
+			return strings.TrimPrefix(authHeader, bearerPrefix)
+		}
+		return ""
 	default: // StyleOpenAI
 		authHeader := r.Header.Get("Authorization")
 		const bearerPrefix = "Bearer "

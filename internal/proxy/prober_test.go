@@ -61,16 +61,16 @@ func TestProber_SelectsHealthyUpstream(t *testing.T) {
 	dp := NewDynamicProxy()
 
 	healthy := healthyServer(t)
-	u, err := s.CreateUpstream("primary", healthy.URL, "key-primary", 1)
+	_, err := s.CreateUpstream("primary", healthy.URL, "key-primary", 1)
 	require.NoError(t, err)
 
 	prober := NewUpstreamProber(s, dp, time.Minute, 5*time.Second)
 	prober.probeOnce()
 
-	active := dp.GetActiveUpstream()
-	require.NotNil(t, active)
-	assert.Equal(t, "key-primary", active.APIKey)
-	assert.Equal(t, u.ID, prober.GetCurrentID())
+	all := dp.GetAllUpstreams()
+	require.Len(t, all, 1)
+	assert.Equal(t, "key-primary", all[0].APIKey)
+	assert.Equal(t, "primary", all[0].Name)
 }
 
 func TestProber_SkipsUnhealthyUpstreams(t *testing.T) {
@@ -82,40 +82,38 @@ func TestProber_SkipsUnhealthyUpstreams(t *testing.T) {
 
 	_, err := s.CreateUpstream("bad", bad.URL, "key-bad", 0) // priority 0 = higher preference
 	require.NoError(t, err)
-	u2, err := s.CreateUpstream("good", good.URL, "key-good", 1)
+	_, err = s.CreateUpstream("good", good.URL, "key-good", 1)
 	require.NoError(t, err)
 
 	prober := NewUpstreamProber(s, dp, time.Minute, 5*time.Second)
 	prober.probeOnce()
 
-	active := dp.GetActiveUpstream()
-	require.NotNil(t, active)
-	assert.Equal(t, "key-good", active.APIKey, "should skip unhealthy upstream and pick next")
-	assert.Equal(t, u2.ID, prober.GetCurrentID())
+	// Only the healthy upstream should be in the list.
+	all := dp.GetAllUpstreams()
+	require.Len(t, all, 1)
+	assert.Equal(t, "key-good", all[0].APIKey, "should skip unhealthy upstream")
 }
 
-func TestProber_KeepsCurrentWhenHealthy(t *testing.T) {
+func TestProber_BothHealthy_BothInList(t *testing.T) {
 	s := newTestStore(t)
 	dp := NewDynamicProxy()
 
 	srv1 := healthyServer(t)
 	srv2 := healthyServer(t)
 
-	u1, err := s.CreateUpstream("first", srv1.URL, "key-1", 0)
+	_, err := s.CreateUpstream("first", srv1.URL, "key-1", 0)
 	require.NoError(t, err)
 	_, err = s.CreateUpstream("second", srv2.URL, "key-2", 1)
 	require.NoError(t, err)
 
 	prober := NewUpstreamProber(s, dp, time.Minute, 5*time.Second)
-
-	// First probe picks the highest-priority (priority=0) upstream.
 	prober.probeOnce()
-	require.Equal(t, u1.ID, prober.GetCurrentID())
 
-	// Second probe: current is still healthy — must not switch.
-	prober.probeOnce()
-	assert.Equal(t, u1.ID, prober.GetCurrentID(), "should not switch away from a healthy upstream")
-	assert.Equal(t, "key-1", dp.GetActiveUpstream().APIKey)
+	// Both healthy upstreams should be in the list, sorted by priority.
+	all := dp.GetAllUpstreams()
+	require.Len(t, all, 2)
+	assert.Equal(t, "key-1", all[0].APIKey, "priority 0 should be first")
+	assert.Equal(t, "key-2", all[1].APIKey, "priority 1 should be second")
 }
 
 func TestProber_SwitchesOnCurrentFailure(t *testing.T) {
@@ -125,21 +123,18 @@ func TestProber_SwitchesOnCurrentFailure(t *testing.T) {
 	bad := unhealthyServer(t)
 	good := healthyServer(t)
 
-	u1, err := s.CreateUpstream("primary", bad.URL, "key-bad", 0)
+	_, err := s.CreateUpstream("primary", bad.URL, "key-bad", 0)
 	require.NoError(t, err)
-	u2, err := s.CreateUpstream("fallback", good.URL, "key-good", 1)
+	_, err = s.CreateUpstream("fallback", good.URL, "key-good", 1)
 	require.NoError(t, err)
 
 	prober := NewUpstreamProber(s, dp, time.Minute, 5*time.Second)
-
-	// Manually seed currentID to simulate a previously healthy state.
-	prober.currentID = u1.ID
-
 	prober.probeOnce()
 
-	// u1 is unhealthy; prober should have switched to u2.
-	assert.Equal(t, u2.ID, prober.GetCurrentID())
-	assert.Equal(t, "key-good", dp.GetActiveUpstream().APIKey)
+	// Only fallback should be in the list since primary is unhealthy.
+	all := dp.GetAllUpstreams()
+	require.Len(t, all, 1)
+	assert.Equal(t, "key-good", all[0].APIKey)
 }
 
 func TestProber_AllUnhealthyKeepsLastActive(t *testing.T) {
@@ -149,21 +144,19 @@ func TestProber_AllUnhealthyKeepsLastActive(t *testing.T) {
 	bad1 := unhealthyServer(t)
 	bad2 := unhealthyServer(t)
 
-	u1, err := s.CreateUpstream("bad1", bad1.URL, "key-1", 0)
+	_, err := s.CreateUpstream("bad1", bad1.URL, "key-1", 0)
 	require.NoError(t, err)
 	_, err = s.CreateUpstream("bad2", bad2.URL, "key-2", 1)
 	require.NoError(t, err)
 
 	prober := NewUpstreamProber(s, dp, time.Minute, 5*time.Second)
 
-	// Seed an existing active upstream as if it was previously healthy.
-	prober.currentID = u1.ID
-	dp.SetActiveUpstream(mustParse(t, bad1.URL), "key-1")
+	// Seed an existing upstream list as if they were previously healthy.
+	dp.SetActiveUpstream(mustParse(t, bad1.URL), "key-1", "bad1")
 
 	prober.probeOnce()
 
-	// currentID must not change (keep last active to avoid 503 storm).
-	assert.Equal(t, u1.ID, prober.GetCurrentID())
+	// Must keep the last active list to avoid 503 storm.
 	require.NotNil(t, dp.GetActiveUpstream())
 	assert.Equal(t, "key-1", dp.GetActiveUpstream().APIKey)
 }
@@ -174,14 +167,15 @@ func TestProber_AcceptsAuthErrorAsReachable(t *testing.T) {
 
 	// 401 = server is up, just needs valid credentials.
 	srv := authRequiredServer(t)
-	u, err := s.CreateUpstream("auth-required", srv.URL, "key-auth", 0)
+	_, err := s.CreateUpstream("auth-required", srv.URL, "key-auth", 0)
 	require.NoError(t, err)
 
 	prober := NewUpstreamProber(s, dp, time.Minute, 5*time.Second)
 	prober.probeOnce()
 
-	assert.Equal(t, u.ID, prober.GetCurrentID())
-	assert.NotNil(t, dp.GetActiveUpstream())
+	all := dp.GetAllUpstreams()
+	require.Len(t, all, 1)
+	assert.Equal(t, "key-auth", all[0].APIKey)
 }
 
 func TestProber_NoUpstreams(t *testing.T) {
@@ -193,7 +187,7 @@ func TestProber_NoUpstreams(t *testing.T) {
 	prober.probeOnce()
 
 	assert.Nil(t, dp.GetActiveUpstream())
-	assert.Zero(t, prober.GetCurrentID())
+	assert.Empty(t, dp.GetAllUpstreams())
 }
 
 func TestProber_StartContextCancellation(t *testing.T) {

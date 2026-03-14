@@ -228,7 +228,6 @@ func main() {
 	if auditLogger != nil {
 		proxyChain = middleware.AuditLogMiddleware(auditLogger)(proxyChain)
 	}
-	proxyChain = middleware.AuthRewriteMiddleware(dynamicProxy)(proxyChain)
 	proxyChain = middleware.RateLimitMiddleware(rateLimiter)(proxyChain)
 	proxyChain = middleware.KeyResolverMiddleware(keyCache)(proxyChain)
 	proxyChain = middleware.RequestClassifierMiddleware()(proxyChain)
@@ -237,9 +236,13 @@ func main() {
 	r.PathPrefix("/v1/").Handler(proxyChain)
 
 	// Start server
+	bindAddr := "127.0.0.1"
+	if v := os.Getenv("BIND_ADDR"); v != "" {
+		bindAddr = v
+	}
 	port := fmt.Sprintf("%d", yamlConfig.Server.Port)
 	server := &http.Server{
-		Addr:    "0.0.0.0:" + port,
+		Addr:    bindAddr + ":" + port,
 		Handler: r,
 	}
 
