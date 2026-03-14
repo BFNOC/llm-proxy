@@ -235,6 +235,21 @@ func main() {
 
 	r.PathPrefix("/v1/").Handler(proxyChain)
 
+	// Root endpoint — return API info instead of 404.
+	r.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"message": "AI API Server",
+			"endpoints": []string{
+				"POST /v1/chat/completions",
+				"POST /v1/completions",
+				"POST /v1/embeddings",
+				"GET  /v1/models",
+				"POST /v1/messages",
+			},
+		}) //nolint:errcheck
+	})
+
 	// Start server
 	bindAddr := "127.0.0.1"
 	if v := os.Getenv("BIND_ADDR"); v != "" {
