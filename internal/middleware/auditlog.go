@@ -88,14 +88,20 @@ func (al *AuditLogger) Stop() {
 	<-al.done
 }
 
-// responseStatusCapture wraps ResponseWriter to capture the status code.
+// responseStatusCapture wraps ResponseWriter to capture the status code and
+// intercept internal headers (like X-Upstream-Name) before they are sent to
+// the client via WriteHeader.
 type responseStatusCapture struct {
 	http.ResponseWriter
-	statusCode int
+	statusCode   int
+	upstreamName string // captured from X-Upstream-Name header
 }
 
 func (r *responseStatusCapture) WriteHeader(code int) {
 	r.statusCode = code
+	// Capture and strip internal header BEFORE flushing to client.
+	r.upstreamName = r.Header().Get("X-Upstream-Name")
+	r.Header().Del("X-Upstream-Name")
 	r.ResponseWriter.WriteHeader(code)
 }
 
@@ -112,8 +118,7 @@ func AuditLogMiddleware(logger *AuditLogger) func(http.Handler) http.Handler {
 
 			style := StyleFromContext(r.Context())
 			keyID := DownstreamKeyIDFromContext(r.Context())
-			upstreamName := w.Header().Get("X-Upstream-Name")
-			w.Header().Del("X-Upstream-Name") // don't leak internal header
+			upstreamName := capture.upstreamName
 
 			// Extract client IP: CF-Connecting-IP > X-Real-IP > X-Forwarded-For > RemoteAddr.
 			clientIP := r.Header.Get("CF-Connecting-IP")
