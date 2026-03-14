@@ -13,6 +13,46 @@ import (
 	"time"
 )
 
+// hopByHopHeaders are HTTP headers that must not be forwarded by proxies.
+var hopByHopHeaders = map[string]bool{
+	"Connection":          true,
+	"Keep-Alive":          true,
+	"Proxy-Authenticate":  true,
+	"Proxy-Authorization": true,
+	"Te":                  true,
+	"Trailer":             true,
+	"Transfer-Encoding":   true,
+	"Upgrade":             true,
+}
+
+// sensitiveUpstreamHeaders are upstream response headers that should not be
+// leaked to downstream clients as they expose internal infrastructure details.
+var sensitiveUpstreamHeaders = map[string]bool{
+	"Server":              true,
+	"X-Powered-By":        true,
+	"Set-Cookie":          true,
+	"Www-Authenticate":    true,
+	"X-Request-Id":        true,
+	"X-Amzn-Requestid":    true,
+}
+
+// untrustedRequestHeaders are client-provided headers that should be stripped
+// before forwarding to the upstream to prevent identity spoofing.
+var untrustedRequestHeaders = []string{
+	"X-Forwarded-For",
+	"X-Forwarded-Proto",
+	"X-Forwarded-Host",
+	"X-Real-IP",
+	"Forwarded",
+	"CF-Connecting-IP",
+	"CF-IPCountry",
+	"CF-Ray",
+	"CF-Visitor",
+	"True-Client-IP",
+	"X-Client-IP",
+	"X-Cluster-Client-IP",
+}
+
 // ActiveUpstream holds the currently selected upstream endpoint and its key.
 type ActiveUpstream struct {
 	BaseURL *url.URL
@@ -125,6 +165,12 @@ func (dp *DynamicProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// Rewrite auth headers for this specific upstream.
 		RewriteAuthHeaders(outReq, style, active.APIKey)
 
+		// Strip untrusted proxy/identity headers to prevent downstream
+		// clients from spoofing their identity at the upstream.
+		for _, h := range untrustedRequestHeaders {
+			outReq.Header.Del(h)
+		}
+
 		resp, err := dp.transport.RoundTrip(outReq)
 		if err != nil {
 			if !isLast {
@@ -132,11 +178,12 @@ func (dp *DynamicProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					"upstream", active.Name, "error", err)
 				continue
 			}
-			// Last upstream also errored — return 502.
+			// Last upstream also errored — return generic 502 to client.
+			// Full error details are logged server-side only.
 			slog.Error("proxy error", "error", err, "path", r.URL.Path)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadGateway)
-			json.NewEncoder(w).Encode(map[string]string{"error": "bad gateway: " + err.Error()}) //nolint:errcheck
+			json.NewEncoder(w).Encode(map[string]string{"error": "bad gateway"}) //nolint:errcheck
 			return
 		}
 
@@ -159,8 +206,11 @@ func (dp *DynamicProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (dp *DynamicProxy) forwardResponse(w http.ResponseWriter, resp *http.Response, upstreamName string) {
 	defer resp.Body.Close()
 
-	// Copy response headers (skip hop-by-hop headers).
+	// Copy response headers, filtering out hop-by-hop and sensitive headers.
 	for k, vv := range resp.Header {
+		if hopByHopHeaders[k] || sensitiveUpstreamHeaders[k] {
+			continue
+		}
 		for _, v := range vv {
 			w.Header().Add(k, v)
 		}
