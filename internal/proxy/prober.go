@@ -67,46 +67,31 @@ func (p *UpstreamProber) probeOnce() {
 		return
 	}
 
-	if len(upstreams) == 0 {
-		if p.currentID > 0 {
-			p.proxy.ClearActiveUpstream()
-			p.currentID = 0
-			slog.Warn("prober: all upstreams removed, cleared active route")
-		} else {
-			slog.Warn("prober: no upstreams configured")
+	// Filter to only enabled upstreams.
+	var enabled []store.UpstreamProvider
+	for _, u := range upstreams {
+		if u.Enabled {
+			enabled = append(enabled, u)
 		}
+	}
+
+	if len(enabled) == 0 {
+		p.proxy.ClearActiveUpstream()
+		p.currentID = 0
+		slog.Warn("prober: no enabled upstreams configured")
 		return
 	}
 
 	// Sort by priority ascending (lower value = higher preference).
-	sort.Slice(upstreams, func(i, j int) bool {
-		return upstreams[i].Priority < upstreams[j].Priority
+	sort.Slice(enabled, func(i, j int) bool {
+		return enabled[i].Priority < enabled[j].Priority
 	})
 
-	// If the current active upstream is still healthy, leave it in place to
-	// avoid unnecessary failovers.
-	if p.currentID > 0 {
-		for _, u := range upstreams {
-			if u.ID == p.currentID {
-				if p.probeUpstream(u.BaseURL) {
-					// Current upstream is healthy. Re-apply its config in case
-					// the admin updated the URL or API key since last probe.
-					parsed, err := url.Parse(u.BaseURL)
-					if err == nil {
-						p.proxy.SetActiveUpstream(parsed, u.APIKey)
-					}
-					return
-				}
-				slog.Warn("prober: current upstream unhealthy, switching",
-					"id", u.ID, "name", u.Name)
-				break
-			}
-		}
-	}
-
-	// Walk the sorted list and activate the first reachable upstream.
-	for _, u := range upstreams {
+	// Probe all enabled upstreams and collect the healthy ones.
+	var healthy []*ActiveUpstream
+	for _, u := range enabled {
 		if !p.probeUpstream(u.BaseURL) {
+			slog.Warn("prober: upstream unhealthy", "id", u.ID, "name", u.Name)
 			continue
 		}
 		parsed, err := url.Parse(u.BaseURL)
@@ -114,16 +99,23 @@ func (p *UpstreamProber) probeOnce() {
 			slog.Error("prober: invalid upstream URL", "url", u.BaseURL, "error", err)
 			continue
 		}
-		p.proxy.SetActiveUpstream(parsed, u.APIKey)
-		p.currentID = u.ID
-		slog.Info("prober: activated upstream",
-			"id", u.ID, "name", u.Name, "url", u.BaseURL)
+		healthy = append(healthy, &ActiveUpstream{
+			BaseURL: parsed,
+			APIKey:  u.APIKey,
+			Name:    u.Name,
+		})
+	}
+
+	if len(healthy) == 0 {
+		// No upstream is reachable. Keep the last active list rather than
+		// clearing it, so transient network blips don't result in a 503 storm.
+		slog.Error("prober: all enabled upstreams unhealthy, keeping last active")
 		return
 	}
 
-	// No upstream is reachable. Keep the last active one rather than clearing
-	// it, so transient network blips don't result in a 503 storm.
-	slog.Error("prober: all upstreams unhealthy, keeping last active")
+	p.proxy.SetAllUpstreams(healthy)
+	p.currentID = 0 // no longer tracking a single ID
+	slog.Info("prober: updated upstream list", "healthy_count", len(healthy))
 }
 
 // probeUpstream issues a HEAD request to baseURL/v1/models and returns true

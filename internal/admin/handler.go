@@ -97,6 +97,7 @@ func (h *AdminHandler) listUpstreams(w http.ResponseWriter, r *http.Request) {
 		Name      string    `json:"name"`
 		BaseURL   string    `json:"base_url"`
 		Priority  int       `json:"priority"`
+		Enabled   bool      `json:"enabled"`
 		CreatedAt time.Time `json:"created_at"`
 		UpdatedAt time.Time `json:"updated_at"`
 	}
@@ -104,7 +105,7 @@ func (h *AdminHandler) listUpstreams(w http.ResponseWriter, r *http.Request) {
 	for i, u := range upstreams {
 		result[i] = upstreamResponse{
 			ID: u.ID, Name: u.Name, BaseURL: u.BaseURL,
-			Priority: u.Priority, CreatedAt: u.CreatedAt, UpdatedAt: u.UpdatedAt,
+			Priority: u.Priority, Enabled: u.Enabled, CreatedAt: u.CreatedAt, UpdatedAt: u.UpdatedAt,
 		}
 	}
 	jsonOK(w, result)
@@ -161,6 +162,7 @@ func (h *AdminHandler) updateUpstream(w http.ResponseWriter, r *http.Request) {
 		BaseURL  *string `json:"base_url"`
 		APIKey   *string `json:"api_key"`
 		Priority *int    `json:"priority"`
+		Enabled  *bool   `json:"enabled"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid JSON")
@@ -183,6 +185,10 @@ func (h *AdminHandler) updateUpstream(w http.ResponseWriter, r *http.Request) {
 	if req.Priority != nil {
 		priority = *req.Priority
 	}
+	enabled := existing.Enabled
+	if req.Enabled != nil {
+		enabled = *req.Enabled
+	}
 
 	if baseURL != existing.BaseURL {
 		if err := validateBaseURL(baseURL); err != nil {
@@ -191,13 +197,15 @@ func (h *AdminHandler) updateUpstream(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	upstream, err := h.store.UpdateUpstream(id, name, baseURL, apiKey, priority)
+	upstream, err := h.store.UpdateUpstream(id, name, baseURL, apiKey, priority, enabled)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	slog.Info("admin: updated upstream", "id", upstream.ID)
-	jsonOK(w, map[string]interface{}{"id": upstream.ID, "name": upstream.Name})
+	// Trigger re-probe so disabled/enabled change takes effect immediately.
+	go h.prober.ProbeNow()
+	slog.Info("admin: updated upstream", "id", upstream.ID, "enabled", upstream.Enabled)
+	jsonOK(w, map[string]interface{}{"id": upstream.ID, "name": upstream.Name, "enabled": upstream.Enabled})
 }
 
 func (h *AdminHandler) deleteUpstream(w http.ResponseWriter, r *http.Request) {
@@ -453,8 +461,8 @@ func validateBaseURL(rawURL string) error {
 	if err != nil {
 		return fmt.Errorf("invalid URL: %w", err)
 	}
-	if parsed.Scheme != "https" {
-		return fmt.Errorf("base_url must use https scheme")
+	if parsed.Scheme != "https" && parsed.Scheme != "http" {
+		return fmt.Errorf("base_url must use http or https scheme")
 	}
 
 	host := parsed.Hostname()

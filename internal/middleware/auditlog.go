@@ -2,7 +2,9 @@ package middleware
 
 import (
 	"log/slog"
+	"net"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -110,9 +112,35 @@ func AuditLogMiddleware(logger *AuditLogger) func(http.Handler) http.Handler {
 
 			style := StyleFromContext(r.Context())
 			keyID := DownstreamKeyIDFromContext(r.Context())
+			upstreamName := w.Header().Get("X-Upstream-Name")
+			w.Header().Del("X-Upstream-Name") // don't leak internal header
+
+			// Extract client IP: CF-Connecting-IP > X-Real-IP > X-Forwarded-For > RemoteAddr.
+			clientIP := r.Header.Get("CF-Connecting-IP")
+			if clientIP == "" {
+				clientIP = r.Header.Get("X-Real-IP")
+			}
+			if clientIP == "" {
+				clientIP = r.Header.Get("X-Forwarded-For")
+				if clientIP != "" {
+					// X-Forwarded-For may contain multiple IPs; take the first.
+					if idx := strings.Index(clientIP, ","); idx != -1 {
+						clientIP = strings.TrimSpace(clientIP[:idx])
+					}
+				}
+			}
+			if clientIP == "" {
+				clientIP = r.RemoteAddr
+				// Strip port from RemoteAddr (e.g. "1.2.3.4:12345" -> "1.2.3.4").
+				if host, _, err := net.SplitHostPort(clientIP); err == nil {
+					clientIP = host
+				}
+			}
 
 			logger.Log(store.RequestLog{
 				DownstreamKeyID: keyID,
+				UpstreamName:    upstreamName,
+				ClientIP:        clientIP,
 				ProviderStyle:   string(style),
 				Path:            r.URL.Path,
 				StatusCode:      capture.statusCode,

@@ -188,7 +188,7 @@ func TestUpstream_Update(t *testing.T) {
 	up, err := s.CreateUpstream("old-name", "https://old.example.com", "old-key", 1)
 	require.NoError(t, err)
 
-	updated, err := s.UpdateUpstream(up.ID, "new-name", "https://new.example.com", "new-key", 2)
+	updated, err := s.UpdateUpstream(up.ID, "new-name", "https://new.example.com", "new-key", 2, true)
 	require.NoError(t, err)
 	assert.Equal(t, up.ID, updated.ID)
 	assert.Equal(t, "new-name", updated.Name)
@@ -199,7 +199,7 @@ func TestUpstream_Update(t *testing.T) {
 
 func TestUpstream_UpdateNotFound(t *testing.T) {
 	s := newTestStore(t)
-	_, err := s.UpdateUpstream(9999, "name", "https://example.com", "key", 0)
+	_, err := s.UpdateUpstream(9999, "name", "https://example.com", "key", 0, true)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
 }

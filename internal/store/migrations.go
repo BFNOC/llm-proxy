@@ -57,6 +57,24 @@ CREATE INDEX IF NOT EXISTS idx_request_logs_created_at ON request_logs (created_
 CREATE INDEX IF NOT EXISTS idx_request_logs_key_id ON request_logs (downstream_key_id);
 `,
 	},
+	{
+		version: 2,
+		up: `
+ALTER TABLE upstream_providers ADD COLUMN enabled BOOLEAN NOT NULL DEFAULT 1;
+`,
+	},
+	{
+		version: 3,
+		up: `
+ALTER TABLE request_logs ADD COLUMN upstream_name TEXT NOT NULL DEFAULT '';
+`,
+	},
+	{
+		version: 4,
+		up: `
+ALTER TABLE request_logs ADD COLUMN client_ip TEXT NOT NULL DEFAULT '';
+`,
+	},
 }
 
 // RunMigrations applies all pending schema migrations in order.

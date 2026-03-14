@@ -42,7 +42,7 @@ func TestDynamicProxy_ProxiesToUpstream(t *testing.T) {
 
 	parsed, err := url.Parse(upstream.URL)
 	require.NoError(t, err)
-	dp.SetActiveUpstream(parsed, "test-key")
+	dp.SetActiveUpstream(parsed, "test-key", "test")
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	rec := httptest.NewRecorder()
@@ -65,7 +65,7 @@ func TestDynamicProxy_StreamingResponseHeaders(t *testing.T) {
 	dp := NewDynamicProxy()
 	parsed, err := url.Parse(upstream.URL)
 	require.NoError(t, err)
-	dp.SetActiveUpstream(parsed, "test-key")
+	dp.SetActiveUpstream(parsed, "test-key", "test")
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	rec := httptest.NewRecorder()
@@ -87,7 +87,7 @@ func TestDynamicProxy_SetAndGetActiveUpstream(t *testing.T) {
 
 	u1, err := url.Parse("https://api.openai.com")
 	require.NoError(t, err)
-	dp.SetActiveUpstream(u1, "key1")
+	dp.SetActiveUpstream(u1, "key1", "upstream1")
 
 	got := dp.GetActiveUpstream()
 	require.NotNil(t, got)
@@ -97,7 +97,7 @@ func TestDynamicProxy_SetAndGetActiveUpstream(t *testing.T) {
 	// Swap to a different upstream.
 	u2, err := url.Parse("https://api.anthropic.com")
 	require.NoError(t, err)
-	dp.SetActiveUpstream(u2, "key2")
+	dp.SetActiveUpstream(u2, "key2", "upstream2")
 
 	got = dp.GetActiveUpstream()
 	require.NotNil(t, got)
@@ -111,7 +111,7 @@ func TestDynamicProxy_UpstreamError_Returns502(t *testing.T) {
 	// Point at an address that refuses connections.
 	u, err := url.Parse("http://127.0.0.1:1") // port 1 is always closed
 	require.NoError(t, err)
-	dp.SetActiveUpstream(u, "")
+	dp.SetActiveUpstream(u, "", "test")
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	rec := httptest.NewRecorder()

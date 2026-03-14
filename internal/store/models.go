@@ -8,7 +8,8 @@ type UpstreamProvider struct {
 	BaseURL   string
 	APIKey    string // encrypted at rest
 	Priority  int
-	Healthy   bool // runtime only, not persisted
+	Enabled   bool   // persisted; disabled upstreams are skipped by the prober
+	Healthy   bool   // runtime only, not persisted
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -27,6 +28,8 @@ type DownstreamKey struct {
 type RequestLog struct {
 	ID              int64
 	DownstreamKeyID int64
+	UpstreamName    string
+	ClientIP        string
 	ProviderStyle   string
 	Path            string
 	StatusCode      int
