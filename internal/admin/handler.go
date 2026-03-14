@@ -88,7 +88,8 @@ func (h *AdminHandler) authMiddleware(next http.Handler) http.Handler {
 func (h *AdminHandler) listUpstreams(w http.ResponseWriter, r *http.Request) {
 	upstreams, err := h.store.ListUpstreams()
 	if err != nil {
-		jsonError(w, http.StatusInternalServerError, err.Error())
+		slog.Error("admin: store error", "error", err)
+		jsonError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 	// Redact API keys in listing
@@ -135,7 +136,8 @@ func (h *AdminHandler) createUpstream(w http.ResponseWriter, r *http.Request) {
 
 	upstream, err := h.store.CreateUpstream(req.Name, req.BaseURL, req.APIKey, req.Priority)
 	if err != nil {
-		jsonError(w, http.StatusInternalServerError, err.Error())
+		slog.Error("admin: store error", "error", err)
+		jsonError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 	slog.Info("admin: created upstream", "id", upstream.ID, "name", upstream.Name)
@@ -199,7 +201,8 @@ func (h *AdminHandler) updateUpstream(w http.ResponseWriter, r *http.Request) {
 
 	upstream, err := h.store.UpdateUpstream(id, name, baseURL, apiKey, priority, enabled)
 	if err != nil {
-		jsonError(w, http.StatusInternalServerError, err.Error())
+		slog.Error("admin: store error", "error", err)
+		jsonError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 	// Trigger re-probe so disabled/enabled change takes effect immediately.
@@ -215,7 +218,8 @@ func (h *AdminHandler) deleteUpstream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.store.DeleteUpstream(id); err != nil {
-		jsonError(w, http.StatusInternalServerError, err.Error())
+		slog.Error("admin: store error", "error", err)
+		jsonError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 	// Trigger immediate probe to update active upstream if needed.
@@ -229,7 +233,8 @@ func (h *AdminHandler) deleteUpstream(w http.ResponseWriter, r *http.Request) {
 func (h *AdminHandler) listKeys(w http.ResponseWriter, r *http.Request) {
 	keys, err := h.store.ListKeys()
 	if err != nil {
-		jsonError(w, http.StatusInternalServerError, err.Error())
+		slog.Error("admin: store error", "error", err)
+		jsonError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 	type keyResponse struct {
@@ -268,7 +273,8 @@ func (h *AdminHandler) createKey(w http.ResponseWriter, r *http.Request) {
 
 	plaintext, key, err := h.store.CreateKey(req.Name, req.RPMLimit)
 	if err != nil {
-		jsonError(w, http.StatusInternalServerError, err.Error())
+		slog.Error("admin: store error", "error", err)
+		jsonError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 
@@ -327,7 +333,8 @@ func (h *AdminHandler) updateKey(w http.ResponseWriter, r *http.Request) {
 
 	key, err := h.store.UpdateKey(id, name, rpmLimit, enabled)
 	if err != nil {
-		jsonError(w, http.StatusInternalServerError, err.Error())
+		slog.Error("admin: store error", "error", err)
+		jsonError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 
@@ -347,7 +354,8 @@ func (h *AdminHandler) deleteKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.store.DeleteKey(id); err != nil {
-		jsonError(w, http.StatusInternalServerError, err.Error())
+		slog.Error("admin: store error", "error", err)
+		jsonError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 
@@ -408,7 +416,8 @@ func (h *AdminHandler) queryLogs(w http.ResponseWriter, r *http.Request) {
 
 	logs, err := h.store.QueryLogs(keyID, from, to, limit)
 	if err != nil {
-		jsonError(w, http.StatusInternalServerError, err.Error())
+		slog.Error("admin: store error", "error", err)
+		jsonError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 
