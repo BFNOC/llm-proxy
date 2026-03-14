@@ -247,7 +247,7 @@ func main() {
 	}
 
 	go func() {
-		slog.Info("Starting server", "address", "0.0.0.0:"+port, "version", version)
+		slog.Info("Starting server", "address", server.Addr, "version", version)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			slog.Error("Server failed to start", "error", err)
 			os.Exit(1)

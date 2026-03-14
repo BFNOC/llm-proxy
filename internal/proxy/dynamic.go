@@ -88,12 +88,21 @@ func (dp *DynamicProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	style := DetectProviderStyle(r)
 
 	// Buffer request body for potential retries across upstreams.
-	bodyBytes, err := io.ReadAll(r.Body)
+	// Limit to 32MB to prevent memory exhaustion; LLM API payloads are
+	// typically small JSON messages.
+	const maxBodySize = 32 << 20 // 32 MB
+	bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, maxBodySize+1))
 	r.Body.Close()
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(map[string]string{"error": "failed to read request body"}) //nolint:errcheck
+		return
+	}
+	if int64(len(bodyBytes)) > maxBodySize {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusRequestEntityTooLarge)
+		json.NewEncoder(w).Encode(map[string]string{"error": "request body too large (max 32MB)"}) //nolint:errcheck
 		return
 	}
 
@@ -150,7 +159,7 @@ func (dp *DynamicProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (dp *DynamicProxy) forwardResponse(w http.ResponseWriter, resp *http.Response, upstreamName string) {
 	defer resp.Body.Close()
 
-	// Copy response headers.
+	// Copy response headers (skip hop-by-hop headers).
 	for k, vv := range resp.Header {
 		for _, v := range vv {
 			w.Header().Add(k, v)
@@ -165,7 +174,9 @@ func (dp *DynamicProxy) forwardResponse(w http.ResponseWriter, resp *http.Respon
 		w.Header().Del("Content-Length")
 	}
 
-	// Tag for audit middleware.
+	// Store upstream name for audit middleware. This header is set BEFORE
+	// WriteHeader and will be read then deleted by the audit middleware
+	// wrapper before the response reaches the client.
 	w.Header().Set("X-Upstream-Name", upstreamName)
 
 	w.WriteHeader(resp.StatusCode)
