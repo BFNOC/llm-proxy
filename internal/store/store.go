@@ -437,3 +437,51 @@ func (s *Store) QueryLogs(keyID int64, from, to time.Time, limit int) ([]Request
 	}
 	return result, nil
 }
+
+// ---- Model Whitelist ----
+
+// ListModelWhitelist returns all whitelist patterns.
+func (s *Store) ListModelWhitelist() ([]ModelWhitelistEntry, error) {
+	rows, err := s.db.Query(`SELECT id, pattern, created_at FROM model_whitelist ORDER BY pattern`)
+	if err != nil {
+		return nil, fmt.Errorf("list model whitelist: %w", err)
+	}
+	defer rows.Close()
+
+	var result []ModelWhitelistEntry
+	for rows.Next() {
+		var e ModelWhitelistEntry
+		if err := rows.Scan(&e.ID, &e.Pattern, &e.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan model whitelist: %w", err)
+		}
+		result = append(result, e)
+	}
+	return result, rows.Err()
+}
+
+// AddModelWhitelist inserts a new pattern into the whitelist.
+func (s *Store) AddModelWhitelist(pattern string) (ModelWhitelistEntry, error) {
+	now := time.Now().UTC()
+	res, err := s.db.Exec(
+		`INSERT INTO model_whitelist (pattern, created_at) VALUES (?, ?)`,
+		pattern, now,
+	)
+	if err != nil {
+		return ModelWhitelistEntry{}, fmt.Errorf("add model whitelist: %w", err)
+	}
+	id, _ := res.LastInsertId()
+	return ModelWhitelistEntry{ID: id, Pattern: pattern, CreatedAt: now}, nil
+}
+
+// DeleteModelWhitelist removes a pattern by ID.
+func (s *Store) DeleteModelWhitelist(id int64) error {
+	res, err := s.db.Exec(`DELETE FROM model_whitelist WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("delete model whitelist: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("model whitelist entry %d not found", id)
+	}
+	return nil
+}

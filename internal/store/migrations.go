@@ -75,6 +75,16 @@ ALTER TABLE request_logs ADD COLUMN upstream_name TEXT NOT NULL DEFAULT '';
 ALTER TABLE request_logs ADD COLUMN client_ip TEXT NOT NULL DEFAULT '';
 `,
 	},
+	{
+		version: 5,
+		up: `
+CREATE TABLE IF NOT EXISTS model_whitelist (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    pattern    TEXT NOT NULL UNIQUE,
+    created_at DATETIME
+);
+`,
+	},
 }
 
 // RunMigrations applies all pending schema migrations in order.

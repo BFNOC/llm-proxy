@@ -36,3 +36,13 @@ type RequestLog struct {
 	LatencyMs       int64
 	CreatedAt       time.Time
 }
+
+// ModelWhitelistEntry is a glob pattern for filtering /v1/models responses.
+// If the whitelist is non-empty, only models matching at least one pattern are
+// returned. Patterns support * wildcards (e.g. "claude-sonnet*"); patterns
+// without wildcards match as substrings.
+type ModelWhitelistEntry struct {
+	ID        int64
+	Pattern   string
+	CreatedAt time.Time
+}
