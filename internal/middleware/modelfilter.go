@@ -107,12 +107,6 @@ func ModelFilterMiddleware(mf *ModelFilter) func(http.Handler) http.Handler {
 			}
 			next.ServeHTTP(capture, r)
 
-			slog.Info("model filter: captured response",
-				"status", capture.statusCode,
-				"bodyLen", capture.body.Len(),
-				"headerCount", len(capture.header),
-				"bodyPreview", string(capture.body.Bytes()[:min(200, capture.body.Len())]))
-
 			// Non-200: replay captured response as-is.
 			if capture.statusCode != http.StatusOK {
 				copyHeader(w.Header(), capture.header)
@@ -124,16 +118,16 @@ func ModelFilterMiddleware(mf *ModelFilter) func(http.Handler) http.Handler {
 			// Parse the models response JSON.
 			var modelsResp openAIModelsResponse
 			if err := json.Unmarshal(capture.body.Bytes(), &modelsResp); err != nil {
-				slog.Error("model filter: JSON parse failed, passing through", "error", err)
+				slog.Warn("model filter: failed to parse response, passing through",
+					"error", err, "bodyLen", capture.body.Len())
 				copyHeader(w.Header(), capture.header)
 				w.WriteHeader(capture.statusCode)
 				w.Write(capture.body.Bytes()) //nolint:errcheck
 				return
 			}
 
-			slog.Info("model filter: parsed models", "total", len(modelsResp.Data))
-
 			// Filter models against whitelist.
+			totalModels := len(modelsResp.Data)
 			var filtered []map[string]interface{}
 			for _, model := range modelsResp.Data {
 				id, ok := model["id"].(string)
@@ -146,7 +140,8 @@ func ModelFilterMiddleware(mf *ModelFilter) func(http.Handler) http.Handler {
 			}
 			modelsResp.Data = filtered
 
-			slog.Info("model filter: filtered result", "kept", len(filtered))
+			slog.Info("model filter: filtered /v1/models",
+				"total", totalModels, "kept", len(filtered))
 
 			// Write filtered response with clean headers.
 			out, _ := json.Marshal(modelsResp)
@@ -157,8 +152,7 @@ func ModelFilterMiddleware(mf *ModelFilter) func(http.Handler) http.Handler {
 			w.Header().Del("Etag")
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
-			n, writeErr := w.Write(out)
-			slog.Info("model filter: wrote response", "outLen", len(out), "written", n, "err", writeErr)
+			w.Write(out) //nolint:errcheck
 		})
 	}
 }
