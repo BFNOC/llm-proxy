@@ -90,10 +90,14 @@ func ModelFilterMiddleware(mf *ModelFilter) func(http.Handler) http.Handler {
 			}
 
 			// If no patterns configured, pass through
-			if len(mf.getPatterns()) == 0 {
+			patterns := mf.getPatterns()
+			if len(patterns) == 0 {
+				slog.Debug("model filter: no patterns, passing through")
 				next.ServeHTTP(w, r)
 				return
 			}
+
+			slog.Info("model filter: intercepting /v1/models", "patterns", len(patterns))
 
 			// Capture the full response (headers + body + status).
 			capture := &responseCapture{
@@ -102,6 +106,11 @@ func ModelFilterMiddleware(mf *ModelFilter) func(http.Handler) http.Handler {
 				body:       &bytes.Buffer{},
 			}
 			next.ServeHTTP(capture, r)
+
+			slog.Info("model filter: captured response",
+				"status", capture.statusCode,
+				"bodyLen", capture.body.Len(),
+				"headerCount", len(capture.header))
 
 			// Non-200: replay captured response as-is.
 			if capture.statusCode != http.StatusOK {
