@@ -198,6 +198,14 @@ function editKey(id, name, rpm) {
     })}).then(d => { if(d.error) alert(d.error); else loadKeys(); });
 }
 
+function fmtTime(s) {
+    if (!s) return '-';
+    const d = new Date(s);
+    if (isNaN(d)) return esc(s);
+    const pad = n => String(n).padStart(2,'0');
+    return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+' '+pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds());
+}
+
 function toggleKey(id, enabled) {
     api('/keys/'+id, {method:'PUT', body: JSON.stringify({enabled:enabled})}).then(() => loadKeys());
 }
@@ -215,7 +223,7 @@ function loadLogs(e) {
     api('/logs'+q).then(data => {
         const tbody = document.getElementById('logs-table');
         tbody.innerHTML = (data||[]).map(l =>
-            '<tr><td>'+l.ID+'</td><td>'+l.DownstreamKeyID+'</td><td>'+esc(l.UpstreamName||'-')+'</td><td>'+esc(l.ClientIP||'-')+'</td><td>'+esc(l.ProviderStyle)+'</td><td>'+esc(l.Path)+'</td><td>'+l.StatusCode+'</td><td>'+l.LatencyMs+'ms</td><td>'+esc(l.CreatedAt)+'</td></tr>'
+            '<tr><td>'+l.ID+'</td><td>'+l.DownstreamKeyID+'</td><td>'+esc(l.UpstreamName||'-')+'</td><td>'+esc(l.ClientIP||'-')+'</td><td>'+esc(l.ProviderStyle)+'</td><td>'+esc(l.Path)+'</td><td>'+l.StatusCode+'</td><td>'+l.LatencyMs+'ms</td><td>'+fmtTime(l.CreatedAt)+'</td></tr>'
         ).join('');
     });
 }
