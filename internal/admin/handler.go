@@ -79,7 +79,8 @@ func (h *AdminHandler) RegisterRoutes(r *mux.Router) {
 	api.HandleFunc("/models/whitelist", h.addModelWhitelist).Methods("POST")
 	api.HandleFunc("/models/whitelist/{id}", h.deleteModelWhitelist).Methods("DELETE")
 
-	// Key-upstream bindings
+	// 绑定接口拆成“全量查看”“单 Key 查询”“全量覆盖更新”三类，
+	// 让管理端既能一次加载总览，也能按 Key 精确编辑。
 	api.HandleFunc("/keys/bindings", h.getAllKeyBindings).Methods("GET")
 	api.HandleFunc("/keys/{id}/upstreams", h.getKeyUpstreams).Methods("GET")
 	api.HandleFunc("/keys/{id}/upstreams", h.setKeyUpstreams).Methods("PUT")
@@ -501,6 +502,8 @@ func (h *AdminHandler) deleteModelWhitelist(w http.ResponseWriter, r *http.Reque
 
 // --- Key-Upstream Bindings ---
 
+// getAllKeyBindings 返回所有 Key 的显式上游绑定，供管理页批量渲染。
+// 结果里不存在的 Key 应按“未绑定 = 允许全部健康上游”解释。
 func (h *AdminHandler) getAllKeyBindings(w http.ResponseWriter, r *http.Request) {
 	bindings, err := h.store.GetAllKeyBindings()
 	if err != nil {
@@ -511,6 +514,8 @@ func (h *AdminHandler) getAllKeyBindings(w http.ResponseWriter, r *http.Request)
 	jsonOK(w, bindings)
 }
 
+// getKeyUpstreams 返回单个 Key 的显式绑定集合。
+// 即使没有绑定也返回空数组，减少前端对三态值的处理复杂度。
 func (h *AdminHandler) getKeyUpstreams(w http.ResponseWriter, r *http.Request) {
 	id, err := parseID(r)
 	if err != nil {
@@ -534,6 +539,8 @@ func (h *AdminHandler) getKeyUpstreams(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]interface{}{"upstream_ids": ids})
 }
 
+// setKeyUpstreams 以全量覆盖方式更新某个 Key 的上游白名单。
+// 空数组表示清空显式绑定并回退到默认路由，而不是把该 Key 锁死。
 func (h *AdminHandler) setKeyUpstreams(w http.ResponseWriter, r *http.Request) {
 	id, err := parseID(r)
 	if err != nil {
@@ -552,7 +559,8 @@ func (h *AdminHandler) setKeyUpstreams(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
-	// Validate and deduplicate upstream IDs
+	// 先在 handler 层做存在性校验和去重，把输入问题收敛为 400，
+	// 避免落到存储层后变成外键或唯一约束错误。
 	if len(req.UpstreamIDs) > 0 {
 		upstreams, err := h.store.ListUpstreams()
 		if err != nil {
@@ -587,7 +595,9 @@ func (h *AdminHandler) setKeyUpstreams(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]interface{}{"status": "updated", "upstream_ids": req.UpstreamIDs})
 }
 
-// --- Status ---
+// getStatus 返回运行时视角的状态快照。
+// healthy_upstreams 取自 DynamicProxy 当前可用的健康列表，
+// 而不是数据库静态配置，这样管理端看到的状态才和实际转发行为一致。
 
 func (h *AdminHandler) getStatus(w http.ResponseWriter, r *http.Request) {
 	var auditDropped int64
@@ -607,11 +617,13 @@ func (h *AdminHandler) getStatus(w http.ResponseWriter, r *http.Request) {
 			healthyList = append(healthyList, upstreamInfo{ID: u.ID, Name: u.Name, URL: u.BaseURL.String()})
 		}
 	}
+	// 固定返回空数组，避免前端在 null 和 [] 之间做额外分支。
 	if healthyList == nil {
 		healthyList = []upstreamInfo{}
 	}
 
 	// Key count
+	// 统计信息采用尽力而为策略；即使计数失败，也不让状态接口整体不可用。
 	keyCount, _ := h.store.CountKeys()
 
 	// Today's request count

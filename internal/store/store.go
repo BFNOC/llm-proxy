@@ -438,7 +438,8 @@ func (s *Store) QueryLogs(keyID int64, from, to time.Time, limit int) ([]Request
 	return result, nil
 }
 
-// CountLogsSince returns the number of request logs since the given time using COUNT(*).
+// CountLogsSince 返回指定时间之后的请求日志条数。
+// 管理状态页只需要聚合数字，直接走 COUNT(*) 可以避免把大量日志读入内存。
 func (s *Store) CountLogsSince(since time.Time) (int, error) {
 	var count int
 	err := s.db.QueryRow(`SELECT COUNT(*) FROM request_logs WHERE created_at >= ?`, since.UTC()).Scan(&count)
@@ -448,7 +449,8 @@ func (s *Store) CountLogsSince(since time.Time) (int, error) {
 	return count, nil
 }
 
-// CountKeys returns the total number of downstream keys using COUNT(*).
+// CountKeys 返回当前下游 Key 总数。
+// 单独提供聚合查询，让状态接口拿统计时不必扫描完整 Key 列表。
 func (s *Store) CountKeys() (int, error) {
 	var count int
 	err := s.db.QueryRow(`SELECT COUNT(*) FROM downstream_keys`).Scan(&count)
@@ -510,14 +512,17 @@ func (s *Store) DeleteModelWhitelist(id int64) error {
 // Key ↔ Upstream Bindings
 // ---------------------------------------------------------------------------
 
-// SetKeyUpstreams replaces all upstream bindings for a downstream key.
-// Pass an empty slice to remove all bindings (key will use all upstreams).
+// SetKeyUpstreams 以“全量覆盖”方式更新某个下游 Key 的上游绑定。
+// 先删后插放在同一事务中，读取方只会看到旧快照或新快照，
+// 不会在更新过程中读到一半旧一半新的授权集合。
+// 传入空切片表示清空显式绑定，回退到“该 Key 可使用所有健康上游”的默认语义。
 func (s *Store) SetKeyUpstreams(keyID int64, upstreamIDs []int64) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
 
+	// 先清空旧绑定，保证接口语义是覆盖而不是增量追加。
 	if _, err = tx.Exec(`DELETE FROM key_upstream_bindings WHERE downstream_key_id = ?`, keyID); err != nil {
 		_ = tx.Rollback()
 		return fmt.Errorf("clear existing bindings: %w", err)
@@ -525,6 +530,7 @@ func (s *Store) SetKeyUpstreams(keyID int64, upstreamIDs []int64) error {
 
 	if len(upstreamIDs) > 0 {
 		now := time.Now().UTC()
+		// 复用 prepared statement，减少批量重建绑定时的语句解析开销。
 		stmt, err := tx.Prepare(`INSERT INTO key_upstream_bindings (downstream_key_id, upstream_id, created_at) VALUES (?, ?, ?)`)
 		if err != nil {
 			_ = tx.Rollback()
@@ -546,10 +552,12 @@ func (s *Store) SetKeyUpstreams(keyID int64, upstreamIDs []int64) error {
 	return nil
 }
 
-// GetKeyUpstreamIDs returns the upstream IDs bound to a downstream key.
-// An empty slice means the key has no bindings (should use all upstreams).
+// GetKeyUpstreamIDs 返回某个下游 Key 显式绑定的上游 ID 列表。
+// 返回空切片表示“未配置绑定”，而不是“禁止访问任何上游”，
+// 上层据此沿用历史默认行为，避免未配置即锁死。
 func (s *Store) GetKeyUpstreamIDs(keyID int64) ([]int64, error) {
 	rows, err := s.db.Query(
+		// 固定排序让接口返回稳定，便于前端 diff、缓存命中和测试断言。
 		`SELECT upstream_id FROM key_upstream_bindings WHERE downstream_key_id = ? ORDER BY upstream_id`,
 		keyID,
 	)
@@ -569,8 +577,8 @@ func (s *Store) GetKeyUpstreamIDs(keyID int64) ([]int64, error) {
 	return ids, rows.Err()
 }
 
-// GetAllKeyBindings returns a map of downstream_key_id -> []upstream_id for all bindings.
-// This avoids N+1 queries when listing all keys with their bindings.
+// GetAllKeyBindings 一次性加载所有显式绑定关系，供管理端列表页批量展示。
+// 这样可以避免对每个 Key 再查一次绑定，减少典型的 N+1 查询问题。
 func (s *Store) GetAllKeyBindings() (map[int64][]int64, error) {
 	rows, err := s.db.Query(`SELECT downstream_key_id, upstream_id FROM key_upstream_bindings ORDER BY downstream_key_id, upstream_id`)
 	if err != nil {
