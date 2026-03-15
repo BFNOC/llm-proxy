@@ -95,31 +95,33 @@ func ModelFilterMiddleware(mf *ModelFilter) func(http.Handler) http.Handler {
 				return
 			}
 
-			// Capture the response
+			// Capture the full response (headers + body + status).
 			capture := &responseCapture{
-				ResponseWriter: w,
-				statusCode:     http.StatusOK,
-				body:           &bytes.Buffer{},
+				header:     make(http.Header),
+				statusCode: http.StatusOK,
+				body:       &bytes.Buffer{},
 			}
 			next.ServeHTTP(capture, r)
 
-			// Only filter successful JSON responses
+			// Non-200: replay captured response as-is.
 			if capture.statusCode != http.StatusOK {
+				copyHeader(w.Header(), capture.header)
 				w.WriteHeader(capture.statusCode)
 				w.Write(capture.body.Bytes()) //nolint:errcheck
 				return
 			}
 
-			// Parse and filter the models response
+			// Parse the models response JSON.
 			var modelsResp openAIModelsResponse
 			if err := json.Unmarshal(capture.body.Bytes(), &modelsResp); err != nil {
-				// Not valid JSON — pass through as-is
+				// Not valid JSON — replay as-is.
+				copyHeader(w.Header(), capture.header)
 				w.WriteHeader(capture.statusCode)
 				w.Write(capture.body.Bytes()) //nolint:errcheck
 				return
 			}
 
-			// Filter models
+			// Filter models against whitelist.
 			var filtered []map[string]interface{}
 			for _, model := range modelsResp.Data {
 				id, ok := model["id"].(string)
@@ -132,12 +134,26 @@ func ModelFilterMiddleware(mf *ModelFilter) func(http.Handler) http.Handler {
 			}
 			modelsResp.Data = filtered
 
-			// Write filtered response
+			// Write filtered response with clean headers.
 			out, _ := json.Marshal(modelsResp)
+			copyHeader(w.Header(), capture.header)
+			// Remove stale headers that no longer match the filtered body.
+			w.Header().Del("Content-Length")
+			w.Header().Del("Content-Encoding")
+			w.Header().Del("Etag")
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 			w.Write(out) //nolint:errcheck
 		})
+	}
+}
+
+// copyHeader copies all headers from src to dst.
+func copyHeader(dst, src http.Header) {
+	for k, vv := range src {
+		for _, v := range vv {
+			dst.Add(k, v)
+		}
 	}
 }
 
@@ -146,23 +162,30 @@ func isModelsPath(path string) bool {
 	return path == "/v1/models" || path == "/v1/models/"
 }
 
-// responseCapture captures the response body and status code.
+// responseCapture fully captures an HTTP response: headers, status code, and
+// body. It uses its own header map so writes from inner handlers don't leak
+// to the real ResponseWriter.
 type responseCapture struct {
-	http.ResponseWriter
-	statusCode  int
-	body        *bytes.Buffer
-	wroteHeader bool
+	header     http.Header
+	statusCode int
+	body       *bytes.Buffer
 }
 
+// Header returns the capture's own header map (not the real writer's).
+func (rc *responseCapture) Header() http.Header {
+	return rc.header
+}
+
+// WriteHeader captures the status code without writing to the real writer.
 func (rc *responseCapture) WriteHeader(code int) {
 	rc.statusCode = code
-	rc.wroteHeader = true
-	// Don't write to underlying writer yet — we need to filter first.
 }
 
+// Write captures body bytes into the buffer.
 func (rc *responseCapture) Write(b []byte) (int, error) {
 	return rc.body.Write(b)
 }
 
 // Flush implements http.Flusher (no-op for captured responses).
 func (rc *responseCapture) Flush() {}
+
