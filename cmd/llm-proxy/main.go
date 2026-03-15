@@ -212,12 +212,7 @@ func main() {
 	r.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		status := map[string]interface{}{
-			"status":            "ok",
-			"active_upstream":   dynamicProxy.GetActiveUpstream() != nil,
-			"audit_dropped":     int64(0),
-		}
-		if auditLogger != nil {
-			status["audit_dropped"] = auditLogger.DroppedCount()
+			"status": "ok",
 		}
 		if dynamicProxy.GetActiveUpstream() == nil {
 			status["status"] = "not_ready"
@@ -231,7 +226,7 @@ func main() {
 	modelFilter := middleware.NewModelFilter(db)
 
 	if yamlConfig.Admin.Enabled {
-		adminHandler := admin.NewAdminHandler(db, keyCache, rateLimiter, prober, auditLogger, modelFilter, adminToken)
+		adminHandler := admin.NewAdminHandler(db, keyCache, rateLimiter, prober, dynamicProxy, auditLogger, modelFilter, adminToken)
 		adminHandler.RegisterRoutes(r)
 		slog.Info("Admin interface enabled", "dashboard", "/admin/", "api", "/admin/api/")
 	}
@@ -244,6 +239,7 @@ func main() {
 		proxyChain = middleware.AuditLogMiddleware(auditLogger)(proxyChain)
 	}
 	proxyChain = middleware.RateLimitMiddleware(rateLimiter)(proxyChain)
+	proxyChain = middleware.UpstreamBindingMiddleware(db)(proxyChain)
 	proxyChain = middleware.KeyResolverMiddleware(keyCache)(proxyChain)
 	proxyChain = middleware.RequestClassifierMiddleware()(proxyChain)
 	proxyChain = middleware.CORSMiddleware()(proxyChain)

@@ -438,6 +438,26 @@ func (s *Store) QueryLogs(keyID int64, from, to time.Time, limit int) ([]Request
 	return result, nil
 }
 
+// CountLogsSince returns the number of request logs since the given time using COUNT(*).
+func (s *Store) CountLogsSince(since time.Time) (int, error) {
+	var count int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM request_logs WHERE created_at >= ?`, since.UTC()).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count logs since: %w", err)
+	}
+	return count, nil
+}
+
+// CountKeys returns the total number of downstream keys using COUNT(*).
+func (s *Store) CountKeys() (int, error) {
+	var count int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM downstream_keys`).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count keys: %w", err)
+	}
+	return count, nil
+}
+
 // ---- Model Whitelist ----
 
 // ListModelWhitelist returns all whitelist patterns.
@@ -484,4 +504,87 @@ func (s *Store) DeleteModelWhitelist(id int64) error {
 		return fmt.Errorf("model whitelist entry %d not found", id)
 	}
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Key ↔ Upstream Bindings
+// ---------------------------------------------------------------------------
+
+// SetKeyUpstreams replaces all upstream bindings for a downstream key.
+// Pass an empty slice to remove all bindings (key will use all upstreams).
+func (s *Store) SetKeyUpstreams(keyID int64, upstreamIDs []int64) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+
+	if _, err = tx.Exec(`DELETE FROM key_upstream_bindings WHERE downstream_key_id = ?`, keyID); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("clear existing bindings: %w", err)
+	}
+
+	if len(upstreamIDs) > 0 {
+		now := time.Now().UTC()
+		stmt, err := tx.Prepare(`INSERT INTO key_upstream_bindings (downstream_key_id, upstream_id, created_at) VALUES (?, ?, ?)`)
+		if err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("prepare binding insert: %w", err)
+		}
+		defer stmt.Close()
+
+		for _, uid := range upstreamIDs {
+			if _, err = stmt.Exec(keyID, uid, now); err != nil {
+				_ = tx.Rollback()
+				return fmt.Errorf("insert binding (key=%d, upstream=%d): %w", keyID, uid, err)
+			}
+		}
+	}
+
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit bindings: %w", err)
+	}
+	return nil
+}
+
+// GetKeyUpstreamIDs returns the upstream IDs bound to a downstream key.
+// An empty slice means the key has no bindings (should use all upstreams).
+func (s *Store) GetKeyUpstreamIDs(keyID int64) ([]int64, error) {
+	rows, err := s.db.Query(
+		`SELECT upstream_id FROM key_upstream_bindings WHERE downstream_key_id = ? ORDER BY upstream_id`,
+		keyID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query key upstream bindings: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan upstream id: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// GetAllKeyBindings returns a map of downstream_key_id -> []upstream_id for all bindings.
+// This avoids N+1 queries when listing all keys with their bindings.
+func (s *Store) GetAllKeyBindings() (map[int64][]int64, error) {
+	rows, err := s.db.Query(`SELECT downstream_key_id, upstream_id FROM key_upstream_bindings ORDER BY downstream_key_id, upstream_id`)
+	if err != nil {
+		return nil, fmt.Errorf("query all key bindings: %w", err)
+	}
+	defer rows.Close()
+
+	result := make(map[int64][]int64)
+	for rows.Next() {
+		var keyID, upstreamID int64
+		if err := rows.Scan(&keyID, &upstreamID); err != nil {
+			return nil, fmt.Errorf("scan binding row: %w", err)
+		}
+		result[keyID] = append(result[keyID], upstreamID)
+	}
+	return result, rows.Err()
 }

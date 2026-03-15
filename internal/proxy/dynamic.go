@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -53,8 +54,24 @@ var untrustedRequestHeaders = []string{
 	"X-Cluster-Client-IP",
 }
 
+// allowedUpstreamIDsKey is used for storing binding-related data in the request context.
+type allowedUpstreamIDsKey struct{}
+
+// ContextWithAllowedUpstreamIDs returns a new context with the allowed upstream IDs set.
+func ContextWithAllowedUpstreamIDs(ctx context.Context, ids []int64) context.Context {
+	return context.WithValue(ctx, allowedUpstreamIDsKey{}, ids)
+}
+
+// AllowedUpstreamIDsFromContext returns the upstream IDs this request is
+// restricted to. A nil/empty slice means all upstreams are allowed.
+func AllowedUpstreamIDsFromContext(ctx context.Context) []int64 {
+	v, _ := ctx.Value(allowedUpstreamIDsKey{}).([]int64)
+	return v
+}
+
 // ActiveUpstream holds the currently selected upstream endpoint and its key.
 type ActiveUpstream struct {
+	ID      int64
 	BaseURL *url.URL
 	APIKey  string
 	Name    string
@@ -115,6 +132,9 @@ func (dp *DynamicProxy) GetAllUpstreams() []*ActiveUpstream {
 // ServeHTTP implements http.Handler. It tries upstreams in priority order,
 // failing over to the next when 429 is received. The request body is buffered
 // once for potential retries. Auth headers are rewritten per-upstream.
+//
+// If "allowed_upstream_ids" is set in the request context (by the binding
+// middleware), only upstreams whose Name appears in the allowed set are tried.
 func (dp *DynamicProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	upstreams := dp.GetAllUpstreams()
 	if len(upstreams) == 0 {
@@ -122,6 +142,18 @@ func (dp *DynamicProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		json.NewEncoder(w).Encode(map[string]string{"error": "no active upstream available"}) //nolint:errcheck
 		return
+	}
+
+	// Filter upstreams if the downstream key has bindings.
+	if allowed := AllowedUpstreamIDsFromContext(r.Context()); len(allowed) > 0 {
+		filtered := filterUpstreams(upstreams, allowed)
+		if len(filtered) == 0 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(w).Encode(map[string]string{"error": "no permitted upstream available for this key"}) //nolint:errcheck
+			return
+		}
+		upstreams = filtered
 	}
 
 	// Detect provider style for auth rewriting.
@@ -272,3 +304,19 @@ func newProxyTransport() *http.Transport {
 		DisableCompression:    true,
 	}
 }
+
+// filterUpstreams returns only the upstreams whose ID is in the allowed list.
+func filterUpstreams(all []*ActiveUpstream, allowedIDs []int64) []*ActiveUpstream {
+	set := make(map[int64]bool, len(allowedIDs))
+	for _, id := range allowedIDs {
+		set[id] = true
+	}
+	var result []*ActiveUpstream
+	for _, u := range all {
+		if set[u.ID] {
+			result = append(result, u)
+		}
+	}
+	return result
+}
+

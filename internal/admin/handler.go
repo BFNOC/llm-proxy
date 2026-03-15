@@ -17,14 +17,18 @@ import (
 	"github.com/gorilla/mux"
 )
 
+var startTime = time.Now()
+var Version = "2.0.0" // set by main or build flags
+
 type AdminHandler struct {
-	store       *store.Store
-	keyCache    *middleware.KeyCache
-	rateLimiter *middleware.PerKeyRPMLimiter
-	prober      *proxy.UpstreamProber
-	auditLogger *middleware.AuditLogger
-	modelFilter *middleware.ModelFilter
-	adminToken  string
+	store        *store.Store
+	keyCache     *middleware.KeyCache
+	rateLimiter  *middleware.PerKeyRPMLimiter
+	prober       *proxy.UpstreamProber
+	dynamicProxy *proxy.DynamicProxy
+	auditLogger  *middleware.AuditLogger
+	modelFilter  *middleware.ModelFilter
+	adminToken   string
 }
 
 func NewAdminHandler(
@@ -32,18 +36,20 @@ func NewAdminHandler(
 	kc *middleware.KeyCache,
 	rl *middleware.PerKeyRPMLimiter,
 	prober *proxy.UpstreamProber,
+	dp *proxy.DynamicProxy,
 	al *middleware.AuditLogger,
 	mf *middleware.ModelFilter,
 	adminToken string,
 ) *AdminHandler {
 	return &AdminHandler{
-		store:       s,
-		keyCache:    kc,
-		rateLimiter: rl,
-		prober:      prober,
-		auditLogger: al,
-		modelFilter: mf,
-		adminToken:  adminToken,
+		store:        s,
+		keyCache:     kc,
+		rateLimiter:  rl,
+		prober:       prober,
+		dynamicProxy: dp,
+		auditLogger:  al,
+		modelFilter:  mf,
+		adminToken:   adminToken,
 	}
 }
 
@@ -72,6 +78,11 @@ func (h *AdminHandler) RegisterRoutes(r *mux.Router) {
 	api.HandleFunc("/models/whitelist", h.listModelWhitelist).Methods("GET")
 	api.HandleFunc("/models/whitelist", h.addModelWhitelist).Methods("POST")
 	api.HandleFunc("/models/whitelist/{id}", h.deleteModelWhitelist).Methods("DELETE")
+
+	// Key-upstream bindings
+	api.HandleFunc("/keys/bindings", h.getAllKeyBindings).Methods("GET")
+	api.HandleFunc("/keys/{id}/upstreams", h.getKeyUpstreams).Methods("GET")
+	api.HandleFunc("/keys/{id}/upstreams", h.setKeyUpstreams).Methods("PUT")
 
 	// Status
 	api.HandleFunc("/status", h.getStatus).Methods("GET")
@@ -488,6 +499,94 @@ func (h *AdminHandler) deleteModelWhitelist(w http.ResponseWriter, r *http.Reque
 	jsonOK(w, map[string]string{"status": "deleted"})
 }
 
+// --- Key-Upstream Bindings ---
+
+func (h *AdminHandler) getAllKeyBindings(w http.ResponseWriter, r *http.Request) {
+	bindings, err := h.store.GetAllKeyBindings()
+	if err != nil {
+		slog.Error("admin: store error", "error", err)
+		jsonError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	jsonOK(w, bindings)
+}
+
+func (h *AdminHandler) getKeyUpstreams(w http.ResponseWriter, r *http.Request) {
+	id, err := parseID(r)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// Verify key exists
+	if _, err := h.store.LookupKeyByID(id); err != nil {
+		jsonError(w, http.StatusNotFound, fmt.Sprintf("key %d not found", id))
+		return
+	}
+	ids, err := h.store.GetKeyUpstreamIDs(id)
+	if err != nil {
+		slog.Error("admin: store error", "error", err)
+		jsonError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if ids == nil {
+		ids = []int64{}
+	}
+	jsonOK(w, map[string]interface{}{"upstream_ids": ids})
+}
+
+func (h *AdminHandler) setKeyUpstreams(w http.ResponseWriter, r *http.Request) {
+	id, err := parseID(r)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// Verify key exists
+	if _, err := h.store.LookupKeyByID(id); err != nil {
+		jsonError(w, http.StatusNotFound, fmt.Sprintf("key %d not found", id))
+		return
+	}
+	var req struct {
+		UpstreamIDs []int64 `json:"upstream_ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	// Validate and deduplicate upstream IDs
+	if len(req.UpstreamIDs) > 0 {
+		upstreams, err := h.store.ListUpstreams()
+		if err != nil {
+			slog.Error("admin: store error", "error", err)
+			jsonError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		validIDs := make(map[int64]bool, len(upstreams))
+		for _, u := range upstreams {
+			validIDs[u.ID] = true
+		}
+		seen := make(map[int64]bool, len(req.UpstreamIDs))
+		var deduped []int64
+		for _, uid := range req.UpstreamIDs {
+			if !validIDs[uid] {
+				jsonError(w, http.StatusBadRequest, fmt.Sprintf("upstream %d not found", uid))
+				return
+			}
+			if !seen[uid] {
+				seen[uid] = true
+				deduped = append(deduped, uid)
+			}
+		}
+		req.UpstreamIDs = deduped
+	}
+	if err := h.store.SetKeyUpstreams(id, req.UpstreamIDs); err != nil {
+		slog.Error("admin: store error", "error", err)
+		jsonError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	slog.Info("admin: updated key upstream bindings", "key_id", id, "upstream_ids", req.UpstreamIDs)
+	jsonOK(w, map[string]interface{}{"status": "updated", "upstream_ids": req.UpstreamIDs})
+}
+
 // --- Status ---
 
 func (h *AdminHandler) getStatus(w http.ResponseWriter, r *http.Request) {
@@ -495,10 +594,42 @@ func (h *AdminHandler) getStatus(w http.ResponseWriter, r *http.Request) {
 	if h.auditLogger != nil {
 		auditDropped = h.auditLogger.DroppedCount()
 	}
+
+	// Healthy upstreams
+	type upstreamInfo struct {
+		ID   int64  `json:"id"`
+		Name string `json:"name"`
+		URL  string `json:"url"`
+	}
+	var healthyList []upstreamInfo
+	if all := h.dynamicProxy.GetAllUpstreams(); len(all) > 0 {
+		for _, u := range all {
+			healthyList = append(healthyList, upstreamInfo{ID: u.ID, Name: u.Name, URL: u.BaseURL.String()})
+		}
+	}
+	if healthyList == nil {
+		healthyList = []upstreamInfo{}
+	}
+
+	// Key count
+	keyCount, _ := h.store.CountKeys()
+
+	// Today's request count
+	now := time.Now().UTC()
+	startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	todayRequests, _ := h.store.CountLogsSince(startOfDay)
+
+	// Uptime
+	uptime := time.Since(startTime).Truncate(time.Second).String()
+
 	status := map[string]interface{}{
-		"active_upstream_id": h.prober.GetCurrentID(),
-		"audit_dropped":      auditDropped,
-		"timestamp":          time.Now().UTC(),
+		"healthy_upstreams": healthyList,
+		"total_keys":        keyCount,
+		"today_requests":    todayRequests,
+		"audit_dropped":     auditDropped,
+		"uptime":            uptime,
+		"version":           Version,
+		"timestamp":         time.Now().UTC(),
 	}
 	jsonOK(w, status)
 }

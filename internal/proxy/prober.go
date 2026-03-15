@@ -100,6 +100,7 @@ func (p *UpstreamProber) probeOnce() {
 			continue
 		}
 		healthy = append(healthy, &ActiveUpstream{
+			ID:      u.ID,
 			BaseURL: parsed,
 			APIKey:  u.APIKey,
 			Name:    u.Name,

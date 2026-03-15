@@ -485,3 +485,125 @@ func TestDeleteLogsOlderThan(t *testing.T) {
 	assert.Len(t, results, 1, "only the recent log should remain")
 	assert.Equal(t, recent.Unix(), results[0].CreatedAt.Unix())
 }
+
+// ---------------------------------------------------------------------------
+// Key-Upstream Bindings
+// ---------------------------------------------------------------------------
+
+func TestKeyUpstreamBinding_SetAndGet(t *testing.T) {
+	s := newTestStore(t)
+
+	_, dk, err := s.CreateKey("bound-key", 0)
+	require.NoError(t, err)
+	u1, err := s.CreateUpstream("upstream-1", "https://a.example.com", "key-a", 0)
+	require.NoError(t, err)
+	u2, err := s.CreateUpstream("upstream-2", "https://b.example.com", "key-b", 0)
+	require.NoError(t, err)
+
+	err = s.SetKeyUpstreams(dk.ID, []int64{u1.ID, u2.ID})
+	require.NoError(t, err)
+
+	ids, err := s.GetKeyUpstreamIDs(dk.ID)
+	require.NoError(t, err)
+	assert.Len(t, ids, 2)
+	assert.Contains(t, ids, u1.ID)
+	assert.Contains(t, ids, u2.ID)
+}
+
+func TestKeyUpstreamBinding_ReplaceExisting(t *testing.T) {
+	s := newTestStore(t)
+
+	_, dk, err := s.CreateKey("replace-key", 0)
+	require.NoError(t, err)
+	u1, err := s.CreateUpstream("up-1", "https://a.example.com", "key-a", 0)
+	require.NoError(t, err)
+	u2, err := s.CreateUpstream("up-2", "https://b.example.com", "key-b", 0)
+	require.NoError(t, err)
+
+	err = s.SetKeyUpstreams(dk.ID, []int64{u1.ID})
+	require.NoError(t, err)
+
+	// Replace with a different set
+	err = s.SetKeyUpstreams(dk.ID, []int64{u2.ID})
+	require.NoError(t, err)
+
+	ids, err := s.GetKeyUpstreamIDs(dk.ID)
+	require.NoError(t, err)
+	assert.Len(t, ids, 1)
+	assert.Equal(t, u2.ID, ids[0])
+}
+
+func TestKeyUpstreamBinding_EmptyMeansAll(t *testing.T) {
+	s := newTestStore(t)
+
+	_, dk, err := s.CreateKey("empty-key", 0)
+	require.NoError(t, err)
+
+	ids, err := s.GetKeyUpstreamIDs(dk.ID)
+	require.NoError(t, err)
+	assert.Empty(t, ids, "no bindings should return empty slice")
+}
+
+func TestKeyUpstreamBinding_ClearBindings(t *testing.T) {
+	s := newTestStore(t)
+
+	_, dk, err := s.CreateKey("clear-key", 0)
+	require.NoError(t, err)
+	u1, err := s.CreateUpstream("up-c", "https://c.example.com", "key-c", 0)
+	require.NoError(t, err)
+
+	err = s.SetKeyUpstreams(dk.ID, []int64{u1.ID})
+	require.NoError(t, err)
+
+	// Clear by passing empty
+	err = s.SetKeyUpstreams(dk.ID, []int64{})
+	require.NoError(t, err)
+
+	ids, err := s.GetKeyUpstreamIDs(dk.ID)
+	require.NoError(t, err)
+	assert.Empty(t, ids)
+}
+
+func TestKeyUpstreamBinding_CascadeDeleteKey(t *testing.T) {
+	s := newTestStore(t)
+
+	_, dk, err := s.CreateKey("cascade-key", 0)
+	require.NoError(t, err)
+	u1, err := s.CreateUpstream("up-d", "https://d.example.com", "key-d", 0)
+	require.NoError(t, err)
+
+	err = s.SetKeyUpstreams(dk.ID, []int64{u1.ID})
+	require.NoError(t, err)
+
+	// Delete the key — bindings should cascade delete
+	err = s.DeleteKey(dk.ID)
+	require.NoError(t, err)
+
+	// Verify bindings are gone (query raw DB since GetKeyUpstreamIDs has no key check)
+	ids, err := s.GetKeyUpstreamIDs(dk.ID)
+	require.NoError(t, err)
+	assert.Empty(t, ids, "bindings should be deleted when key is deleted")
+}
+
+func TestKeyUpstreamBinding_CascadeDeleteUpstream(t *testing.T) {
+	s := newTestStore(t)
+
+	_, dk, err := s.CreateKey("cascade-up-key", 0)
+	require.NoError(t, err)
+	u1, err := s.CreateUpstream("up-e", "https://e.example.com", "key-e", 0)
+	require.NoError(t, err)
+	u2, err := s.CreateUpstream("up-f", "https://f.example.com", "key-f", 0)
+	require.NoError(t, err)
+
+	err = s.SetKeyUpstreams(dk.ID, []int64{u1.ID, u2.ID})
+	require.NoError(t, err)
+
+	// Delete one upstream — that binding should cascade delete
+	err = s.DeleteUpstream(u1.ID)
+	require.NoError(t, err)
+
+	ids, err := s.GetKeyUpstreamIDs(dk.ID)
+	require.NoError(t, err)
+	assert.Len(t, ids, 1)
+	assert.Equal(t, u2.ID, ids[0])
+}

@@ -7,139 +7,372 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LLM Proxy 管理面板</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
     <style>
-        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
-        .tab-nav { display: flex; gap: 8px; margin-bottom: 20px; }
-        .tab-nav button { cursor: pointer; }
-        .tab-nav button.active { font-weight: bold; }
-        .tab-content { display: none; }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --bg: #0f1117; --bg-card: #1a1d27; --bg-hover: #252836;
+            --border: #2a2d3a; --text: #e4e5eb; --text-dim: #8b8ea3;
+            --accent: #6c5ce7; --accent-hover: #7c6ff7;
+            --green: #00b894; --red: #e17055; --orange: #fdcb6e;
+            --radius: 12px; --radius-sm: 8px;
+        }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 24px; }
+
+        /* Header */
+        .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 32px; }
+        .header h1 { font-size: 1.5rem; font-weight: 700; background: linear-gradient(135deg, var(--accent), #a29bfe); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .header .logout-btn { background: none; border: 1px solid var(--border); color: var(--text-dim); padding: 8px 16px; border-radius: var(--radius-sm); cursor: pointer; font-size: 0.85rem; transition: all 0.2s; }
+        .header .logout-btn:hover { border-color: var(--red); color: var(--red); }
+
+        /* Auth */
+        #auth-section { display: flex; align-items: center; justify-content: center; min-height: 80vh; }
+        .auth-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 48px; text-align: center; width: 400px; }
+        .auth-card h2 { font-size: 1.4rem; margin-bottom: 8px; }
+        .auth-card p { color: var(--text-dim); margin-bottom: 24px; font-size: 0.9rem; }
+        .auth-card input { width: 100%; padding: 12px 16px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-size: 0.95rem; margin-bottom: 16px; transition: border-color 0.2s; }
+        .auth-card input:focus { outline: none; border-color: var(--accent); }
+
+        /* Buttons */
+        .btn { display: inline-flex; align-items: center; gap: 6px; padding: 10px 20px; border: none; border-radius: var(--radius-sm); cursor: pointer; font-size: 0.875rem; font-weight: 500; transition: all 0.2s; font-family: inherit; }
+        .btn-primary { background: var(--accent); color: #fff; }
+        .btn-primary:hover { background: var(--accent-hover); transform: translateY(-1px); }
+        .btn-sm { padding: 6px 12px; font-size: 0.8rem; }
+        .btn-ghost { background: transparent; color: var(--text-dim); border: 1px solid var(--border); }
+        .btn-ghost:hover { background: var(--bg-hover); color: var(--text); }
+        .btn-danger { background: transparent; color: var(--red); border: 1px solid transparent; }
+        .btn-danger:hover { background: rgba(225,112,85,0.1); }
+        .btn-success { background: transparent; color: var(--green); border: 1px solid transparent; }
+        .btn-success:hover { background: rgba(0,184,148,0.1); }
+
+        /* Tabs */
+        .tab-nav { display: flex; gap: 4px; margin-bottom: 24px; background: var(--bg-card); border-radius: var(--radius); padding: 4px; border: 1px solid var(--border); }
+        .tab-nav button { flex: 1; padding: 10px 16px; background: transparent; border: none; color: var(--text-dim); cursor: pointer; border-radius: var(--radius-sm); font-size: 0.875rem; font-weight: 500; transition: all 0.2s; font-family: inherit; }
+        .tab-nav button.active { background: var(--accent); color: #fff; }
+        .tab-nav button:hover:not(.active) { background: var(--bg-hover); color: var(--text); }
+        .tab-content { display: none; animation: fadeIn 0.3s ease; }
         .tab-content.active { display: block; }
-        table { width: 100%; }
-        .key-display { font-family: monospace; background: #f0f0f0; padding: 8px; border-radius: 4px; word-break: break-all; }
-        .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.85em; }
-        .badge-green { background: #d4edda; color: #155724; }
-        .badge-red { background: #f8d7da; color: #721c24; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+        /* Cards */
+        .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; margin-bottom: 20px; }
+        .card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+        .card-header h2 { font-size: 1.15rem; font-weight: 600; }
+
+        /* Tables */
+        table { width: 100%; border-collapse: collapse; }
+        thead th { text-align: left; padding: 12px 16px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-dim); border-bottom: 1px solid var(--border); }
+        tbody td { padding: 12px 16px; font-size: 0.875rem; border-bottom: 1px solid var(--border); vertical-align: middle; }
+        tbody tr { transition: background 0.15s; }
+        tbody tr:hover { background: var(--bg-hover); }
+        tbody tr:last-child td { border-bottom: none; }
+
+        /* Badges */
+        .badge { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 0.75rem; font-weight: 600; }
+        .badge-green { background: rgba(0,184,148,0.15); color: var(--green); }
+        .badge-red { background: rgba(225,112,85,0.15); color: var(--red); }
+        .badge-purple { background: rgba(108,92,231,0.15); color: var(--accent); }
+
+        /* Forms */
+        .form-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; align-items: end; }
+        .form-grid.narrow { grid-template-columns: 1fr auto; }
+        .form-group { display: flex; flex-direction: column; gap: 4px; }
+        .form-group label { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-dim); }
+        input, select { width: 100%; padding: 10px 14px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-size: 0.875rem; font-family: inherit; transition: border-color 0.2s; }
+        input:focus, select:focus { outline: none; border-color: var(--accent); }
+        code { background: var(--bg); padding: 2px 8px; border-radius: 4px; font-size: 0.85em; }
+
+        /* Key display */
+        .key-display { font-family: 'SF Mono', 'JetBrains Mono', monospace; background: var(--bg); padding: 16px; border-radius: var(--radius-sm); word-break: break-all; border: 1px solid var(--accent); margin-top: 8px; font-size: 0.9rem; }
+        .key-alert { background: rgba(108,92,231,0.1); border: 1px solid var(--accent); border-radius: var(--radius-sm); padding: 16px; margin-bottom: 16px; }
+        .key-alert strong { color: var(--accent); }
+
+        /* Dialog / Modal */
+        dialog { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text); padding: 32px; max-width: 520px; width: 90%; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); margin: 0; }
+        dialog::backdrop { background: rgba(0,0,0,0.6); backdrop-filter: blur(4px); }
+        dialog h3 { font-size: 1.1rem; margin-bottom: 20px; }
+        dialog .form-group { margin-bottom: 12px; }
+        dialog .dialog-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 24px; }
+
+        /* Binding checkboxes */
+        .binding-list { display: flex; flex-direction: column; gap: 8px; max-height: 300px; overflow-y: auto; }
+        .binding-item { display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: var(--bg); border-radius: var(--radius-sm); cursor: pointer; transition: background 0.15s; }
+        .binding-item:hover { background: var(--bg-hover); }
+        .binding-item input[type="checkbox"] { accent-color: var(--accent); width: 16px; height: 16px; }
+        .binding-label { flex: 1; font-size: 0.9rem; }
+        .binding-url { color: var(--text-dim); font-size: 0.8rem; }
+
+
+        /* Empty state */
+        .empty-state { text-align: center; padding: 32px; color: var(--text-dim); font-size: 0.9rem; }
+
+        /* Action buttons in table */
+        .actions { display: flex; gap: 4px; flex-wrap: wrap; }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .tab-nav { flex-wrap: wrap; }
+            .form-grid { grid-template-columns: 1fr; }
+            .container { padding: 16px; }
+        }
     </style>
 </head>
 <body>
-<main class="container">
-    <h1>LLM Proxy 管理面板</h1>
-
+<div class="container">
+    <!-- Auth Section -->
     <div id="auth-section">
-        <label>管理令牌: <input type="password" id="admin-token" placeholder="请输入管理令牌"></label>
-        <button onclick="authenticate()">连接</button>
+        <div class="auth-card">
+            <h2>🔐 LLM Proxy</h2>
+            <p>输入管理令牌以连接管理面板</p>
+            <input type="password" id="admin-token" placeholder="管理令牌" onkeydown="if(event.key==='Enter')authenticate()">
+            <button class="btn btn-primary" style="width:100%" onclick="authenticate()">连接</button>
+        </div>
     </div>
 
+    <!-- Main Section -->
     <div id="main-section" style="display:none;">
+        <div class="header">
+            <h1>⚡ LLM Proxy 管理面板</h1>
+            <button class="logout-btn" onclick="logout()">退出登录</button>
+        </div>
+
         <nav class="tab-nav">
-            <button class="active" onclick="showTab('upstreams')">上游服务</button>
-            <button onclick="showTab('keys')">密钥管理</button>
-            <button onclick="showTab('models')">模型白名单</button>
-            <button onclick="showTab('logs')">请求日志</button>
-            <button onclick="showTab('status')">系统状态</button>
+            <button class="active" onclick="showTab('upstreams',this)">上游服务</button>
+            <button onclick="showTab('keys',this)">密钥管理</button>
+            <button onclick="showTab('models',this)">模型白名单</button>
+            <button onclick="showTab('logs',this)">请求日志</button>
+            <button onclick="showTab('status',this)">系统状态</button>
         </nav>
 
         <!-- Upstreams Tab -->
         <div id="tab-upstreams" class="tab-content active">
-            <h2>上游服务商</h2>
-            <details><summary>添加上游</summary>
-                <form onsubmit="createUpstream(event)">
-                    <input name="name" placeholder="名称" required>
-                    <input name="base_url" placeholder="https://api.example.com" required>
-                    <input name="api_key" placeholder="API 密钥" required type="password">
-                    <input name="priority" placeholder="优先级 (0=最高)" type="number" value="0">
-                    <button type="submit">创建</button>
-                </form>
-            </details>
-            <table><thead><tr><th>ID</th><th>名称</th><th>地址</th><th>优先级</th><th>状态</th><th>操作</th></tr></thead>
-            <tbody id="upstreams-table"></tbody></table>
+            <div class="card">
+                <div class="card-header">
+                    <h2>上游服务商</h2>
+                    <button class="btn btn-primary btn-sm" onclick="document.getElementById('dlg-upstream').showModal()">+ 添加上游</button>
+                </div>
+                <table><thead><tr><th>ID</th><th>名称</th><th>地址</th><th>优先级</th><th>状态</th><th>操作</th></tr></thead>
+                <tbody id="upstreams-table"></tbody></table>
+            </div>
         </div>
 
         <!-- Keys Tab -->
         <div id="tab-keys" class="tab-content">
-            <h2>下游密钥</h2>
-            <details><summary>创建密钥</summary>
-                <form onsubmit="createKey(event)">
-                    <input name="name" placeholder="密钥名称" required>
-                    <input name="rpm_limit" placeholder="每分钟请求限制 (0=不限)" type="number" value="0">
-                    <button type="submit">创建</button>
-                </form>
-            </details>
-            <div id="new-key-display" style="display:none;">
-                <article>
-                    <strong>密钥已创建（请立即复制，仅显示一次）:</strong>
-                    <div class="key-display" id="new-key-value"></div>
-                </article>
+            <div class="card">
+                <div class="card-header">
+                    <h2>下游密钥</h2>
+                    <button class="btn btn-primary btn-sm" onclick="document.getElementById('dlg-key').showModal()">+ 创建密钥</button>
+                </div>
+                <div id="new-key-display" style="display:none;">
+                    <div class="key-alert">
+                        <strong>⚠ 密钥已创建（请立即复制，仅显示一次）：</strong>
+                        <div class="key-display" id="new-key-value"></div>
+                    </div>
+                </div>
+                <table><thead><tr><th>ID</th><th>前缀</th><th>名称</th><th>RPM</th><th>状态</th><th>绑定上游</th><th>操作</th></tr></thead>
+                <tbody id="keys-table"></tbody></table>
             </div>
-            <table><thead><tr><th>ID</th><th>前缀</th><th>名称</th><th>RPM</th><th>状态</th><th>操作</th></tr></thead>
-            <tbody id="keys-table"></tbody></table>
-        </div>
-
-        <!-- Logs Tab -->
-        <div id="tab-logs" class="tab-content">
-            <h2>请求日志</h2>
-            <form onsubmit="loadLogs(event)" style="display:flex;gap:8px;align-items:end;">
-                <label>密钥 ID: <input name="key_id" type="number" placeholder="全部"></label>
-                <label>条数: <input name="limit" type="number" value="50"></label>
-                <button type="submit">查询</button>
-            </form>
-            <table><thead><tr><th>ID</th><th>密钥</th><th>上游</th><th>IP</th><th>风格</th><th>路径</th><th>状态码</th><th>延迟</th><th>时间</th></tr></thead>
-            <tbody id="logs-table"></tbody></table>
         </div>
 
         <!-- Models Tab -->
         <div id="tab-models" class="tab-content">
-            <h2>模型白名单</h2>
-            <p style="color:#888;">配置允许的模型（为空则不过滤）。支持 <code>*</code> 通配符（如 <code>claude-sonnet*</code>），不含通配符时按子串匹配。</p>
-            <form onsubmit="addModelPattern(event)" style="display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;margin-bottom:16px;">
-                <input name="pattern" placeholder="如: claude-sonnet*" required>
-                <button type="submit" style="margin-bottom:0;width:auto;">添加</button>
-            </form>
-            <table><thead><tr><th>ID</th><th>模式</th><th>添加时间</th><th>操作</th></tr></thead>
-            <tbody id="models-table"></tbody></table>
+            <div class="card">
+                <div class="card-header">
+                    <h2>模型白名单</h2>
+                </div>
+                <p style="color:var(--text-dim);font-size:0.85rem;margin-bottom:16px;">配置允许的模型（为空则不过滤）。支持 <code>*</code> 通配符（如 <code>claude-sonnet*</code>），不含通配符时按子串匹配。</p>
+                <form onsubmit="addModelPattern(event)" class="form-grid narrow" style="margin-bottom:20px;">
+                    <div class="form-group"><input name="pattern" placeholder="如: claude-sonnet*" required></div>
+                    <button type="submit" class="btn btn-primary btn-sm">添加</button>
+                </form>
+                <table><thead><tr><th>ID</th><th>模式</th><th>添加时间</th><th>操作</th></tr></thead>
+                <tbody id="models-table"></tbody></table>
+            </div>
+        </div>
+
+        <!-- Logs Tab -->
+        <div id="tab-logs" class="tab-content">
+            <div class="card">
+                <div class="card-header">
+                    <h2>请求日志</h2>
+                </div>
+                <form onsubmit="loadLogs(event)" class="form-grid" style="margin-bottom:20px;">
+                    <div class="form-group"><label>密钥 ID</label><input name="key_id" type="number" placeholder="全部"></div>
+                    <div class="form-group"><label>条数</label><input name="limit" type="number" value="50"></div>
+                    <button type="submit" class="btn btn-primary btn-sm" style="align-self:end;">查询</button>
+                </form>
+                <div style="overflow-x:auto;">
+                <table><thead><tr><th>ID</th><th>密钥</th><th>上游</th><th>IP</th><th>风格</th><th>路径</th><th>状态码</th><th>延迟</th><th>时间</th></tr></thead>
+                <tbody id="logs-table"></tbody></table>
+                </div>
+            </div>
         </div>
 
         <!-- Status Tab -->
         <div id="tab-status" class="tab-content">
-            <h2>系统状态</h2>
-            <pre id="status-display"></pre>
-            <button onclick="loadStatus()">刷新</button>
+            <div class="card">
+                <div class="card-header">
+                    <h2>系统状态</h2>
+                    <button class="btn btn-ghost btn-sm" onclick="loadStatus()">刷新</button>
+                </div>
+                <div id="status-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-bottom:20px;"></div>
+                <h3 style="font-size:0.95rem;margin-bottom:12px;">健康上游</h3>
+                <table><thead><tr><th>ID</th><th>名称</th><th>地址</th></tr></thead>
+                <tbody id="status-upstreams"></tbody></table>
+            </div>
         </div>
     </div>
-</main>
+</div>
+
+<!-- Create Upstream Dialog -->
+<dialog id="dlg-upstream">
+    <h3>添加上游</h3>
+    <form onsubmit="createUpstream(event)">
+        <div class="form-group"><label>名称</label><input name="name" required></div>
+        <div class="form-group"><label>地址</label><input name="base_url" placeholder="https://api.example.com" required></div>
+        <div class="form-group"><label>API 密钥</label><input name="api_key" type="password" required></div>
+        <div class="form-group"><label>优先级 (0=最高)</label><input name="priority" type="number" value="0"></div>
+        <div class="dialog-actions">
+            <button type="button" class="btn btn-ghost" onclick="this.closest('dialog').close()">取消</button>
+            <button type="submit" class="btn btn-primary">创建</button>
+        </div>
+    </form>
+</dialog>
+
+<!-- Edit Upstream Dialog -->
+<dialog id="dlg-edit-upstream">
+    <h3>编辑上游</h3>
+    <form onsubmit="submitEditUpstream(event)">
+        <input type="hidden" name="id">
+        <div class="form-group"><label>名称</label><input name="name" required></div>
+        <div class="form-group"><label>地址</label><input name="base_url" required></div>
+        <div class="form-group"><label>API 密钥（留空不修改）</label><input name="api_key" type="password"></div>
+        <div class="form-group"><label>优先级</label><input name="priority" type="number"></div>
+        <div class="dialog-actions">
+            <button type="button" class="btn btn-ghost" onclick="this.closest('dialog').close()">取消</button>
+            <button type="submit" class="btn btn-primary">保存</button>
+        </div>
+    </form>
+</dialog>
+
+<!-- Create Key Dialog -->
+<dialog id="dlg-key">
+    <h3>创建密钥</h3>
+    <form onsubmit="createKey(event)">
+        <div class="form-group"><label>密钥名称</label><input name="name" required></div>
+        <div class="form-group"><label>每分钟请求限制 (0=不限)</label><input name="rpm_limit" type="number" value="0"></div>
+        <div class="dialog-actions">
+            <button type="button" class="btn btn-ghost" onclick="this.closest('dialog').close()">取消</button>
+            <button type="submit" class="btn btn-primary">创建</button>
+        </div>
+    </form>
+</dialog>
+
+<!-- Edit Key Dialog -->
+<dialog id="dlg-edit-key">
+    <h3>编辑密钥</h3>
+    <form onsubmit="submitEditKey(event)">
+        <input type="hidden" name="id">
+        <div class="form-group"><label>名称</label><input name="name" required></div>
+        <div class="form-group"><label>每分钟请求限制 (0=不限)</label><input name="rpm_limit" type="number"></div>
+        <div class="dialog-actions">
+            <button type="button" class="btn btn-ghost" onclick="this.closest('dialog').close()">取消</button>
+            <button type="submit" class="btn btn-primary">保存</button>
+        </div>
+    </form>
+</dialog>
+
+<!-- Upstream Binding Dialog -->
+<dialog id="dlg-binding">
+    <h3>配置上游绑定</h3>
+    <p style="color:var(--text-dim);font-size:0.85rem;margin-bottom:16px;">选择此密钥允许使用的上游。不选择任何上游表示允许全部。</p>
+    <input type="hidden" id="binding-key-id">
+    <div id="binding-list" class="binding-list"></div>
+    <div class="dialog-actions">
+        <button type="button" class="btn btn-ghost" onclick="this.closest('dialog').close()">取消</button>
+        <button type="button" class="btn btn-primary" onclick="saveBindings()">保存</button>
+    </div>
+</dialog>
+
 <script>
 let TOKEN = '';
+// --- Cookie helpers ---
+function saveToken(t) {
+    document.cookie = 'admin_token=' + encodeURIComponent(t) + '; max-age=604800; path=/admin; SameSite=Strict; Secure';
+}
+function readToken() {
+    const m = document.cookie.match(/(?:^|;\s*)admin_token=([^;]*)/);
+    return m ? decodeURIComponent(m[1]) : '';
+}
+function clearToken() {
+    document.cookie = 'admin_token=; max-age=0; path=/admin';
+}
+
 function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 const api = (path, opts={}) => fetch('/admin/api'+path, {
     ...opts,
     headers: {'Authorization':'Bearer '+TOKEN, 'Content-Type':'application/json', ...(opts.headers||{})}
 }).then(r => r.json());
 
+// --- Auth ---
 function authenticate() {
     TOKEN = document.getElementById('admin-token').value;
     api('/status').then(d => {
         if (d.error) { alert('令牌无效'); return; }
+        saveToken(TOKEN);
         document.getElementById('auth-section').style.display = 'none';
         document.getElementById('main-section').style.display = 'block';
-        loadUpstreams(); loadKeys();
+        loadUpstreams().then(() => loadKeys());
     }).catch(() => alert('连接失败'));
 }
+function logout() {
+    clearToken();
+    TOKEN = '';
+    document.getElementById('main-section').style.display = 'none';
+    document.getElementById('auth-section').style.display = 'flex';
+}
+// Auto-login from cookie
+window.addEventListener('DOMContentLoaded', () => {
+    const saved = readToken();
+    if (saved) {
+        TOKEN = saved;
+        api('/status').then(d => {
+            if (d.error) { clearToken(); return; }
+            document.getElementById('auth-section').style.display = 'none';
+            document.getElementById('main-section').style.display = 'block';
+            loadUpstreams(); loadKeys();
+        }).catch(() => { clearToken(); });
+    }
+});
 
-function showTab(name) {
+// --- Tabs ---
+function showTab(name, btn) {
     document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
     document.querySelectorAll('.tab-nav button').forEach(b => b.classList.remove('active'));
     document.getElementById('tab-'+name).classList.add('active');
-    event.target.classList.add('active');
+    btn.classList.add('active');
     if (name === 'status') loadStatus();
     if (name === 'models') loadModelWhitelist();
 }
 
+// --- Upstreams ---
+let allUpstreams = [];
 function loadUpstreams() {
-    api('/upstreams').then(data => {
+    return api('/upstreams').then(data => {
+        allUpstreams = data || [];
         const tbody = document.getElementById('upstreams-table');
-        tbody.innerHTML = (data||[]).map(u =>
-            '<tr><td>'+u.id+'</td><td>'+esc(u.name)+'</td><td>'+esc(u.base_url)+'</td><td>'+u.priority+'</td><td>'+(u.enabled?'<span class="badge badge-green">启用</span>':'<span class="badge badge-red">禁用</span>')+'</td><td><button onclick="toggleUpstream('+u.id+','+(!u.enabled)+')">切换</button> <button onclick="editUpstream('+u.id+','+JSON.stringify(esc(u.name)).replace(/"/g,'&quot;')+','+JSON.stringify(esc(u.base_url)).replace(/"/g,'&quot;')+','+u.priority+')">编辑</button> <button onclick="deleteUpstream('+u.id+')">删除</button></td></tr>'
+        if (allUpstreams.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="6" class="empty-state">暂无上游服务</td></tr>';
+            return;
+        }
+        tbody.innerHTML = allUpstreams.map(u =>
+            '<tr><td>'+u.id+'</td><td>'+esc(u.name)+'</td><td><code>'+esc(u.base_url)+'</code></td><td>'+u.priority+'</td><td>'+
+            (u.enabled?'<span class="badge badge-green">启用</span>':'<span class="badge badge-red">禁用</span>')+
+            '</td><td class="actions">'+
+            '<button class="btn btn-ghost btn-sm" onclick="toggleUpstream('+u.id+','+(!u.enabled)+')">切换</button> '+
+            '<button class="btn btn-ghost btn-sm" onclick="editUpstream('+u.id+')">编辑</button> '+
+            '<button class="btn btn-danger btn-sm" onclick="deleteUpstream('+u.id+')">删除</button>'+
+            '</td></tr>'
         ).join('');
     });
 }
@@ -150,22 +383,34 @@ function createUpstream(e) {
     api('/upstreams', {method:'POST', body: JSON.stringify({
         name: f.get('name'), base_url: f.get('base_url'),
         api_key: f.get('api_key'), priority: parseInt(f.get('priority')||'0')
-    })}).then(d => { if(d.error) alert(d.error); else { e.target.reset(); loadUpstreams(); }});
+    })}).then(d => {
+        if(d.error) alert(d.error);
+        else { e.target.reset(); document.getElementById('dlg-upstream').close(); loadUpstreams(); }
+    });
 }
 
-function editUpstream(id, name, url, priority) {
-    const newName = prompt('名称:', name);
-    if (newName === null) return;
-    const newUrl = prompt('地址:', url);
-    if (newUrl === null) return;
-    const newKey = prompt('API 密钥 (留空则不修改):', '');
-    if (newKey === null) return;
-    const newPriority = prompt('优先级 (0=最高):', priority);
-    if (newPriority === null) return;
-    const body = {name: newName, base_url: newUrl, priority: parseInt(newPriority||'0')};
-    if (newKey) body.api_key = newKey;
+function editUpstream(id) {
+    const u = allUpstreams.find(x => x.id === id);
+    if (!u) return;
+    const dlg = document.getElementById('dlg-edit-upstream');
+    dlg.querySelector('[name=id]').value = id;
+    dlg.querySelector('[name=name]').value = u.name;
+    dlg.querySelector('[name=base_url]').value = u.base_url;
+    dlg.querySelector('[name=api_key]').value = '';
+    dlg.querySelector('[name=priority]').value = u.priority;
+    dlg.showModal();
+}
+
+function submitEditUpstream(e) {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const id = f.get('id');
+    const body = {name: f.get('name'), base_url: f.get('base_url'), priority: parseInt(f.get('priority')||'0')};
+    const key = f.get('api_key');
+    if (key) body.api_key = key;
     api('/upstreams/'+id, {method:'PUT', body: JSON.stringify(body)}).then(d => {
-        if(d.error) alert(d.error); else loadUpstreams();
+        if(d.error) alert(d.error);
+        else { document.getElementById('dlg-edit-upstream').close(); loadUpstreams(); }
     });
 }
 
@@ -180,12 +425,32 @@ function toggleUpstream(id, enabled) {
     });
 }
 
+// --- Keys ---
 function loadKeys() {
-    api('/keys').then(data => {
+    Promise.all([api('/keys'), api('/keys/bindings')]).then(([data, bindMap]) => {
+        const keys = data || [];
+        bindMap = bindMap || {};
         const tbody = document.getElementById('keys-table');
-        tbody.innerHTML = (data||[]).map(k =>
-            '<tr><td>'+k.id+'</td><td><code>'+esc(k.key_prefix)+'...</code></td><td>'+esc(k.name)+'</td><td>'+(k.rpm_limit||'不限')+'</td><td>'+(k.enabled?'<span class="badge badge-green">启用</span>':'<span class="badge badge-red">禁用</span>')+'</td><td><button onclick="editKey('+k.id+','+JSON.stringify(esc(k.name)).replace(/"/g,'&quot;')+','+k.rpm_limit+')">编辑</button> <button onclick="toggleKey('+k.id+','+(!k.enabled)+')">切换</button> <button onclick="deleteKey('+k.id+')">删除</button></td></tr>'
-        ).join('');
+        if (keys.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="7" class="empty-state">暂无密钥</td></tr>';
+            return;
+        }
+        tbody.innerHTML = keys.map(k => {
+            const bound = bindMap[k.id] || [];
+            let bindText = '<span class="badge badge-purple">全部</span>';
+            if (bound.length > 0) {
+                const names = bound.map(uid => { const u = allUpstreams.find(x=>x.id===uid); return u ? esc(u.name) : uid; });
+                bindText = names.join(', ');
+            }
+            return '<tr><td>'+k.id+'</td><td><code>'+esc(k.key_prefix)+'...</code></td><td>'+esc(k.name)+'</td><td>'+(k.rpm_limit||'不限')+'</td><td>'+
+            (k.enabled?'<span class="badge badge-green">启用</span>':'<span class="badge badge-red">禁用</span>')+
+            '</td><td>'+bindText+'</td><td class="actions">'+
+            '<button class="btn btn-ghost btn-sm" onclick="openBindingDialog('+k.id+')">绑定</button> '+
+            '<button class="btn btn-ghost btn-sm" onclick="editKey('+k.id+')">编辑</button> '+
+            '<button class="btn btn-success btn-sm" onclick="toggleKey('+k.id+','+(!k.enabled)+')">切换</button> '+
+            '<button class="btn btn-danger btn-sm" onclick="deleteKey('+k.id+')">删除</button>'+
+            '</td></tr>';
+        }).join('');
     });
 }
 
@@ -198,26 +463,32 @@ function createKey(e) {
         if(d.error) { alert(d.error); return; }
         document.getElementById('new-key-value').textContent = d.key;
         document.getElementById('new-key-display').style.display = 'block';
-        e.target.reset(); loadKeys();
+        e.target.reset(); document.getElementById('dlg-key').close(); loadKeys();
     });
 }
 
-function editKey(id, name, rpm) {
-    const newName = prompt('名称:', name);
-    if (newName === null) return;
-    const newRpm = prompt('每分钟请求限制 (0=不限):', rpm);
-    if (newRpm === null) return;
-    api('/keys/'+id, {method:'PUT', body: JSON.stringify({
-        name: newName, rpm_limit: parseInt(newRpm||'0')
-    })}).then(d => { if(d.error) alert(d.error); else loadKeys(); });
+function editKey(id) {
+    api('/keys').then(keys => {
+        const k = (keys||[]).find(x => x.id === id);
+        if (!k) return;
+        const dlg = document.getElementById('dlg-edit-key');
+        dlg.querySelector('[name=id]').value = id;
+        dlg.querySelector('[name=name]').value = k.name;
+        dlg.querySelector('[name=rpm_limit]').value = k.rpm_limit;
+        dlg.showModal();
+    });
 }
 
-function fmtTime(s) {
-    if (!s) return '-';
-    const d = new Date(s);
-    if (isNaN(d)) return esc(s);
-    const pad = n => String(n).padStart(2,'0');
-    return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+' '+pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds());
+function submitEditKey(e) {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const id = f.get('id');
+    api('/keys/'+id, {method:'PUT', body: JSON.stringify({
+        name: f.get('name'), rpm_limit: parseInt(f.get('rpm_limit')||'0')
+    })}).then(d => {
+        if(d.error) alert(d.error);
+        else { document.getElementById('dlg-edit-key').close(); loadKeys(); }
+    });
 }
 
 function toggleKey(id, enabled) {
@@ -229,6 +500,33 @@ function deleteKey(id) {
     api('/keys/'+id, {method:'DELETE'}).then(() => loadKeys());
 }
 
+// --- Upstream Binding ---
+function openBindingDialog(keyId) {
+    document.getElementById('binding-key-id').value = keyId;
+    api('/keys/'+keyId+'/upstreams').then(data => {
+        const bound = data.upstream_ids || [];
+        const list = document.getElementById('binding-list');
+        if (allUpstreams.length === 0) {
+            list.innerHTML = '<div class="empty-state">暂无上游可绑定</div>';
+        } else {
+            list.innerHTML = allUpstreams.map(u =>
+                '<label class="binding-item"><input type="checkbox" value="'+u.id+'" '+(bound.includes(u.id)?'checked':'')+'><span class="binding-label">'+esc(u.name)+'</span><span class="binding-url">'+esc(u.base_url)+'</span></label>'
+            ).join('');
+        }
+        document.getElementById('dlg-binding').showModal();
+    });
+}
+
+function saveBindings() {
+    const keyId = document.getElementById('binding-key-id').value;
+    const ids = Array.from(document.querySelectorAll('#binding-list input:checked')).map(cb => parseInt(cb.value));
+    api('/keys/'+keyId+'/upstreams', {method:'PUT', body: JSON.stringify({upstream_ids: ids})}).then(d => {
+        if(d.error) alert(d.error);
+        else { document.getElementById('dlg-binding').close(); loadKeys(); }
+    });
+}
+
+// --- Logs ---
 function loadLogs(e) {
     if(e) e.preventDefault();
     const f = e ? new FormData(e.target) : new FormData();
@@ -236,22 +534,28 @@ function loadLogs(e) {
     if(f.get('key_id')) q += '&key_id='+f.get('key_id');
     api('/logs'+q).then(data => {
         const tbody = document.getElementById('logs-table');
+        if (!data || data.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="9" class="empty-state">暂无日志</td></tr>';
+            return;
+        }
         tbody.innerHTML = (data||[]).map(l =>
-            '<tr><td>'+l.ID+'</td><td>'+l.DownstreamKeyID+'</td><td>'+esc(l.UpstreamName||'-')+'</td><td>'+esc(l.ClientIP||'-')+'</td><td>'+esc(l.ProviderStyle)+'</td><td>'+esc(l.Path)+'</td><td>'+l.StatusCode+'</td><td>'+l.LatencyMs+'ms</td><td>'+fmtTime(l.CreatedAt)+'</td></tr>'
+            '<tr><td>'+l.ID+'</td><td>'+l.DownstreamKeyID+'</td><td>'+esc(l.UpstreamName||'-')+'</td><td>'+esc(l.ClientIP||'-')+'</td><td>'+esc(l.ProviderStyle)+'</td><td>'+esc(l.Path)+'</td><td><span class="badge '+(l.StatusCode<400?'badge-green':'badge-red')+'">'+l.StatusCode+'</span></td><td>'+l.LatencyMs+'ms</td><td>'+fmtTime(l.CreatedAt)+'</td></tr>'
         ).join('');
     });
 }
 
+// --- Model Whitelist ---
 function loadModelWhitelist() {
     api('/models/whitelist').then(data => {
         const tbody = document.getElementById('models-table');
-        tbody.innerHTML = (data||[]).map(e =>
-            '<tr><td>'+e.ID+'</td><td><code>'+esc(e.Pattern)+'</code></td><td>'+fmtTime(e.CreatedAt)+'</td><td>'+
-            '<button onclick="deleteModelPattern('+e.ID+')">删除</button></td></tr>'
-        ).join('');
         if (!data || data.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#888;">未配置白名单，所有模型均放行</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="4" class="empty-state">未配置白名单，所有模型均放行</td></tr>';
+            return;
         }
+        tbody.innerHTML = data.map(e =>
+            '<tr><td>'+e.ID+'</td><td><code>'+esc(e.Pattern)+'</code></td><td>'+fmtTime(e.CreatedAt)+'</td><td>'+
+            '<button class="btn btn-danger btn-sm" onclick="deleteModelPattern('+e.ID+')">删除</button></td></tr>'
+        ).join('');
     });
 }
 
@@ -274,10 +578,34 @@ function deleteModelPattern(id) {
     });
 }
 
+// --- Status ---
 function loadStatus() {
     api('/status').then(d => {
-        document.getElementById('status-display').textContent = JSON.stringify(d, null, 2);
+        const grid = document.getElementById('status-grid');
+        const statCard = (label, value, color) => '<div style="background:var(--bg);padding:16px;border-radius:var(--radius-sm);border:1px solid var(--border);text-align:center;"><div style="font-size:1.5rem;font-weight:700;color:'+(color||'var(--text)')+';">'+value+'</div><div style="font-size:0.75rem;color:var(--text-dim);margin-top:4px;">'+label+'</div></div>';
+        grid.innerHTML = statCard('版本', esc(d.version||'-'), 'var(--accent)') +
+            statCard('运行时间', esc(d.uptime||'-'), 'var(--green)') +
+            statCard('密钥数量', d.total_keys||0) +
+            statCard('今日请求', d.today_requests||0, 'var(--orange)') +
+            statCard('审计丢弃', d.audit_dropped||0, d.audit_dropped>0?'var(--red)':'var(--green)');
+
+        const tbody = document.getElementById('status-upstreams');
+        const ups = d.healthy_upstreams || [];
+        if (ups.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="3" class="empty-state">暂无健康上游</td></tr>';
+        } else {
+            tbody.innerHTML = ups.map(u => '<tr><td>'+u.id+'</td><td>'+esc(u.name)+'</td><td><code>'+esc(u.url)+'</code></td></tr>').join('');
+        }
     });
+}
+
+// --- Helpers ---
+function fmtTime(s) {
+    if (!s) return '-';
+    const d = new Date(s);
+    if (isNaN(d)) return esc(s);
+    const pad = n => String(n).padStart(2,'0');
+    return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+' '+pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds());
 }
 </script>
 </body>
