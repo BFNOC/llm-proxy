@@ -99,6 +99,8 @@ func (p *UpstreamProber) probeOnce() {
 			slog.Error("prober: invalid upstream URL", "url", u.BaseURL, "error", err)
 			continue
 		}
+		// 把数据库里的 upstream ID 带入运行时快照，
+		// 后续代理过滤才能和 key_upstream_bindings 按同一主键精确匹配。
 		healthy = append(healthy, &ActiveUpstream{
 			ID:      u.ID,
 			BaseURL: parsed,
@@ -115,7 +117,7 @@ func (p *UpstreamProber) probeOnce() {
 	}
 
 	p.proxy.SetAllUpstreams(healthy)
-	p.currentID = 0 // no longer tracking a single ID
+	p.currentID = 0 // 多上游模式下不再维护“唯一当前上游”语义，保留该字段仅兼容旧接口
 	slog.Info("prober: updated upstream list", "healthy_count", len(healthy))
 }
 

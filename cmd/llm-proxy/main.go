@@ -209,6 +209,8 @@ func main() {
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"}) //nolint:errcheck
 	}).Methods("GET", "HEAD")
 
+	// readyz 只回答“当前是否至少存在一个可转发的健康上游”，
+	// 让探针语义直接对应真实转发能力，不暴露额外内部状态。
 	r.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		status := map[string]interface{}{
@@ -231,7 +233,12 @@ func main() {
 		slog.Info("Admin interface enabled", "dashboard", "/admin/", "api", "/admin/api/")
 	}
 
-	// Proxy middleware chain for /v1/
+	// 代理中间件链顺序不能随意调整：
+	// RequestClassifier 先识别 provider 风格和下游 key，
+	// KeyResolver 再解析出数据库中的 Key，
+	// UpstreamBinding 随后基于 keyID 计算允许访问的上游集合，
+	// DynamicProxy 最后依据该集合做真正的上游选择。
+	// 这样可以保证未授权上游在任何网络 I/O 发生前就被排除。
 	proxyChain := http.Handler(dynamicProxy)
 	proxyChain = middleware.ModelFilterMiddleware(modelFilter)(proxyChain)
 	proxyChain = middleware.StreamingMiddleware()(proxyChain)
@@ -239,6 +246,7 @@ func main() {
 		proxyChain = middleware.AuditLogMiddleware(auditLogger)(proxyChain)
 	}
 	proxyChain = middleware.RateLimitMiddleware(rateLimiter)(proxyChain)
+	// 先做绑定查询再进入后续转发流程，避免存储异常时请求绕过授权边界。
 	proxyChain = middleware.UpstreamBindingMiddleware(db)(proxyChain)
 	proxyChain = middleware.KeyResolverMiddleware(keyCache)(proxyChain)
 	proxyChain = middleware.RequestClassifierMiddleware()(proxyChain)

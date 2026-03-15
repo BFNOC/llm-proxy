@@ -54,23 +54,26 @@ var untrustedRequestHeaders = []string{
 	"X-Cluster-Client-IP",
 }
 
-// allowedUpstreamIDsKey is used for storing binding-related data in the request context.
+// allowedUpstreamIDsKey 使用私有空结构体作为 context key，
+// 避免字符串 key 冲突，也避免外部代码通过同名字符串伪造绑定结果。
 type allowedUpstreamIDsKey struct{}
 
-// ContextWithAllowedUpstreamIDs returns a new context with the allowed upstream IDs set.
+// ContextWithAllowedUpstreamIDs 把当前请求允许访问的上游 ID 集合写入 context。
+// 绑定关系使用稳定的数据库 ID，而不是名称或 URL，避免上游重命名后授权漂移。
 func ContextWithAllowedUpstreamIDs(ctx context.Context, ids []int64) context.Context {
 	return context.WithValue(ctx, allowedUpstreamIDsKey{}, ids)
 }
 
-// AllowedUpstreamIDsFromContext returns the upstream IDs this request is
-// restricted to. A nil/empty slice means all upstreams are allowed.
+// AllowedUpstreamIDsFromContext 读取当前请求的上游访问白名单。
+// 约定 nil 或空切片表示“没有显式绑定”，调用方应继续允许全部健康上游。
 func AllowedUpstreamIDsFromContext(ctx context.Context) []int64 {
 	v, _ := ctx.Value(allowedUpstreamIDsKey{}).([]int64)
 	return v
 }
 
-// ActiveUpstream holds the currently selected upstream endpoint and its key.
+// ActiveUpstream 保存当前可用的上游端点信息。
 type ActiveUpstream struct {
+	// ID 对应 upstream_providers 表主键，用于把运行时健康列表和持久化绑定关系做稳定关联。
 	ID      int64
 	BaseURL *url.URL
 	APIKey  string
@@ -129,12 +132,11 @@ func (dp *DynamicProxy) GetAllUpstreams() []*ActiveUpstream {
 	return v.([]*ActiveUpstream)
 }
 
-// ServeHTTP implements http.Handler. It tries upstreams in priority order,
-// failing over to the next when 429 is received. The request body is buffered
-// once for potential retries. Auth headers are rewritten per-upstream.
+// ServeHTTP 实现 http.Handler 接口。按优先级顺序尝试上游，
+// 遇到 429 时自动故障切换到下一个。请求体会被缓冲一次用于重试。
 //
-// If "allowed_upstream_ids" is set in the request context (by the binding
-// middleware), only upstreams whose Name appears in the allowed set are tried.
+// 如果请求上下文里带有允许访问的 upstream ID 集合，代理只会尝试这些健康上游。
+// 过滤发生在真正发起 RoundTrip 之前，确保未授权上游不会收到任何请求。
 func (dp *DynamicProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	upstreams := dp.GetAllUpstreams()
 	if len(upstreams) == 0 {
@@ -144,7 +146,7 @@ func (dp *DynamicProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Filter upstreams if the downstream key has bindings.
+	// 先按绑定关系裁剪健康上游列表；如果裁剪后为空，直接返回 403，保持 fail-closed。
 	if allowed := AllowedUpstreamIDsFromContext(r.Context()); len(allowed) > 0 {
 		filtered := filterUpstreams(upstreams, allowed)
 		if len(filtered) == 0 {
@@ -305,8 +307,10 @@ func newProxyTransport() *http.Transport {
 	}
 }
 
-// filterUpstreams returns only the upstreams whose ID is in the allowed list.
+// filterUpstreams 在不打乱原有优先级顺序的前提下，筛出当前请求允许访问的健康上游。
+// 这里不重新排序，是为了让绑定逻辑只负责授权边界，不改变探测器决定的故障切换顺序。
 func filterUpstreams(all []*ActiveUpstream, allowedIDs []int64) []*ActiveUpstream {
+	// 先转成 set，避免对每个上游都线性扫描 allowedIDs。
 	set := make(map[int64]bool, len(allowedIDs))
 	for _, id := range allowedIDs {
 		set[id] = true

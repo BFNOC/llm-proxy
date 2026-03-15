@@ -86,6 +86,9 @@ CREATE TABLE IF NOT EXISTS model_whitelist (
 `,
 	},
 	{
+		// v6: key_upstream_bindings 用持久化方式表达"某个下游 Key 允许访问哪些上游"。
+		// 外键和级联删除避免删除 Key 或 Upstream 后留下悬空授权关系；
+		// 唯一约束保证重复提交同一绑定时保持幂等。
 		version: 6,
 		up: `
 CREATE TABLE IF NOT EXISTS key_upstream_bindings (
