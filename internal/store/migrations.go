@@ -85,6 +85,19 @@ CREATE TABLE IF NOT EXISTS model_whitelist (
 );
 `,
 	},
+	{
+		version: 6,
+		up: `
+CREATE TABLE IF NOT EXISTS key_upstream_bindings (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    downstream_key_id INTEGER NOT NULL REFERENCES downstream_keys(id) ON DELETE CASCADE,
+    upstream_id       INTEGER NOT NULL REFERENCES upstream_providers(id) ON DELETE CASCADE,
+    created_at        DATETIME,
+    UNIQUE(downstream_key_id, upstream_id)
+);
+CREATE INDEX IF NOT EXISTS idx_key_upstream_bindings_key ON key_upstream_bindings (downstream_key_id);
+`,
+	},
 }
 
 // RunMigrations applies all pending schema migrations in order.
