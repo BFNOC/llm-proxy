@@ -171,6 +171,11 @@ func (dp *DynamicProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			outReq.Header.Del(h)
 		}
 
+		// Remove Accept-Encoding so Go's transport handles decompression
+		// transparently. This ensures response body is always plain text
+		// for middleware processing (e.g. model filtering).
+		outReq.Header.Del("Accept-Encoding")
+
 		resp, err := dp.transport.RoundTrip(outReq)
 		if err != nil {
 			if !isLast {
