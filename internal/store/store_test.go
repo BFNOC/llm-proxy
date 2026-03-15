@@ -607,3 +607,145 @@ func TestKeyUpstreamBinding_CascadeDeleteUpstream(t *testing.T) {
 	assert.Len(t, ids, 1)
 	assert.Equal(t, u2.ID, ids[0])
 }
+
+// ---------------------------------------------------------------------------
+// CountLogsSince
+// ---------------------------------------------------------------------------
+
+func TestCountLogsSince_Empty(t *testing.T) {
+	s := newTestStore(t)
+	count, err := s.CountLogsSince(time.Now().Add(-time.Hour))
+	require.NoError(t, err)
+	assert.Equal(t, 0, count)
+}
+
+func TestCountLogsSince_InclusiveBoundary(t *testing.T) {
+	s := newTestStore(t)
+	_, dk, _ := s.CreateKey("count-key", 0)
+
+	exact := time.Now().UTC().Truncate(time.Second)
+	logs := []RequestLog{
+		{DownstreamKeyID: dk.ID, ProviderStyle: "openai", Path: "/v1/chat", StatusCode: 200, LatencyMs: 10, CreatedAt: exact},
+	}
+	require.NoError(t, s.InsertRequestLogBatch(logs))
+
+	count, err := s.CountLogsSince(exact)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count, "log at exact boundary should be counted")
+}
+
+func TestCountLogsSince_MixedOldAndRecent(t *testing.T) {
+	s := newTestStore(t)
+	_, dk, _ := s.CreateKey("mixed-key", 0)
+
+	now := time.Now().UTC()
+	logs := []RequestLog{
+		{DownstreamKeyID: dk.ID, ProviderStyle: "openai", Path: "/v1/a", StatusCode: 200, LatencyMs: 10, CreatedAt: now.Add(-2 * time.Hour)},
+		{DownstreamKeyID: dk.ID, ProviderStyle: "openai", Path: "/v1/b", StatusCode: 200, LatencyMs: 10, CreatedAt: now.Add(-30 * time.Minute)},
+		{DownstreamKeyID: dk.ID, ProviderStyle: "openai", Path: "/v1/c", StatusCode: 200, LatencyMs: 10, CreatedAt: now},
+	}
+	require.NoError(t, s.InsertRequestLogBatch(logs))
+
+	count, err := s.CountLogsSince(now.Add(-time.Hour))
+	require.NoError(t, err)
+	assert.Equal(t, 2, count, "should count only logs within last hour")
+}
+
+// ---------------------------------------------------------------------------
+// CountKeys
+// ---------------------------------------------------------------------------
+
+func TestCountKeys_Empty(t *testing.T) {
+	s := newTestStore(t)
+	count, err := s.CountKeys()
+	require.NoError(t, err)
+	assert.Equal(t, 0, count)
+}
+
+func TestCountKeys_AfterCreateAndDelete(t *testing.T) {
+	s := newTestStore(t)
+	_, dk1, _ := s.CreateKey("k1", 0)
+	s.CreateKey("k2", 0)
+
+	count, err := s.CountKeys()
+	require.NoError(t, err)
+	assert.Equal(t, 2, count)
+
+	require.NoError(t, s.DeleteKey(dk1.ID))
+	count, err = s.CountKeys()
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+}
+
+func TestCountKeys_IncludesDisabledKeys(t *testing.T) {
+	s := newTestStore(t)
+	_, dk, _ := s.CreateKey("disabled-key", 0)
+	// Disable the key
+	_, err := s.UpdateKey(dk.ID, "disabled-key", 0, false)
+	require.NoError(t, err)
+
+	count, err := s.CountKeys()
+	require.NoError(t, err)
+	assert.Equal(t, 1, count, "disabled keys should still be counted")
+}
+
+// ---------------------------------------------------------------------------
+// GetAllKeyBindings
+// ---------------------------------------------------------------------------
+
+func TestGetAllKeyBindings_Empty(t *testing.T) {
+	s := newTestStore(t)
+	bindings, err := s.GetAllKeyBindings()
+	require.NoError(t, err)
+	assert.Empty(t, bindings)
+}
+
+func TestGetAllKeyBindings_GroupedAndSorted(t *testing.T) {
+	s := newTestStore(t)
+	_, dk1, _ := s.CreateKey("k1", 0)
+	_, dk2, _ := s.CreateKey("k2", 0)
+	u1, _ := s.CreateUpstream("u1", "https://a.example.com", "ka", 0)
+	u2, _ := s.CreateUpstream("u2", "https://b.example.com", "kb", 0)
+	u3, _ := s.CreateUpstream("u3", "https://c.example.com", "kc", 0)
+
+	require.NoError(t, s.SetKeyUpstreams(dk1.ID, []int64{u2.ID, u1.ID})) // insert out of order
+	require.NoError(t, s.SetKeyUpstreams(dk2.ID, []int64{u3.ID}))
+
+	bindings, err := s.GetAllKeyBindings()
+	require.NoError(t, err)
+
+	require.Len(t, bindings[dk1.ID], 2)
+	assert.Equal(t, u1.ID, bindings[dk1.ID][0], "should be sorted by upstream_id")
+	assert.Equal(t, u2.ID, bindings[dk1.ID][1])
+	require.Len(t, bindings[dk2.ID], 1)
+	assert.Equal(t, u3.ID, bindings[dk2.ID][0])
+}
+
+func TestGetAllKeyBindings_UnboundKeysAbsent(t *testing.T) {
+	s := newTestStore(t)
+	s.CreateKey("unbound", 0)
+
+	bindings, err := s.GetAllKeyBindings()
+	require.NoError(t, err)
+	assert.Empty(t, bindings, "unbound key should not appear in map")
+}
+
+func TestGetAllKeyBindings_AfterReplaceAndClear(t *testing.T) {
+	s := newTestStore(t)
+	_, dk, _ := s.CreateKey("replace-key", 0)
+	u1, _ := s.CreateUpstream("u1", "https://a.example.com", "ka", 0)
+	u2, _ := s.CreateUpstream("u2", "https://b.example.com", "kb", 0)
+
+	require.NoError(t, s.SetKeyUpstreams(dk.ID, []int64{u1.ID}))
+	require.NoError(t, s.SetKeyUpstreams(dk.ID, []int64{u2.ID})) // Replace
+
+	bindings, err := s.GetAllKeyBindings()
+	require.NoError(t, err)
+	require.Len(t, bindings[dk.ID], 1)
+	assert.Equal(t, u2.ID, bindings[dk.ID][0])
+
+	require.NoError(t, s.SetKeyUpstreams(dk.ID, []int64{})) // Clear
+	bindings, err = s.GetAllKeyBindings()
+	require.NoError(t, err)
+	assert.Empty(t, bindings[dk.ID])
+}
