@@ -110,7 +110,8 @@ func ModelFilterMiddleware(mf *ModelFilter) func(http.Handler) http.Handler {
 			slog.Info("model filter: captured response",
 				"status", capture.statusCode,
 				"bodyLen", capture.body.Len(),
-				"headerCount", len(capture.header))
+				"headerCount", len(capture.header),
+				"bodyPreview", string(capture.body.Bytes()[:min(200, capture.body.Len())]))
 
 			// Non-200: replay captured response as-is.
 			if capture.statusCode != http.StatusOK {
@@ -123,12 +124,14 @@ func ModelFilterMiddleware(mf *ModelFilter) func(http.Handler) http.Handler {
 			// Parse the models response JSON.
 			var modelsResp openAIModelsResponse
 			if err := json.Unmarshal(capture.body.Bytes(), &modelsResp); err != nil {
-				// Not valid JSON — replay as-is.
+				slog.Error("model filter: JSON parse failed, passing through", "error", err)
 				copyHeader(w.Header(), capture.header)
 				w.WriteHeader(capture.statusCode)
 				w.Write(capture.body.Bytes()) //nolint:errcheck
 				return
 			}
+
+			slog.Info("model filter: parsed models", "total", len(modelsResp.Data))
 
 			// Filter models against whitelist.
 			var filtered []map[string]interface{}
@@ -143,6 +146,8 @@ func ModelFilterMiddleware(mf *ModelFilter) func(http.Handler) http.Handler {
 			}
 			modelsResp.Data = filtered
 
+			slog.Info("model filter: filtered result", "kept", len(filtered))
+
 			// Write filtered response with clean headers.
 			out, _ := json.Marshal(modelsResp)
 			copyHeader(w.Header(), capture.header)
@@ -152,7 +157,8 @@ func ModelFilterMiddleware(mf *ModelFilter) func(http.Handler) http.Handler {
 			w.Header().Del("Etag")
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
-			w.Write(out) //nolint:errcheck
+			n, writeErr := w.Write(out)
+			slog.Info("model filter: wrote response", "outLen", len(out), "written", n, "err", writeErr)
 		})
 	}
 }
