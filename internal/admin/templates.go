@@ -35,6 +35,7 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
         <nav class="tab-nav">
             <button class="active" onclick="showTab('upstreams')">上游服务</button>
             <button onclick="showTab('keys')">密钥管理</button>
+            <button onclick="showTab('models')">模型白名单</button>
             <button onclick="showTab('logs')">请求日志</button>
             <button onclick="showTab('status')">系统状态</button>
         </nav>
@@ -87,6 +88,18 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
             <tbody id="logs-table"></tbody></table>
         </div>
 
+        <!-- Models Tab -->
+        <div id="tab-models" class="tab-content">
+            <h2>模型白名单</h2>
+            <p style="color:#888;">配置允许的模型（为空则不过滤）。支持 <code>*</code> 通配符（如 <code>claude-sonnet*</code>），不含通配符时按子串匹配。</p>
+            <form onsubmit="addModelPattern(event)" style="display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;margin-bottom:16px;">
+                <input name="pattern" placeholder="如: claude-sonnet*" required>
+                <button type="submit" style="margin-bottom:0;width:auto;">添加</button>
+            </form>
+            <table><thead><tr><th>ID</th><th>模式</th><th>添加时间</th><th>操作</th></tr></thead>
+            <tbody id="models-table"></tbody></table>
+        </div>
+
         <!-- Status Tab -->
         <div id="tab-status" class="tab-content">
             <h2>系统状态</h2>
@@ -119,6 +132,7 @@ function showTab(name) {
     document.getElementById('tab-'+name).classList.add('active');
     event.target.classList.add('active');
     if (name === 'status') loadStatus();
+    if (name === 'models') loadModelWhitelist();
 }
 
 function loadUpstreams() {
@@ -225,6 +239,38 @@ function loadLogs(e) {
         tbody.innerHTML = (data||[]).map(l =>
             '<tr><td>'+l.ID+'</td><td>'+l.DownstreamKeyID+'</td><td>'+esc(l.UpstreamName||'-')+'</td><td>'+esc(l.ClientIP||'-')+'</td><td>'+esc(l.ProviderStyle)+'</td><td>'+esc(l.Path)+'</td><td>'+l.StatusCode+'</td><td>'+l.LatencyMs+'ms</td><td>'+fmtTime(l.CreatedAt)+'</td></tr>'
         ).join('');
+    });
+}
+
+function loadModelWhitelist() {
+    api('/models/whitelist').then(data => {
+        const tbody = document.getElementById('models-table');
+        tbody.innerHTML = (data||[]).map(e =>
+            '<tr><td>'+e.ID+'</td><td><code>'+esc(e.Pattern)+'</code></td><td>'+fmtTime(e.CreatedAt)+'</td><td>'+
+            '<button onclick="deleteModelPattern('+e.ID+')">删除</button></td></tr>'
+        ).join('');
+        if (!data || data.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#888;">未配置白名单，所有模型均放行</td></tr>';
+        }
+    });
+}
+
+function addModelPattern(e) {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    api('/models/whitelist', {method:'POST', body: JSON.stringify({
+        pattern: f.get('pattern')
+    })}).then(d => {
+        if(d.error) alert(d.error);
+        else { e.target.reset(); loadModelWhitelist(); }
+    });
+}
+
+function deleteModelPattern(id) {
+    if (!confirm('确认删除此模式？')) return;
+    api('/models/whitelist/'+id, {method:'DELETE'}).then(d => {
+        if(d.error) alert(d.error);
+        else loadModelWhitelist();
     });
 }
 

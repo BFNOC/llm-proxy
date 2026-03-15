@@ -23,6 +23,7 @@ type AdminHandler struct {
 	rateLimiter *middleware.PerKeyRPMLimiter
 	prober      *proxy.UpstreamProber
 	auditLogger *middleware.AuditLogger
+	modelFilter *middleware.ModelFilter
 	adminToken  string
 }
 
@@ -32,6 +33,7 @@ func NewAdminHandler(
 	rl *middleware.PerKeyRPMLimiter,
 	prober *proxy.UpstreamProber,
 	al *middleware.AuditLogger,
+	mf *middleware.ModelFilter,
 	adminToken string,
 ) *AdminHandler {
 	return &AdminHandler{
@@ -40,6 +42,7 @@ func NewAdminHandler(
 		rateLimiter: rl,
 		prober:      prober,
 		auditLogger: al,
+		modelFilter: mf,
 		adminToken:  adminToken,
 	}
 }
@@ -64,6 +67,11 @@ func (h *AdminHandler) RegisterRoutes(r *mux.Router) {
 
 	// Logs
 	api.HandleFunc("/logs", h.queryLogs).Methods("GET")
+
+	// Model whitelist
+	api.HandleFunc("/models/whitelist", h.listModelWhitelist).Methods("GET")
+	api.HandleFunc("/models/whitelist", h.addModelWhitelist).Methods("POST")
+	api.HandleFunc("/models/whitelist/{id}", h.deleteModelWhitelist).Methods("DELETE")
 
 	// Status
 	api.HandleFunc("/status", h.getStatus).Methods("GET")
@@ -422,6 +430,62 @@ func (h *AdminHandler) queryLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jsonOK(w, logs)
+}
+
+// --- Model Whitelist ---
+
+func (h *AdminHandler) listModelWhitelist(w http.ResponseWriter, r *http.Request) {
+	entries, err := h.store.ListModelWhitelist()
+	if err != nil {
+		slog.Error("admin: store error", "error", err)
+		jsonError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	jsonOK(w, entries)
+}
+
+func (h *AdminHandler) addModelWhitelist(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Pattern string `json:"pattern"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if req.Pattern == "" {
+		jsonError(w, http.StatusBadRequest, "pattern is required")
+		return
+	}
+	entry, err := h.store.AddModelWhitelist(req.Pattern)
+	if err != nil {
+		slog.Error("admin: store error", "error", err)
+		jsonError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	slog.Info("admin: added model whitelist pattern", "pattern", entry.Pattern)
+	if h.modelFilter != nil {
+		h.modelFilter.Reload()
+	}
+	w.WriteHeader(http.StatusCreated)
+	jsonOK(w, entry)
+}
+
+func (h *AdminHandler) deleteModelWhitelist(w http.ResponseWriter, r *http.Request) {
+	id, err := parseID(r)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := h.store.DeleteModelWhitelist(id); err != nil {
+		slog.Error("admin: store error", "error", err)
+		jsonError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	slog.Info("admin: deleted model whitelist pattern", "id", id)
+	if h.modelFilter != nil {
+		h.modelFilter.Reload()
+	}
+	jsonOK(w, map[string]string{"status": "deleted"})
 }
 
 // --- Status ---

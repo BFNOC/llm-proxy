@@ -227,14 +227,18 @@ func main() {
 	}).Methods("GET", "HEAD")
 
 	// Admin routes (separate subrouter, no CORS)
+	// Model whitelist filter
+	modelFilter := middleware.NewModelFilter(db)
+
 	if yamlConfig.Admin.Enabled {
-		adminHandler := admin.NewAdminHandler(db, keyCache, rateLimiter, prober, auditLogger, adminToken)
+		adminHandler := admin.NewAdminHandler(db, keyCache, rateLimiter, prober, auditLogger, modelFilter, adminToken)
 		adminHandler.RegisterRoutes(r)
 		slog.Info("Admin interface enabled", "dashboard", "/admin/", "api", "/admin/api/")
 	}
 
 	// Proxy middleware chain for /v1/
 	proxyChain := http.Handler(dynamicProxy)
+	proxyChain = middleware.ModelFilterMiddleware(modelFilter)(proxyChain)
 	proxyChain = middleware.StreamingMiddleware()(proxyChain)
 	if auditLogger != nil {
 		proxyChain = middleware.AuditLogMiddleware(auditLogger)(proxyChain)
