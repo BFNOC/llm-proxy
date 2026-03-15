@@ -36,8 +36,11 @@ func (h *CustomPrettyHandler) Enabled(_ context.Context, level slog.Level) bool 
 	return level >= h.level
 }
 
+// cst is the China Standard Time timezone (UTC+8).
+var cst = time.FixedZone("CST", 8*60*60)
+
 func (h *CustomPrettyHandler) Handle(_ context.Context, r slog.Record) error {
-	timeStr := r.Time.Format("15:04:05")
+	timeStr := r.Time.In(cst).Format("2006-01-02 15:04:05")
 	message := r.Message
 	var allAttrs []string
 	r.Attrs(func(a slog.Attr) bool {
@@ -76,7 +79,15 @@ func initLogger() {
 	logFormat := os.Getenv("LOG_FORMAT")
 	var handler slog.Handler
 	if logFormat == "json" {
-		handler = slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: level})
+		handler = slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
+			Level: level,
+			ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+				if a.Key == slog.TimeKey {
+					a.Value = slog.StringValue(a.Value.Time().In(cst).Format("2006-01-02 15:04:05"))
+				}
+				return a
+			},
+		})
 	} else {
 		handler = NewCustomPrettyHandler(os.Stderr, level)
 	}
