@@ -55,7 +55,7 @@ func (s *Store) Close() error {
 // storage. URL validation (scheme, SSRF) is the responsibility of the HTTP
 // handler layer; the store accepts any non-empty URL to remain testable with
 // loopback addresses.
-func (s *Store) CreateUpstream(name, baseURL, apiKey string, priority int) (*UpstreamProvider, error) {
+func (s *Store) CreateUpstream(name, baseURL, apiKey string, priority int, proxyURL string) (*UpstreamProvider, error) {
 	encryptedKey, err := Encrypt(apiKey, s.encryptionKey)
 	if err != nil {
 		return nil, fmt.Errorf("encrypt api key: %w", err)
@@ -63,9 +63,9 @@ func (s *Store) CreateUpstream(name, baseURL, apiKey string, priority int) (*Ups
 
 	now := time.Now().UTC()
 	res, err := s.db.Exec(
-		`INSERT INTO upstream_providers (name, base_url, api_key, priority, enabled, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, 1, ?, ?)`,
-		name, baseURL, encryptedKey, priority, now, now,
+		`INSERT INTO upstream_providers (name, base_url, api_key, priority, enabled, proxy_url, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, 1, ?, ?, ?)`,
+		name, baseURL, encryptedKey, priority, proxyURL, now, now,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("insert upstream: %w", err)
@@ -81,6 +81,7 @@ func (s *Store) CreateUpstream(name, baseURL, apiKey string, priority int) (*Ups
 		Name:      name,
 		BaseURL:   baseURL,
 		APIKey:    apiKey,
+		ProxyURL:  proxyURL,
 		Priority:  priority,
 		Enabled:   true,
 		Healthy:   true,
@@ -92,13 +93,13 @@ func (s *Store) CreateUpstream(name, baseURL, apiKey string, priority int) (*Ups
 // GetUpstream retrieves an upstream provider by ID, decrypting its API key.
 func (s *Store) GetUpstream(id int64) (*UpstreamProvider, error) {
 	row := s.db.QueryRow(
-		`SELECT id, name, base_url, api_key, priority, enabled, created_at, updated_at
+		`SELECT id, name, base_url, api_key, priority, enabled, proxy_url, created_at, updated_at
 		 FROM upstream_providers WHERE id = ?`, id,
 	)
 
 	var up UpstreamProvider
 	var encryptedKey string
-	if err := row.Scan(&up.ID, &up.Name, &up.BaseURL, &encryptedKey, &up.Priority, &up.Enabled, &up.CreatedAt, &up.UpdatedAt); err != nil {
+	if err := row.Scan(&up.ID, &up.Name, &up.BaseURL, &encryptedKey, &up.Priority, &up.Enabled, &up.ProxyURL, &up.CreatedAt, &up.UpdatedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("upstream %d not found", id)
 		}
@@ -117,7 +118,7 @@ func (s *Store) GetUpstream(id int64) (*UpstreamProvider, error) {
 // ListUpstreams returns all upstream providers with decrypted API keys.
 func (s *Store) ListUpstreams() ([]UpstreamProvider, error) {
 	rows, err := s.db.Query(
-		`SELECT id, name, base_url, api_key, priority, enabled, created_at, updated_at
+		`SELECT id, name, base_url, api_key, priority, enabled, proxy_url, created_at, updated_at
 		 FROM upstream_providers ORDER BY priority ASC, id ASC`,
 	)
 	if err != nil {
@@ -129,7 +130,7 @@ func (s *Store) ListUpstreams() ([]UpstreamProvider, error) {
 	for rows.Next() {
 		var up UpstreamProvider
 		var encryptedKey string
-		if err := rows.Scan(&up.ID, &up.Name, &up.BaseURL, &encryptedKey, &up.Priority, &up.Enabled, &up.CreatedAt, &up.UpdatedAt); err != nil {
+		if err := rows.Scan(&up.ID, &up.Name, &up.BaseURL, &encryptedKey, &up.Priority, &up.Enabled, &up.ProxyURL, &up.CreatedAt, &up.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan upstream row: %w", err)
 		}
 		plainKey, err := Decrypt(encryptedKey, s.encryptionKey)
@@ -147,7 +148,7 @@ func (s *Store) ListUpstreams() ([]UpstreamProvider, error) {
 }
 
 // UpdateUpstream replaces all mutable fields of an upstream provider.
-func (s *Store) UpdateUpstream(id int64, name, baseURL, apiKey string, priority int, enabled bool) (*UpstreamProvider, error) {
+func (s *Store) UpdateUpstream(id int64, name, baseURL, apiKey string, priority int, enabled bool, proxyURL string) (*UpstreamProvider, error) {
 	encryptedKey, err := Encrypt(apiKey, s.encryptionKey)
 	if err != nil {
 		return nil, fmt.Errorf("encrypt api key: %w", err)
@@ -155,9 +156,9 @@ func (s *Store) UpdateUpstream(id int64, name, baseURL, apiKey string, priority 
 
 	now := time.Now().UTC()
 	res, err := s.db.Exec(
-		`UPDATE upstream_providers SET name=?, base_url=?, api_key=?, priority=?, enabled=?, updated_at=?
+		`UPDATE upstream_providers SET name=?, base_url=?, api_key=?, priority=?, enabled=?, proxy_url=?, updated_at=?
 		 WHERE id=?`,
-		name, baseURL, encryptedKey, priority, enabled, now, id,
+		name, baseURL, encryptedKey, priority, enabled, proxyURL, now, id,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("update upstream: %w", err)

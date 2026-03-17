@@ -101,6 +101,14 @@ CREATE TABLE IF NOT EXISTS key_upstream_bindings (
 CREATE INDEX IF NOT EXISTS idx_key_upstream_bindings_key ON key_upstream_bindings (downstream_key_id);
 `,
 	},
+	{
+		// v7: 为每个上游增加可选的代理地址，支持 http/https/socks5 协议。
+		// 留空表示继承环境代理（HTTP_PROXY 等环境变量）。
+		version: 7,
+		up: `
+ALTER TABLE upstream_providers ADD COLUMN proxy_url TEXT NOT NULL DEFAULT '';
+`,
+	},
 }
 
 // RunMigrations applies all pending schema migrations in order.

@@ -136,7 +136,7 @@ func TestRunMigrations_Idempotent(t *testing.T) {
 func TestUpstream_CreateAndGet(t *testing.T) {
 	s := newTestStore(t)
 
-	up, err := s.CreateUpstream("openai", "https://api.openai.com", "sk-key123", 10)
+	up, err := s.CreateUpstream("openai", "https://api.openai.com", "sk-key123", 10, "")
 	require.NoError(t, err)
 	require.NotNil(t, up)
 	assert.Positive(t, up.ID)
@@ -163,9 +163,9 @@ func TestUpstream_GetNotFound(t *testing.T) {
 func TestUpstream_List(t *testing.T) {
 	s := newTestStore(t)
 
-	_, err := s.CreateUpstream("provider-a", "https://a.example.com", "key-a", 5)
+	_, err := s.CreateUpstream("provider-a", "https://a.example.com", "key-a", 5, "")
 	require.NoError(t, err)
-	_, err = s.CreateUpstream("provider-b", "https://b.example.com", "key-b", 10)
+	_, err = s.CreateUpstream("provider-b", "https://b.example.com", "key-b", 10, "")
 	require.NoError(t, err)
 
 	list, err := s.ListUpstreams()
@@ -185,10 +185,10 @@ func TestUpstream_List(t *testing.T) {
 func TestUpstream_Update(t *testing.T) {
 	s := newTestStore(t)
 
-	up, err := s.CreateUpstream("old-name", "https://old.example.com", "old-key", 1)
+	up, err := s.CreateUpstream("old-name", "https://old.example.com", "old-key", 1, "")
 	require.NoError(t, err)
 
-	updated, err := s.UpdateUpstream(up.ID, "new-name", "https://new.example.com", "new-key", 2, true)
+	updated, err := s.UpdateUpstream(up.ID, "new-name", "https://new.example.com", "new-key", 2, true, "")
 	require.NoError(t, err)
 	assert.Equal(t, up.ID, updated.ID)
 	assert.Equal(t, "new-name", updated.Name)
@@ -199,7 +199,7 @@ func TestUpstream_Update(t *testing.T) {
 
 func TestUpstream_UpdateNotFound(t *testing.T) {
 	s := newTestStore(t)
-	_, err := s.UpdateUpstream(9999, "name", "https://example.com", "key", 0, true)
+	_, err := s.UpdateUpstream(9999, "name", "https://example.com", "key", 0, true, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
 }
@@ -207,7 +207,7 @@ func TestUpstream_UpdateNotFound(t *testing.T) {
 func TestUpstream_Delete(t *testing.T) {
 	s := newTestStore(t)
 
-	up, err := s.CreateUpstream("to-delete", "https://example.com", "key", 0)
+	up, err := s.CreateUpstream("to-delete", "https://example.com", "key", 0, "")
 	require.NoError(t, err)
 
 	err = s.DeleteUpstream(up.ID)
@@ -229,7 +229,7 @@ func TestUpstream_APIKeyNotStoredAsPlaintext(t *testing.T) {
 	s := newTestStore(t)
 	plainKey := "sk-plaintext-secret-key"
 
-	up, err := s.CreateUpstream("test", "https://example.com", plainKey, 0)
+	up, err := s.CreateUpstream("test", "https://example.com", plainKey, 0, "")
 	require.NoError(t, err)
 
 	// Read the raw api_key column from the DB directly.
@@ -495,9 +495,9 @@ func TestKeyUpstreamBinding_SetAndGet(t *testing.T) {
 
 	_, dk, err := s.CreateKey("bound-key", 0)
 	require.NoError(t, err)
-	u1, err := s.CreateUpstream("upstream-1", "https://a.example.com", "key-a", 0)
+	u1, err := s.CreateUpstream("upstream-1", "https://a.example.com", "key-a", 0, "")
 	require.NoError(t, err)
-	u2, err := s.CreateUpstream("upstream-2", "https://b.example.com", "key-b", 0)
+	u2, err := s.CreateUpstream("upstream-2", "https://b.example.com", "key-b", 0, "")
 	require.NoError(t, err)
 
 	err = s.SetKeyUpstreams(dk.ID, []int64{u1.ID, u2.ID})
@@ -515,9 +515,9 @@ func TestKeyUpstreamBinding_ReplaceExisting(t *testing.T) {
 
 	_, dk, err := s.CreateKey("replace-key", 0)
 	require.NoError(t, err)
-	u1, err := s.CreateUpstream("up-1", "https://a.example.com", "key-a", 0)
+	u1, err := s.CreateUpstream("up-1", "https://a.example.com", "key-a", 0, "")
 	require.NoError(t, err)
-	u2, err := s.CreateUpstream("up-2", "https://b.example.com", "key-b", 0)
+	u2, err := s.CreateUpstream("up-2", "https://b.example.com", "key-b", 0, "")
 	require.NoError(t, err)
 
 	err = s.SetKeyUpstreams(dk.ID, []int64{u1.ID})
@@ -549,7 +549,7 @@ func TestKeyUpstreamBinding_ClearBindings(t *testing.T) {
 
 	_, dk, err := s.CreateKey("clear-key", 0)
 	require.NoError(t, err)
-	u1, err := s.CreateUpstream("up-c", "https://c.example.com", "key-c", 0)
+	u1, err := s.CreateUpstream("up-c", "https://c.example.com", "key-c", 0, "")
 	require.NoError(t, err)
 
 	err = s.SetKeyUpstreams(dk.ID, []int64{u1.ID})
@@ -569,7 +569,7 @@ func TestKeyUpstreamBinding_CascadeDeleteKey(t *testing.T) {
 
 	_, dk, err := s.CreateKey("cascade-key", 0)
 	require.NoError(t, err)
-	u1, err := s.CreateUpstream("up-d", "https://d.example.com", "key-d", 0)
+	u1, err := s.CreateUpstream("up-d", "https://d.example.com", "key-d", 0, "")
 	require.NoError(t, err)
 
 	err = s.SetKeyUpstreams(dk.ID, []int64{u1.ID})
@@ -590,9 +590,9 @@ func TestKeyUpstreamBinding_CascadeDeleteUpstream(t *testing.T) {
 
 	_, dk, err := s.CreateKey("cascade-up-key", 0)
 	require.NoError(t, err)
-	u1, err := s.CreateUpstream("up-e", "https://e.example.com", "key-e", 0)
+	u1, err := s.CreateUpstream("up-e", "https://e.example.com", "key-e", 0, "")
 	require.NoError(t, err)
-	u2, err := s.CreateUpstream("up-f", "https://f.example.com", "key-f", 0)
+	u2, err := s.CreateUpstream("up-f", "https://f.example.com", "key-f", 0, "")
 	require.NoError(t, err)
 
 	err = s.SetKeyUpstreams(dk.ID, []int64{u1.ID, u2.ID})
@@ -704,9 +704,9 @@ func TestGetAllKeyBindings_GroupedAndSorted(t *testing.T) {
 	s := newTestStore(t)
 	_, dk1, _ := s.CreateKey("k1", 0)
 	_, dk2, _ := s.CreateKey("k2", 0)
-	u1, _ := s.CreateUpstream("u1", "https://a.example.com", "ka", 0)
-	u2, _ := s.CreateUpstream("u2", "https://b.example.com", "kb", 0)
-	u3, _ := s.CreateUpstream("u3", "https://c.example.com", "kc", 0)
+	u1, _ := s.CreateUpstream("u1", "https://a.example.com", "ka", 0, "")
+	u2, _ := s.CreateUpstream("u2", "https://b.example.com", "kb", 0, "")
+	u3, _ := s.CreateUpstream("u3", "https://c.example.com", "kc", 0, "")
 
 	require.NoError(t, s.SetKeyUpstreams(dk1.ID, []int64{u2.ID, u1.ID})) // insert out of order
 	require.NoError(t, s.SetKeyUpstreams(dk2.ID, []int64{u3.ID}))
@@ -733,8 +733,8 @@ func TestGetAllKeyBindings_UnboundKeysAbsent(t *testing.T) {
 func TestGetAllKeyBindings_AfterReplaceAndClear(t *testing.T) {
 	s := newTestStore(t)
 	_, dk, _ := s.CreateKey("replace-key", 0)
-	u1, _ := s.CreateUpstream("u1", "https://a.example.com", "ka", 0)
-	u2, _ := s.CreateUpstream("u2", "https://b.example.com", "kb", 0)
+	u1, _ := s.CreateUpstream("u1", "https://a.example.com", "ka", 0, "")
+	u2, _ := s.CreateUpstream("u2", "https://b.example.com", "kb", 0, "")
 
 	require.NoError(t, s.SetKeyUpstreams(dk.ID, []int64{u1.ID}))
 	require.NoError(t, s.SetKeyUpstreams(dk.ID, []int64{u2.ID})) // Replace

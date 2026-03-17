@@ -50,7 +50,7 @@ func (mf *ModelFilter) getPatterns() []string {
 }
 
 // matchModel checks if a model ID matches any whitelist pattern.
-// Patterns without wildcards match as substrings; patterns with * use glob matching.
+// Patterns with * or ? use glob matching; patterns without wildcards require exact match.
 func (mf *ModelFilter) matchModel(modelID string) bool {
 	patterns := mf.getPatterns()
 	if len(patterns) == 0 {
@@ -63,8 +63,8 @@ func (mf *ModelFilter) matchModel(modelID string) bool {
 				return true
 			}
 		} else {
-			// Substring match
-			if strings.Contains(modelID, p) {
+			// Exact match
+			if modelID == p {
 				return true
 			}
 		}

@@ -61,7 +61,7 @@ func TestProber_SelectsHealthyUpstream(t *testing.T) {
 	dp := NewDynamicProxy()
 
 	healthy := healthyServer(t)
-	_, err := s.CreateUpstream("primary", healthy.URL, "key-primary", 1)
+	_, err := s.CreateUpstream("primary", healthy.URL, "key-primary", 1, "")
 	require.NoError(t, err)
 
 	prober := NewUpstreamProber(s, dp, time.Minute, 5*time.Second)
@@ -80,9 +80,9 @@ func TestProber_SkipsUnhealthyUpstreams(t *testing.T) {
 	bad := unhealthyServer(t)
 	good := healthyServer(t)
 
-	_, err := s.CreateUpstream("bad", bad.URL, "key-bad", 0) // priority 0 = higher preference
+	_, err := s.CreateUpstream("bad", bad.URL, "key-bad", 0, "") // priority 0 = higher preference
 	require.NoError(t, err)
-	_, err = s.CreateUpstream("good", good.URL, "key-good", 1)
+	_, err = s.CreateUpstream("good", good.URL, "key-good", 1, "")
 	require.NoError(t, err)
 
 	prober := NewUpstreamProber(s, dp, time.Minute, 5*time.Second)
@@ -101,9 +101,9 @@ func TestProber_BothHealthy_BothInList(t *testing.T) {
 	srv1 := healthyServer(t)
 	srv2 := healthyServer(t)
 
-	_, err := s.CreateUpstream("first", srv1.URL, "key-1", 0)
+	_, err := s.CreateUpstream("first", srv1.URL, "key-1", 0, "")
 	require.NoError(t, err)
-	_, err = s.CreateUpstream("second", srv2.URL, "key-2", 1)
+	_, err = s.CreateUpstream("second", srv2.URL, "key-2", 1, "")
 	require.NoError(t, err)
 
 	prober := NewUpstreamProber(s, dp, time.Minute, 5*time.Second)
@@ -123,9 +123,9 @@ func TestProber_SwitchesOnCurrentFailure(t *testing.T) {
 	bad := unhealthyServer(t)
 	good := healthyServer(t)
 
-	_, err := s.CreateUpstream("primary", bad.URL, "key-bad", 0)
+	_, err := s.CreateUpstream("primary", bad.URL, "key-bad", 0, "")
 	require.NoError(t, err)
-	_, err = s.CreateUpstream("fallback", good.URL, "key-good", 1)
+	_, err = s.CreateUpstream("fallback", good.URL, "key-good", 1, "")
 	require.NoError(t, err)
 
 	prober := NewUpstreamProber(s, dp, time.Minute, 5*time.Second)
@@ -144,9 +144,9 @@ func TestProber_AllUnhealthyKeepsLastActive(t *testing.T) {
 	bad1 := unhealthyServer(t)
 	bad2 := unhealthyServer(t)
 
-	_, err := s.CreateUpstream("bad1", bad1.URL, "key-1", 0)
+	_, err := s.CreateUpstream("bad1", bad1.URL, "key-1", 0, "")
 	require.NoError(t, err)
-	_, err = s.CreateUpstream("bad2", bad2.URL, "key-2", 1)
+	_, err = s.CreateUpstream("bad2", bad2.URL, "key-2", 1, "")
 	require.NoError(t, err)
 
 	prober := NewUpstreamProber(s, dp, time.Minute, 5*time.Second)
@@ -167,7 +167,7 @@ func TestProber_AcceptsAuthErrorAsReachable(t *testing.T) {
 
 	// 401 = server is up, just needs valid credentials.
 	srv := authRequiredServer(t)
-	_, err := s.CreateUpstream("auth-required", srv.URL, "key-auth", 0)
+	_, err := s.CreateUpstream("auth-required", srv.URL, "key-auth", 0, "")
 	require.NoError(t, err)
 
 	prober := NewUpstreamProber(s, dp, time.Minute, 5*time.Second)
@@ -195,7 +195,7 @@ func TestProber_StartContextCancellation(t *testing.T) {
 	dp := NewDynamicProxy()
 
 	healthy := healthyServer(t)
-	_, err := s.CreateUpstream("primary", healthy.URL, "key-1", 0)
+	_, err := s.CreateUpstream("primary", healthy.URL, "key-1", 0, "")
 	require.NoError(t, err)
 
 	prober := NewUpstreamProber(s, dp, 50*time.Millisecond, 5*time.Second)
