@@ -64,6 +64,7 @@ func (h *AdminHandler) RegisterRoutes(r *mux.Router) {
 	api.HandleFunc("/upstreams", h.createUpstream).Methods("POST")
 	api.HandleFunc("/upstreams/{id}", h.updateUpstream).Methods("PUT")
 	api.HandleFunc("/upstreams/{id}", h.deleteUpstream).Methods("DELETE")
+	api.HandleFunc("/upstreams/{id}/test-proxy", h.testUpstreamProxy).Methods("POST")
 
 	// Keys
 	api.HandleFunc("/keys", h.listKeys).Methods("GET")
@@ -117,6 +118,7 @@ func (h *AdminHandler) listUpstreams(w http.ResponseWriter, r *http.Request) {
 		ID        int64     `json:"id"`
 		Name      string    `json:"name"`
 		BaseURL   string    `json:"base_url"`
+		ProxyURL  string    `json:"proxy_url"`
 		Priority  int       `json:"priority"`
 		Enabled   bool      `json:"enabled"`
 		CreatedAt time.Time `json:"created_at"`
@@ -125,7 +127,7 @@ func (h *AdminHandler) listUpstreams(w http.ResponseWriter, r *http.Request) {
 	result := make([]upstreamResponse, len(upstreams))
 	for i, u := range upstreams {
 		result[i] = upstreamResponse{
-			ID: u.ID, Name: u.Name, BaseURL: u.BaseURL,
+			ID: u.ID, Name: u.Name, BaseURL: u.BaseURL, ProxyURL: u.ProxyURL,
 			Priority: u.Priority, Enabled: u.Enabled, CreatedAt: u.CreatedAt, UpdatedAt: u.UpdatedAt,
 		}
 	}
@@ -137,6 +139,7 @@ func (h *AdminHandler) createUpstream(w http.ResponseWriter, r *http.Request) {
 		Name     string `json:"name"`
 		BaseURL  string `json:"base_url"`
 		APIKey   string `json:"api_key"`
+		ProxyURL string `json:"proxy_url"`
 		Priority int    `json:"priority"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -154,13 +157,21 @@ func (h *AdminHandler) createUpstream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	upstream, err := h.store.CreateUpstream(req.Name, req.BaseURL, req.APIKey, req.Priority)
+	// Proxy URL validation
+	if req.ProxyURL != "" {
+		if err := validateProxyURL(req.ProxyURL); err != nil {
+			jsonError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+
+	upstream, err := h.store.CreateUpstream(req.Name, req.BaseURL, req.APIKey, req.Priority, req.ProxyURL)
 	if err != nil {
 		slog.Error("admin: store error", "error", err)
 		jsonError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	slog.Info("admin: created upstream", "id", upstream.ID, "name", upstream.Name)
+	slog.Info("admin: created upstream", "id", upstream.ID, "name", upstream.Name, "proxy_url", sanitizeProxyForLog(req.ProxyURL))
 	w.WriteHeader(http.StatusCreated)
 	jsonOK(w, map[string]interface{}{"id": upstream.ID, "name": upstream.Name, "base_url": upstream.BaseURL, "priority": upstream.Priority})
 }
@@ -183,6 +194,7 @@ func (h *AdminHandler) updateUpstream(w http.ResponseWriter, r *http.Request) {
 		Name     *string `json:"name"`
 		BaseURL  *string `json:"base_url"`
 		APIKey   *string `json:"api_key"`
+		ProxyURL *string `json:"proxy_url"`
 		Priority *int    `json:"priority"`
 		Enabled  *bool   `json:"enabled"`
 	}
@@ -211,6 +223,10 @@ func (h *AdminHandler) updateUpstream(w http.ResponseWriter, r *http.Request) {
 	if req.Enabled != nil {
 		enabled = *req.Enabled
 	}
+	proxyURL := existing.ProxyURL
+	if req.ProxyURL != nil {
+		proxyURL = *req.ProxyURL
+	}
 
 	if baseURL != existing.BaseURL {
 		if err := validateBaseURL(baseURL); err != nil {
@@ -219,11 +235,22 @@ func (h *AdminHandler) updateUpstream(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	upstream, err := h.store.UpdateUpstream(id, name, baseURL, apiKey, priority, enabled)
+	if proxyURL != "" && proxyURL != existing.ProxyURL {
+		if err := validateProxyURL(proxyURL); err != nil {
+			jsonError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+
+	upstream, err := h.store.UpdateUpstream(id, name, baseURL, apiKey, priority, enabled, proxyURL)
 	if err != nil {
 		slog.Error("admin: store error", "error", err)
 		jsonError(w, http.StatusInternalServerError, "internal error")
 		return
+	}
+	// 代理配置变更时回收旧 transport 连接池（仅当没有其他上游复用该代理时）
+	if proxyURL != existing.ProxyURL {
+		h.tryRemoveTransport(existing.ProxyURL, id)
 	}
 	// Trigger re-probe so disabled/enabled change takes effect immediately.
 	go h.prober.ProbeNow()
@@ -237,10 +264,16 @@ func (h *AdminHandler) deleteUpstream(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// 先获取上游信息以备回收 transport
+	existing, _ := h.store.GetUpstream(id)
 	if err := h.store.DeleteUpstream(id); err != nil {
 		slog.Error("admin: store error", "error", err)
 		jsonError(w, http.StatusInternalServerError, "internal error")
 		return
+	}
+	// 回收被删除上游的 transport 连接池（仅当没有其他上游复用该代理时）
+	if existing != nil {
+		h.tryRemoveTransport(existing.ProxyURL, id)
 	}
 	// Trigger immediate probe to update active upstream if needed.
 	go h.prober.ProbeNow()
@@ -665,6 +698,24 @@ func jsonOK(w http.ResponseWriter, data interface{}) {
 	json.NewEncoder(w).Encode(data)
 }
 
+// tryRemoveTransport 仅当没有其他上游仍在使用同一 proxyURL 时，
+// 才从缓存中移除对应 transport 并关闭空闲连接。
+// excludeID 是正在删除或修改的上游 ID，在判断"是否还有其他"时排除它。
+func (h *AdminHandler) tryRemoveTransport(proxyURL string, excludeID int64) {
+	upstreams, err := h.store.ListUpstreams()
+	if err != nil {
+		slog.Warn("admin: failed to list upstreams for transport cleanup", "error", err)
+		return
+	}
+	for _, u := range upstreams {
+		if u.ID != excludeID && u.ProxyURL == proxyURL {
+			// 还有其他上游在用同一代理，保留 transport
+			return
+		}
+	}
+	proxy.RemoveTransport(proxyURL)
+}
+
 func jsonError(w http.ResponseWriter, status int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -698,4 +749,89 @@ func validateBaseURL(rawURL string) error {
 	}
 
 	return nil
+}
+
+// validateProxyURL 校验代理地址格式，仅允许 http/https/socks5 协议，且必须包含主机名。
+func validateProxyURL(raw string) error {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("invalid proxy_url: %w", err)
+	}
+	switch parsed.Scheme {
+	case "http", "https", "socks5":
+		// ok
+	default:
+		return fmt.Errorf("proxy_url must use http, https, or socks5 scheme")
+	}
+	if parsed.Hostname() == "" {
+		return fmt.Errorf("proxy_url must include a hostname")
+	}
+	return nil
+}
+
+// sanitizeProxyForLog 抹除 proxy URL 中的用户凭据，防止密码写入日志。
+func sanitizeProxyForLog(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "<invalid>"
+	}
+	parsed.User = nil
+	return parsed.String()
+}
+
+// testUpstreamProxy 通过上游配置的代理对其 base_url 发 HEAD 请求，验证连通性。
+func (h *AdminHandler) testUpstreamProxy(w http.ResponseWriter, r *http.Request) {
+	id, err := parseID(r)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	upstream, err := h.store.GetUpstream(id)
+	if err != nil {
+		jsonError(w, http.StatusNotFound, fmt.Sprintf("upstream %d not found", id))
+		return
+	}
+
+	// 构造带代理的 HTTP client
+	transport, err := proxy.BuildTransport(upstream.ProxyURL)
+	if err != nil {
+		jsonOK(w, map[string]interface{}{
+			"success": false,
+			"error":   fmt.Sprintf("invalid proxy config: %v", err),
+		})
+		return
+	}
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   10 * time.Second,
+		// 禁止跟随重定向，防止 302 到内网地址的 SSRF 绕过
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	testURL := strings.TrimRight(upstream.BaseURL, "/") + "/v1/models"
+	start := time.Now()
+	resp, err := client.Head(testURL)
+	latency := time.Since(start)
+
+	if err != nil {
+		jsonOK(w, map[string]interface{}{
+			"success":    false,
+			"error":      err.Error(),
+			"latency_ms": latency.Milliseconds(),
+		})
+		return
+	}
+	resp.Body.Close()
+
+	jsonOK(w, map[string]interface{}{
+		"success":     resp.StatusCode < 500,
+		"status_code": resp.StatusCode,
+		"latency_ms":  latency.Milliseconds(),
+	})
 }

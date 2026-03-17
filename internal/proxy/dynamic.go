@@ -7,13 +7,11 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"sync/atomic"
-	"time"
 )
 
 // hopByHopHeaders are HTTP headers that must not be forwarded by proxies.
@@ -80,27 +78,25 @@ func AllowedUpstreamIDsFromContext(ctx context.Context) []int64 {
 // ActiveUpstream 保存当前可用的上游端点信息。
 type ActiveUpstream struct {
 	// ID 对应 upstream_providers 表主键，用于把运行时健康列表和持久化绑定关系做稳定关联。
-	ID      int64
-	BaseURL *url.URL
-	APIKey  string
-	Name    string
+	ID       int64
+	BaseURL  *url.URL
+	APIKey   string
+	Name     string
+	ProxyURL string // 可选代理地址，空表示继承环境代理
 }
 
 // DynamicProxy is a reverse proxy that supports 429-based failover across
 // multiple upstreams. All healthy upstreams are stored and tried in priority
 // order. If an upstream returns 429, the next one is attempted. Only when all
 // upstreams return 429 is the response forwarded to the client.
+// 每个上游通过 BuildTransport 获取对应代理的 *http.Transport，相同代理复用连接池。
 type DynamicProxy struct {
 	allUpstreams atomic.Value // stores []*ActiveUpstream
-	transport    *http.Transport
 }
 
-// NewDynamicProxy creates a DynamicProxy with a pre-configured transport.
+// NewDynamicProxy creates a DynamicProxy.
 func NewDynamicProxy() *DynamicProxy {
-	dp := &DynamicProxy{
-		transport: newProxyTransport(),
-	}
-	return dp
+	return &DynamicProxy{}
 }
 
 // SetAllUpstreams atomically replaces the full list of upstreams (sorted by
@@ -216,7 +212,21 @@ func (dp *DynamicProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// for middleware processing (e.g. model filtering).
 		outReq.Header.Del("Accept-Encoding")
 
-		resp, err := dp.transport.RoundTrip(outReq)
+		// 按上游代理配置获取对应 transport
+		upTransport, err := BuildTransport(active.ProxyURL)
+		if err != nil {
+			if !isLast {
+				slog.Warn("proxy: failed to build transport, trying next",
+					"upstream", active.Name, "error", err)
+				continue
+			}
+			slog.Error("proxy: failed to build transport", "error", err, "upstream", active.Name)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadGateway)
+			json.NewEncoder(w).Encode(map[string]string{"error": "bad gateway"}) //nolint:errcheck
+			return
+		}
+		resp, err := upTransport.RoundTrip(outReq)
 		if err != nil {
 			if !isLast {
 				slog.Warn("proxy: upstream transport error, trying next",
@@ -315,24 +325,7 @@ func (dp *DynamicProxy) forwardResponse(w http.ResponseWriter, resp *http.Respon
 	}
 }
 
-// newProxyTransport returns an *http.Transport tuned for proxying LLM API
-// requests, including long-running streaming responses.
-func newProxyTransport() *http.Transport {
-	return &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		DialContext: (&net.Dialer{
-			Timeout:   30 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
-		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          100,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-		ResponseHeaderTimeout: 3 * time.Minute,
-		DisableCompression:    true,
-	}
-}
+// newProxyTransport 已迁移到 transport.go 中的 BuildTransport / newBaseTransport。
 
 // filterUpstreams 在不打乱原有优先级顺序的前提下，筛出当前请求允许访问的健康上游。
 // 这里不重新排序，是为了让绑定逻辑只负责授权边界，不改变探测器决定的故障切换顺序。

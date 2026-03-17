@@ -7,6 +7,7 @@ type UpstreamProvider struct {
 	Name      string
 	BaseURL   string
 	APIKey    string // encrypted at rest
+	ProxyURL  string // 可选代理地址，支持 http/https/socks5，空表示继承环境代理
 	Priority  int
 	Enabled   bool   // persisted; disabled upstreams are skipped by the prober
 	Healthy   bool   // runtime only, not persisted

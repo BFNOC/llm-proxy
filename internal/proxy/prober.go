@@ -21,7 +21,6 @@ type UpstreamProber struct {
 	timeout   time.Duration
 	currentID int64
 	mu        sync.Mutex
-	client    *http.Client
 }
 
 // NewUpstreamProber creates a prober that checks upstreams on the given
@@ -32,7 +31,6 @@ func NewUpstreamProber(s *store.Store, p *DynamicProxy, interval, timeout time.D
 		proxy:    p,
 		interval: interval,
 		timeout:  timeout,
-		client:   &http.Client{Timeout: timeout},
 	}
 }
 
@@ -90,7 +88,7 @@ func (p *UpstreamProber) probeOnce() {
 	// Probe all enabled upstreams and collect the healthy ones.
 	var healthy []*ActiveUpstream
 	for _, u := range enabled {
-		if !p.probeUpstream(u.BaseURL) {
+		if !p.probeUpstream(u.BaseURL, u.ProxyURL) {
 			slog.Warn("prober: upstream unhealthy", "id", u.ID, "name", u.Name)
 			continue
 		}
@@ -99,13 +97,14 @@ func (p *UpstreamProber) probeOnce() {
 			slog.Error("prober: invalid upstream URL", "url", u.BaseURL, "error", err)
 			continue
 		}
-		// 把数据库里的 upstream ID 带入运行时快照，
+		// 把数据库里的 upstream ID 和代理地址带入运行时快照，
 		// 后续代理过滤才能和 key_upstream_bindings 按同一主键精确匹配。
 		healthy = append(healthy, &ActiveUpstream{
-			ID:      u.ID,
-			BaseURL: parsed,
-			APIKey:  u.APIKey,
-			Name:    u.Name,
+			ID:       u.ID,
+			BaseURL:  parsed,
+			APIKey:   u.APIKey,
+			Name:     u.Name,
+			ProxyURL: u.ProxyURL,
 		})
 	}
 
@@ -121,11 +120,24 @@ func (p *UpstreamProber) probeOnce() {
 	slog.Info("prober: updated upstream list", "healthy_count", len(healthy))
 }
 
-// probeUpstream issues a HEAD request to baseURL/v1/models and returns true
-// when the server is reachable (any HTTP status below 500 counts, including
-// 401 which still means the server is up).
-func (p *UpstreamProber) probeUpstream(baseURL string) bool {
-	resp, err := p.client.Head(baseURL + "/v1/models")
+// probeUpstream issues a HEAD request to baseURL/v1/models (optionally through
+// the configured proxy) and returns true when the server is reachable (any
+// HTTP status below 500 counts, including 401 which still means the server is up).
+func (p *UpstreamProber) probeUpstream(baseURL, proxyURL string) bool {
+	transport, err := BuildTransport(proxyURL)
+	if err != nil {
+		slog.Warn("prober: failed to build transport", "proxy", proxyURL, "error", err)
+		return false
+	}
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   p.timeout,
+		// 禁止跟随重定向，防止 302 到内网地址的 SSRF 绕过
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	resp, err := client.Head(baseURL + "/v1/models")
 	if err != nil {
 		return false
 	}

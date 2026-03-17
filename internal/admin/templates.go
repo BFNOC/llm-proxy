@@ -151,7 +151,7 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
                     <h2>上游服务商</h2>
                     <button class="btn btn-primary btn-sm" onclick="document.getElementById('dlg-upstream').showModal()">+ 添加上游</button>
                 </div>
-                <table><thead><tr><th>ID</th><th>名称</th><th>地址</th><th>优先级</th><th>状态</th><th>操作</th></tr></thead>
+                <table><thead><tr><th>ID</th><th>名称</th><th>地址</th><th>代理</th><th>优先级</th><th>状态</th><th>操作</th></tr></thead>
                 <tbody id="upstreams-table"></tbody></table>
             </div>
         </div>
@@ -180,7 +180,7 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
                 <div class="card-header">
                     <h2>模型白名单</h2>
                 </div>
-                <p style="color:var(--text-dim);font-size:0.85rem;margin-bottom:16px;">配置允许的模型（为空则不过滤）。支持 <code>*</code> 通配符（如 <code>claude-sonnet*</code>），不含通配符时按子串匹配。</p>
+                <p style="color:var(--text-dim);font-size:0.85rem;margin-bottom:16px;">配置允许的模型（为空则不过滤）。支持 <code>*</code> 通配符（如 <code>claude-sonnet*</code>），不含通配符时精确匹配。</p>
                 <form onsubmit="addModelPattern(event)" class="form-grid narrow" style="margin-bottom:20px;">
                     <div class="form-group"><input name="pattern" placeholder="如: claude-sonnet*" required></div>
                     <button type="submit" class="btn btn-primary btn-sm">添加</button>
@@ -231,6 +231,7 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
         <div class="form-group"><label>名称</label><input name="name" required></div>
         <div class="form-group"><label>地址</label><input name="base_url" placeholder="https://api.example.com" required></div>
         <div class="form-group"><label>API 密钥</label><input name="api_key" type="password" required></div>
+        <div class="form-group"><label>代理地址（可选）</label><input name="proxy_url" placeholder="socks5://127.0.0.1:1080"></div>
         <div class="form-group"><label>优先级 (0=最高)</label><input name="priority" type="number" value="0"></div>
         <div class="dialog-actions">
             <button type="button" class="btn btn-ghost" onclick="this.closest('dialog').close()">取消</button>
@@ -247,6 +248,7 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
         <div class="form-group"><label>名称</label><input name="name" required></div>
         <div class="form-group"><label>地址</label><input name="base_url" required></div>
         <div class="form-group"><label>API 密钥（留空不修改）</label><input name="api_key" type="password"></div>
+        <div class="form-group"><label>代理地址（留空=环境代理）</label><input name="proxy_url" placeholder="socks5://127.0.0.1:1080"></div>
         <div class="form-group"><label>优先级</label><input name="priority" type="number"></div>
         <div class="dialog-actions">
             <button type="button" class="btn btn-ghost" onclick="this.closest('dialog').close()">取消</button>
@@ -362,13 +364,14 @@ function loadUpstreams() {
         allUpstreams = data || [];
         const tbody = document.getElementById('upstreams-table');
         if (allUpstreams.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="6" class="empty-state">暂无上游服务</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="7" class="empty-state">暂无上游服务</td></tr>';
             return;
         }
         tbody.innerHTML = allUpstreams.map(u =>
-            '<tr><td>'+u.id+'</td><td>'+esc(u.name)+'</td><td><code>'+esc(u.base_url)+'</code></td><td>'+u.priority+'</td><td>'+
+            '<tr><td>'+u.id+'</td><td>'+esc(u.name)+'</td><td><code>'+esc(u.base_url)+'</code></td><td>'+(u.proxy_url?'<code>'+esc(u.proxy_url)+'</code>':'<span class="badge badge-green">环境代理</span>')+'</td><td>'+u.priority+'</td><td>'+
             (u.enabled?'<span class="badge badge-green">启用</span>':'<span class="badge badge-red">禁用</span>')+
             '</td><td class="actions">'+
+            '<button class="btn btn-ghost btn-sm" onclick="testProxy(event,'+u.id+')">测试</button> '+
             '<button class="btn btn-ghost btn-sm" onclick="toggleUpstream('+u.id+','+(!u.enabled)+')">切换</button> '+
             '<button class="btn btn-ghost btn-sm" onclick="editUpstream('+u.id+')">编辑</button> '+
             '<button class="btn btn-danger btn-sm" onclick="deleteUpstream('+u.id+')">删除</button>'+
@@ -382,7 +385,8 @@ function createUpstream(e) {
     const f = new FormData(e.target);
     api('/upstreams', {method:'POST', body: JSON.stringify({
         name: f.get('name'), base_url: f.get('base_url'),
-        api_key: f.get('api_key'), priority: parseInt(f.get('priority')||'0')
+        api_key: f.get('api_key'), proxy_url: f.get('proxy_url')||'',
+        priority: parseInt(f.get('priority')||'0')
     })}).then(d => {
         if(d.error) alert(d.error);
         else { e.target.reset(); document.getElementById('dlg-upstream').close(); loadUpstreams(); }
@@ -397,6 +401,7 @@ function editUpstream(id) {
     dlg.querySelector('[name=name]').value = u.name;
     dlg.querySelector('[name=base_url]').value = u.base_url;
     dlg.querySelector('[name=api_key]').value = '';
+    dlg.querySelector('[name=proxy_url]').value = u.proxy_url||'';
     dlg.querySelector('[name=priority]').value = u.priority;
     dlg.showModal();
 }
@@ -405,7 +410,7 @@ function submitEditUpstream(e) {
     e.preventDefault();
     const f = new FormData(e.target);
     const id = f.get('id');
-    const body = {name: f.get('name'), base_url: f.get('base_url'), priority: parseInt(f.get('priority')||'0')};
+    const body = {name: f.get('name'), base_url: f.get('base_url'), proxy_url: f.get('proxy_url')||'', priority: parseInt(f.get('priority')||'0')};
     const key = f.get('api_key');
     if (key) body.api_key = key;
     api('/upstreams/'+id, {method:'PUT', body: JSON.stringify(body)}).then(d => {
@@ -422,6 +427,26 @@ function deleteUpstream(id) {
 function toggleUpstream(id, enabled) {
     api('/upstreams/'+id, {method:'PUT', body: JSON.stringify({enabled:enabled})}).then(d => {
         if(d.error) alert(d.error); else loadUpstreams();
+    });
+}
+
+function testProxy(e, id) {
+    const btn = e.target;
+    const origText = btn.textContent;
+    btn.textContent = '测试中...';
+    btn.disabled = true;
+    api('/upstreams/'+id+'/test-proxy', {method:'POST'}).then(d => {
+        btn.textContent = origText;
+        btn.disabled = false;
+        if (d.success) {
+            alert('✅ 连接成功\n状态码: '+d.status_code+'\n延迟: '+d.latency_ms+'ms');
+        } else {
+            alert('❌ 连接失败\n'+(d.error||'未知错误')+'\n延迟: '+(d.latency_ms||0)+'ms');
+        }
+    }).catch(e => {
+        btn.textContent = origText;
+        btn.disabled = false;
+        alert('请求失败: '+e.message);
     });
 }
 
