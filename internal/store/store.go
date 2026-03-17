@@ -201,8 +201,8 @@ func (s *Store) CreateKey(name string, rpmLimit int) (plaintext string, key *Dow
 		return "", nil, fmt.Errorf("generate key bytes: %w", err)
 	}
 
-	plaintext = "dsk_" + hex.EncodeToString(raw)
-	prefix := plaintext[:len("dsk_")+8] // "dsk_" + first 8 hex chars
+	plaintext = "sk-" + hex.EncodeToString(raw)
+	prefix := plaintext[:len("sk-")+8] // "sk-" + first 8 hex chars
 
 	hashBytes := sha256.Sum256([]byte(plaintext))
 	keyHash := hex.EncodeToString(hashBytes[:])
