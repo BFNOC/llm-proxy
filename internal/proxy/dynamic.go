@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -35,6 +37,10 @@ var sensitiveUpstreamHeaders = map[string]bool{
 	"Www-Authenticate":    true,
 	"X-Request-Id":        true,
 	"X-Amzn-Requestid":    true,
+	// new-api / one-api 特有的响应头，会暴露上游平台版本和内部请求 ID
+	"X-Oneapi-Request-Id": true,
+	"X-New-Api-Version":   true,
+	"X-Openai-Request-Id": true,
 }
 
 // untrustedRequestHeaders are client-provided headers that should be stripped
@@ -267,6 +273,27 @@ func (dp *DynamicProxy) forwardResponse(w http.ResponseWriter, resp *http.Respon
 	// WriteHeader and will be read then deleted by the audit middleware
 	// wrapper before the response reaches the client.
 	w.Header().Set("X-Upstream-Name", upstreamName)
+
+	// 对非 2xx 错误响应体做脱敏：缓冲整个 body，执行正则替换后再写回客户端。
+	// 这样可以隐藏上游令牌标识、请求 ID、额度数字等内部信息。
+	// 正常 2xx 响应（含流式 SSE）仍走下方的流式转发路径，不受影响。
+	if resp.StatusCode >= 400 {
+		errBody, err := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodySize))
+		// 排空剩余未读内容，确保 HTTP 连接可被 Transport 复用。
+		io.Copy(io.Discard, resp.Body) //nolint:errcheck
+		if err != nil {
+			slog.Warn("proxy: failed to read error response body for sanitization",
+				"upstream", upstreamName, "error", err)
+			w.WriteHeader(resp.StatusCode)
+			fmt.Fprintf(w, `{"error":{"message":"upstream error","type":"proxy_error"}}`) //nolint:errcheck
+			return
+		}
+		sanitized := SanitizeErrorBody(errBody)
+		w.Header().Set("Content-Length", strconv.Itoa(len(sanitized)))
+		w.WriteHeader(resp.StatusCode)
+		w.Write(sanitized) //nolint:errcheck
+		return
+	}
 
 	w.WriteHeader(resp.StatusCode)
 
