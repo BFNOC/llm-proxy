@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -507,6 +508,25 @@ func (s *Store) DeleteModelWhitelist(id int64) error {
 		return fmt.Errorf("model whitelist entry %d not found", id)
 	}
 	return nil
+}
+
+// BatchDeleteModelWhitelist 批量删除白名单条目。
+func (s *Store) BatchDeleteModelWhitelist(ids []int64) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	placeholders := make([]string, len(ids))
+	args := make([]interface{}, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	query := `DELETE FROM model_whitelist WHERE id IN (` + strings.Join(placeholders, ",") + `)`
+	res, err := s.db.Exec(query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("batch delete model whitelist: %w", err)
+	}
+	return res.RowsAffected()
 }
 
 // ---------------------------------------------------------------------------

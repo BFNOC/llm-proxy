@@ -68,7 +68,8 @@ help:
 	@echo ""
 	@echo "$(GREEN)Building:$(NC)"
 	@echo "  build          - Build the proxy binary"
-	@echo "  build-all      - Build the proxy binary"
+	@echo "  build-linux    - Cross-compile for Linux amd64"
+	@echo "  build-all      - Build all binaries (native + linux)"
 	@echo "  clean          - Clean build artifacts"
 	@echo "  install        - Install dependencies"
 	@echo ""
@@ -115,9 +116,17 @@ build:
 	@go build -ldflags="-X main.Version=$(GIT_COMMIT) -X main.BuildTime=$(BUILD_TIME)" -o $(BINARY_PATH) $(MAIN_PATH)
 	@echo "$(GREEN)✓ Build completed: $(BINARY_PATH)$(NC)"
 
+# Cross-compile for Linux amd64
+.PHONY: build-linux
+build-linux:
+	@echo "$(BLUE)Cross-compiling $(BINARY_NAME) for Linux amd64...$(NC)"
+	@mkdir -p bin
+	@CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-X main.Version=$(GIT_COMMIT) -X main.BuildTime=$(BUILD_TIME)" -o ./bin/$(BINARY_NAME)-linux-amd64 $(MAIN_PATH)
+	@echo "$(GREEN)✓ Linux amd64 build completed: ./bin/$(BINARY_NAME)-linux-amd64$(NC)"
+
 # Build all binaries
 .PHONY: build-all
-build-all: build
+build-all: build build-linux
 	@echo "$(GREEN)✓ All binaries built successfully$(NC)"
 
 # Clean build artifacts

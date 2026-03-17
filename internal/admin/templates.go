@@ -34,7 +34,7 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
         .auth-card input:focus { outline: none; border-color: var(--accent); }
 
         /* Buttons */
-        .btn { display: inline-flex; align-items: center; gap: 6px; padding: 10px 20px; border: none; border-radius: var(--radius-sm); cursor: pointer; font-size: 0.875rem; font-weight: 500; transition: all 0.2s; font-family: inherit; }
+        .btn { display: inline-flex; align-items: center; gap: 6px; padding: 10px 20px; border: none; border-radius: var(--radius-sm); cursor: pointer; font-size: 0.875rem; font-weight: 500; transition: all 0.2s; font-family: inherit; white-space: nowrap; }
         .btn-primary { background: var(--accent); color: #fff; }
         .btn-primary:hover { background: var(--accent-hover); transform: translateY(-1px); }
         .btn-sm { padding: 6px 12px; font-size: 0.8rem; }
@@ -47,7 +47,7 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
 
         /* Tabs */
         .tab-nav { display: flex; gap: 4px; margin-bottom: 24px; background: var(--bg-card); border-radius: var(--radius); padding: 4px; border: 1px solid var(--border); }
-        .tab-nav button { flex: 1; padding: 10px 16px; background: transparent; border: none; color: var(--text-dim); cursor: pointer; border-radius: var(--radius-sm); font-size: 0.875rem; font-weight: 500; transition: all 0.2s; font-family: inherit; }
+        .tab-nav button { flex: 1; padding: 10px 16px; background: transparent; border: none; color: var(--text-dim); cursor: pointer; border-radius: var(--radius-sm); font-size: 0.875rem; font-weight: 500; transition: all 0.2s; font-family: inherit; white-space: nowrap; }
         .tab-nav button.active { background: var(--accent); color: #fff; }
         .tab-nav button:hover:not(.active) { background: var(--bg-hover); color: var(--text); }
         .tab-content { display: none; animation: fadeIn 0.3s ease; }
@@ -80,7 +80,7 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
         .form-group label { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-dim); }
         input, select { width: 100%; padding: 10px 14px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-size: 0.875rem; font-family: inherit; transition: border-color 0.2s; }
         input:focus, select:focus { outline: none; border-color: var(--accent); }
-        code { background: var(--bg); padding: 2px 8px; border-radius: 4px; font-size: 0.85em; }
+        code { background: var(--bg); padding: 2px 8px; border-radius: 4px; font-size: 0.85em; word-break: break-all; }
 
         /* Key display */
         .key-display { font-family: 'SF Mono', 'JetBrains Mono', monospace; background: var(--bg); padding: 16px; border-radius: var(--radius-sm); word-break: break-all; border: 1px solid var(--accent); margin-top: 8px; font-size: 0.9rem; }
@@ -114,6 +114,7 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
             .tab-nav { flex-wrap: wrap; }
             .form-grid { grid-template-columns: 1fr; }
             .container { padding: 16px; }
+            .hide-on-mobile { display: none !important; }
         }
     </style>
 </head>
@@ -151,7 +152,7 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
                     <h2>上游服务商</h2>
                     <button class="btn btn-primary btn-sm" onclick="document.getElementById('dlg-upstream').showModal()">+ 添加上游</button>
                 </div>
-                <table><thead><tr><th>ID</th><th>名称</th><th>地址</th><th>代理</th><th>优先级</th><th>状态</th><th>操作</th></tr></thead>
+                <table><thead><tr><th class="hide-on-mobile">ID</th><th>名称</th><th>地址</th><th class="hide-on-mobile">代理</th><th class="hide-on-mobile">优先级</th><th>状态</th><th>操作</th></tr></thead>
                 <tbody id="upstreams-table"></tbody></table>
             </div>
         </div>
@@ -169,7 +170,7 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
                         <div class="key-display" id="new-key-value"></div>
                     </div>
                 </div>
-                <table><thead><tr><th>ID</th><th>前缀</th><th>名称</th><th>RPM</th><th>状态</th><th>绑定上游</th><th>操作</th></tr></thead>
+                <table><thead><tr><th class="hide-on-mobile">ID</th><th class="hide-on-mobile">前缀</th><th>名称</th><th>RPM</th><th>状态</th><th class="hide-on-mobile">绑定上游</th><th>操作</th></tr></thead>
                 <tbody id="keys-table"></tbody></table>
             </div>
         </div>
@@ -179,13 +180,14 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
             <div class="card">
                 <div class="card-header">
                     <h2>模型白名单</h2>
+                    <button class="btn btn-danger btn-sm" id="btn-batch-delete-models" style="display:none" onclick="batchDeleteModelPatterns()">批量删除</button>
                 </div>
                 <p style="color:var(--text-dim);font-size:0.85rem;margin-bottom:16px;">配置允许的模型（为空则不过滤）。支持 <code>*</code> 通配符（如 <code>claude-sonnet*</code>），不含通配符时精确匹配。</p>
                 <form onsubmit="addModelPattern(event)" class="form-grid narrow" style="margin-bottom:20px;">
                     <div class="form-group"><input name="pattern" placeholder="如: claude-sonnet*" required></div>
                     <button type="submit" class="btn btn-primary btn-sm">添加</button>
                 </form>
-                <table><thead><tr><th>ID</th><th>模式</th><th>添加时间</th><th>操作</th></tr></thead>
+                <table><thead><tr><th style="width:32px"><input type="checkbox" id="model-select-all" onchange="toggleAllModelCheckboxes(this.checked)"></th><th class="hide-on-mobile">ID</th><th>模式</th><th class="hide-on-mobile">添加时间</th><th>操作</th></tr></thead>
                 <tbody id="models-table"></tbody></table>
             </div>
         </div>
@@ -202,7 +204,7 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
                     <button type="submit" class="btn btn-primary btn-sm" style="align-self:end;">查询</button>
                 </form>
                 <div style="overflow-x:auto;">
-                <table><thead><tr><th>ID</th><th>密钥</th><th>上游</th><th>IP</th><th>风格</th><th>路径</th><th>状态码</th><th>延迟</th><th>时间</th></tr></thead>
+                <table><thead><tr><th class="hide-on-mobile">ID</th><th>密钥</th><th>上游</th><th class="hide-on-mobile">IP</th><th class="hide-on-mobile">风格</th><th class="hide-on-mobile">路径</th><th>状态码</th><th class="hide-on-mobile">延迟</th><th>时间</th></tr></thead>
                 <tbody id="logs-table"></tbody></table>
                 </div>
             </div>
@@ -217,7 +219,7 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
                 </div>
                 <div id="status-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-bottom:20px;"></div>
                 <h3 style="font-size:0.95rem;margin-bottom:12px;">健康上游</h3>
-                <table><thead><tr><th>ID</th><th>名称</th><th>地址</th></tr></thead>
+                <table><thead><tr><th class="hide-on-mobile">ID</th><th>名称</th><th>地址</th></tr></thead>
                 <tbody id="status-upstreams"></tbody></table>
             </div>
         </div>
@@ -368,7 +370,7 @@ function loadUpstreams() {
             return;
         }
         tbody.innerHTML = allUpstreams.map(u =>
-            '<tr><td>'+u.id+'</td><td>'+esc(u.name)+'</td><td><code>'+esc(u.base_url)+'</code></td><td>'+(u.proxy_url?'<code>'+esc(u.proxy_url)+'</code>':'<span class="badge badge-green">环境代理</span>')+'</td><td>'+u.priority+'</td><td>'+
+            '<tr><td class="hide-on-mobile">'+u.id+'</td><td>'+esc(u.name)+'</td><td><code>'+esc(u.base_url)+'</code></td><td class="hide-on-mobile">'+(u.proxy_url?'<code>'+esc(u.proxy_url)+'</code>':'<span class="badge badge-green">环境代理</span>')+'</td><td class="hide-on-mobile">'+u.priority+'</td><td>'+
             (u.enabled?'<span class="badge badge-green">启用</span>':'<span class="badge badge-red">禁用</span>')+
             '</td><td class="actions">'+
             '<button class="btn btn-ghost btn-sm" onclick="testProxy(event,'+u.id+')">测试</button> '+
@@ -467,9 +469,9 @@ function loadKeys() {
                 const names = bound.map(uid => { const u = allUpstreams.find(x=>x.id===uid); return u ? esc(u.name) : uid; });
                 bindText = names.join(', ');
             }
-            return '<tr><td>'+k.id+'</td><td><code>'+esc(k.key_prefix)+'...</code></td><td>'+esc(k.name)+'</td><td>'+(k.rpm_limit||'不限')+'</td><td>'+
+            return '<tr><td class="hide-on-mobile">'+k.id+'</td><td class="hide-on-mobile"><code>'+esc(k.key_prefix)+'...</code></td><td>'+esc(k.name)+'</td><td>'+(k.rpm_limit||'不限')+'</td><td>'+
             (k.enabled?'<span class="badge badge-green">启用</span>':'<span class="badge badge-red">禁用</span>')+
-            '</td><td>'+bindText+'</td><td class="actions">'+
+            '</td><td class="hide-on-mobile">'+bindText+'</td><td class="actions">'+
             '<button class="btn btn-ghost btn-sm" onclick="openBindingDialog('+k.id+')">绑定</button> '+
             '<button class="btn btn-ghost btn-sm" onclick="editKey('+k.id+')">编辑</button> '+
             '<button class="btn btn-success btn-sm" onclick="toggleKey('+k.id+','+(!k.enabled)+')">切换</button> '+
@@ -564,7 +566,7 @@ function loadLogs(e) {
             return;
         }
         tbody.innerHTML = (data||[]).map(l =>
-            '<tr><td>'+l.ID+'</td><td>'+l.DownstreamKeyID+'</td><td>'+esc(l.UpstreamName||'-')+'</td><td>'+esc(l.ClientIP||'-')+'</td><td>'+esc(l.ProviderStyle)+'</td><td>'+esc(l.Path)+'</td><td><span class="badge '+(l.StatusCode<400?'badge-green':'badge-red')+'">'+l.StatusCode+'</span></td><td>'+l.LatencyMs+'ms</td><td>'+fmtTime(l.CreatedAt)+'</td></tr>'
+            '<tr><td class="hide-on-mobile">'+l.ID+'</td><td>'+l.DownstreamKeyID+'</td><td>'+esc(l.UpstreamName||'-')+'</td><td class="hide-on-mobile">'+esc(l.ClientIP||'-')+'</td><td class="hide-on-mobile">'+esc(l.ProviderStyle)+'</td><td class="hide-on-mobile">'+esc(l.Path)+'</td><td><span class="badge '+(l.StatusCode<400?'badge-green':'badge-red')+'">'+l.StatusCode+'</span></td><td class="hide-on-mobile">'+l.LatencyMs+'ms</td><td>'+fmtTime(l.CreatedAt)+'</td></tr>'
         ).join('');
     });
 }
@@ -573,15 +575,36 @@ function loadLogs(e) {
 function loadModelWhitelist() {
     api('/models/whitelist').then(data => {
         const tbody = document.getElementById('models-table');
+        const selAll = document.getElementById('model-select-all');
+        const batchBtn = document.getElementById('btn-batch-delete-models');
+        if (selAll) selAll.checked = false;
+        if (batchBtn) batchBtn.style.display = 'none';
         if (!data || data.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="4" class="empty-state">未配置白名单，所有模型均放行</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="5" class="empty-state">未配置白名单，所有模型均放行</td></tr>';
             return;
         }
         tbody.innerHTML = data.map(e =>
-            '<tr><td>'+e.ID+'</td><td><code>'+esc(e.Pattern)+'</code></td><td>'+fmtTime(e.CreatedAt)+'</td><td>'+
+            '<tr><td><input type="checkbox" class="model-cb" value="'+e.ID+'" onchange="updateModelBatchBtn()"></td><td class="hide-on-mobile">'+e.ID+'</td><td><code>'+esc(e.Pattern)+'</code></td><td class="hide-on-mobile">'+fmtTime(e.CreatedAt)+'</td><td>'+
             '<button class="btn btn-danger btn-sm" onclick="deleteModelPattern('+e.ID+')">删除</button></td></tr>'
         ).join('');
     });
+}
+
+function toggleAllModelCheckboxes(checked) {
+    document.querySelectorAll('.model-cb').forEach(cb => cb.checked = checked);
+    updateModelBatchBtn();
+}
+
+function updateModelBatchBtn() {
+    const checked = document.querySelectorAll('.model-cb:checked').length;
+    const btn = document.getElementById('btn-batch-delete-models');
+    if (btn) {
+        btn.style.display = checked > 0 ? 'inline-flex' : 'none';
+        btn.textContent = '批量删除 (' + checked + ')';
+    }
+    const selAll = document.getElementById('model-select-all');
+    const total = document.querySelectorAll('.model-cb').length;
+    if (selAll) selAll.checked = total > 0 && checked === total;
 }
 
 function addModelPattern(e) {
@@ -603,6 +626,16 @@ function deleteModelPattern(id) {
     });
 }
 
+function batchDeleteModelPatterns() {
+    const ids = Array.from(document.querySelectorAll('.model-cb:checked')).map(cb => parseInt(cb.value));
+    if (ids.length === 0) return;
+    if (!confirm('确认删除选中的 ' + ids.length + ' 个模式？')) return;
+    api('/models/whitelist/batch', {method:'DELETE', body: JSON.stringify({ids: ids})}).then(d => {
+        if(d.error) alert(d.error);
+        else loadModelWhitelist();
+    });
+}
+
 // --- Status ---
 function loadStatus() {
     api('/status').then(d => {
@@ -619,7 +652,7 @@ function loadStatus() {
         if (ups.length === 0) {
             tbody.innerHTML = '<tr><td colspan="3" class="empty-state">暂无健康上游</td></tr>';
         } else {
-            tbody.innerHTML = ups.map(u => '<tr><td>'+u.id+'</td><td>'+esc(u.name)+'</td><td><code>'+esc(u.url)+'</code></td></tr>').join('');
+            tbody.innerHTML = ups.map(u => '<tr><td class="hide-on-mobile">'+u.id+'</td><td>'+esc(u.name)+'</td><td><code>'+esc(u.url)+'</code></td></tr>').join('');
         }
     });
 }
