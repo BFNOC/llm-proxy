@@ -8,7 +8,7 @@
 
 - **透明代理**: 统一 `/v1/...` 端点，自动检测 OpenAI / Anthropic 请求风格
 - **动态上游**: 管理多个上游服务商，按优先级自动探活和故障切换
-- **密钥管理**: 生成下游 API Key（`dsk_` 前缀），SHA-256 哈希存储，明文仅返回一次
+- **密钥管理**: 生成下游 API Key（`sk-` 前缀），SHA-256 哈希存储，明文仅返回一次
 - **RPM 限流**: 每个密钥独立的滑动窗口请求频率限制
 - **审计日志**: 异步批量写入 SQLite，不阻塞代理请求
 - **管理面板**: 内置中文 Web 管理界面 + JSON REST API
@@ -59,7 +59,7 @@ curl -X POST http://localhost:9002/admin/api/keys \
   -H "Authorization: Bearer my-secret-token" \
   -H "Content-Type: application/json" \
   -d '{"name":"user-1","rpm_limit":60}'
-# 返回 {"id":1,"key":"dsk_a1b2c3...","name":"user-1","rpm_limit":60}
+# 返回 {"id":1,"key":"sk-a1b2c3...","name":"user-1","rpm_limit":60}
 # ⚠️ 明文密钥仅显示一次，请立即保存
 ```
 
@@ -68,13 +68,13 @@ curl -X POST http://localhost:9002/admin/api/keys \
 ```bash
 # OpenAI 风格
 curl http://localhost:9002/v1/chat/completions \
-  -H "Authorization: Bearer dsk_a1b2c3..." \
+  -H "Authorization: Bearer sk-a1b2c3..." \
   -H "Content-Type: application/json" \
   -d '{"model":"gpt-4o","messages":[{"role":"user","content":"你好"}]}'
 
 # Anthropic 风格
 curl http://localhost:9002/v1/messages \
-  -H "x-api-key: dsk_a1b2c3..." \
+  -H "x-api-key: sk-a1b2c3..." \
   -H "anthropic-version: 2023-06-01" \
   -H "Content-Type: application/json" \
   -d '{"model":"claude-sonnet-4-20250514","messages":[{"role":"user","content":"你好"}]}'
@@ -83,7 +83,7 @@ curl http://localhost:9002/v1/messages \
 ## 架构
 
 ```
-客户端请求 (Bearer dsk_xxx 或 x-api-key: dsk_xxx)
+客户端请求 (Bearer sk-xxx 或 x-api-key: sk-xxx)
     │
     ▼
  CORSMiddleware            ← 仅 /v1/ 路由

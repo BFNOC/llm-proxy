@@ -252,9 +252,9 @@ func TestKey_Create(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, dk)
 
-	// "dsk_" prefix + 64 hex chars (32 bytes) = 68 total
-	assert.True(t, strings.HasPrefix(plaintext, "dsk_"), "key must start with dsk_")
-	assert.Equal(t, 68, len(plaintext), "key must be 68 chars total")
+	// "sk-" prefix + 64 hex chars (32 bytes) = 67 total
+	assert.True(t, strings.HasPrefix(plaintext, "sk-"), "key must start with sk-")
+	assert.Equal(t, 67, len(plaintext), "key must be 67 chars total")
 
 	assert.Positive(t, dk.ID)
 	assert.Equal(t, "my-key", dk.Name)
