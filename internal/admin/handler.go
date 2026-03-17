@@ -78,6 +78,7 @@ func (h *AdminHandler) RegisterRoutes(r *mux.Router) {
 	// Model whitelist
 	api.HandleFunc("/models/whitelist", h.listModelWhitelist).Methods("GET")
 	api.HandleFunc("/models/whitelist", h.addModelWhitelist).Methods("POST")
+	api.HandleFunc("/models/whitelist/batch", h.batchDeleteModelWhitelist).Methods("DELETE")
 	api.HandleFunc("/models/whitelist/{id}", h.deleteModelWhitelist).Methods("DELETE")
 
 	// 绑定接口拆成“全量查看”“单 Key 查询”“全量覆盖更新”三类，
@@ -531,6 +532,32 @@ func (h *AdminHandler) deleteModelWhitelist(w http.ResponseWriter, r *http.Reque
 		h.modelFilter.Reload()
 	}
 	jsonOK(w, map[string]string{"status": "deleted"})
+}
+
+// batchDeleteModelWhitelist 批量删除白名单条目。
+func (h *AdminHandler) batchDeleteModelWhitelist(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		IDs []int64 `json:"ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if len(req.IDs) == 0 {
+		jsonError(w, http.StatusBadRequest, "ids is required")
+		return
+	}
+	deleted, err := h.store.BatchDeleteModelWhitelist(req.IDs)
+	if err != nil {
+		slog.Error("admin: store error", "error", err)
+		jsonError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	slog.Info("admin: batch deleted model whitelist patterns", "ids", req.IDs, "deleted", deleted)
+	if h.modelFilter != nil {
+		h.modelFilter.Reload()
+	}
+	jsonOK(w, map[string]interface{}{"status": "deleted", "deleted": deleted})
 }
 
 // --- Key-Upstream Bindings ---
