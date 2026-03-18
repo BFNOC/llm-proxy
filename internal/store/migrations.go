@@ -109,6 +109,22 @@ CREATE INDEX IF NOT EXISTS idx_key_upstream_bindings_key ON key_upstream_binding
 ALTER TABLE upstream_providers ADD COLUMN proxy_url TEXT NOT NULL DEFAULT '';
 `,
 	},
+	{
+		// v8: 为每个上游配置支持的模型模式（glob），实现按 model 字段路由。
+		// 没有配置任何模式的上游视为"支持所有模型"（向后兼容）。
+		// 外键级联删除保证删除上游时自动清理关联模式。
+		version: 8,
+		up: `
+CREATE TABLE IF NOT EXISTS upstream_model_patterns (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    upstream_id INTEGER NOT NULL REFERENCES upstream_providers(id) ON DELETE CASCADE,
+    pattern     TEXT NOT NULL,
+    created_at  DATETIME,
+    UNIQUE(upstream_id, pattern)
+);
+CREATE INDEX IF NOT EXISTS idx_upstream_model_patterns_upstream ON upstream_model_patterns (upstream_id);
+`,
+	},
 }
 
 // RunMigrations applies all pending schema migrations in order.

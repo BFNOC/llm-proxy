@@ -58,7 +58,7 @@ func (h *CustomPrettyHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
 func (h *CustomPrettyHandler) WithGroup(_ string) slog.Handler      { return h }
 
 const (
-	version     = "2.0.0"
+	version     = "2.1.0"
 	defaultPort = "9002"
 )
 

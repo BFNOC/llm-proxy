@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -162,3 +163,209 @@ func TestDynamicProxy_NoBinding_UsesAllUpstreams(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, rec.Code, "should use all upstreams when no binding")
 }
+
+// ---------------------------------------------------------------------------
+// extractModelFromBody
+// ---------------------------------------------------------------------------
+
+func TestExtractModelFromBody_ValidJSON(t *testing.T) {
+	body := []byte(`{"model":"claude-sonnet-4-20250514","messages":[]}`)
+	model, isJSON := extractModelFromBody(body)
+	assert.True(t, isJSON)
+	assert.Equal(t, "claude-sonnet-4-20250514", model)
+}
+
+func TestExtractModelFromBody_EmptyBody(t *testing.T) {
+	model, isJSON := extractModelFromBody(nil)
+	assert.False(t, isJSON)
+	assert.Equal(t, "", model)
+
+	model, isJSON = extractModelFromBody([]byte{})
+	assert.False(t, isJSON)
+	assert.Equal(t, "", model)
+}
+
+func TestExtractModelFromBody_NonJSON(t *testing.T) {
+	model, isJSON := extractModelFromBody([]byte("not json"))
+	assert.False(t, isJSON, "non-JSON body should return isJSON=false")
+	assert.Equal(t, "", model)
+}
+
+func TestExtractModelFromBody_NoModelKey(t *testing.T) {
+	model, isJSON := extractModelFromBody([]byte(`{"prompt":"hello"}`))
+	assert.True(t, isJSON, "valid JSON should return isJSON=true")
+	assert.Equal(t, "", model, "missing model key should return empty string")
+}
+
+func TestExtractModelFromBody_ModelNull(t *testing.T) {
+	model, isJSON := extractModelFromBody([]byte(`{"model":null}`))
+	assert.True(t, isJSON, "JSON with null model should be valid JSON")
+	assert.Equal(t, "", model, "null model should return empty string")
+}
+
+func TestExtractModelFromBody_ModelNumber(t *testing.T) {
+	model, isJSON := extractModelFromBody([]byte(`{"model":123}`))
+	assert.True(t, isJSON, "JSON with numeric model should be valid JSON")
+	assert.Equal(t, "", model, "numeric model should return empty string")
+}
+
+func TestExtractModelFromBody_ArrayBody(t *testing.T) {
+	model, isJSON := extractModelFromBody([]byte(`[1,2,3]`))
+	assert.False(t, isJSON, "JSON array can't unmarshal to struct, treated as non-JSON")
+	assert.Equal(t, "", model)
+}
+
+// ---------------------------------------------------------------------------
+// filterUpstreamsByModel
+// ---------------------------------------------------------------------------
+
+func makeUpstreamWithPatterns(id int64, name string, patterns []string) *ActiveUpstream {
+	u, _ := url.Parse("https://" + name + ".example.com")
+	return &ActiveUpstream{ID: id, BaseURL: u, APIKey: "key", Name: name, ModelPatterns: patterns}
+}
+
+func TestFilterUpstreamsByModel_MatchesPattern(t *testing.T) {
+	all := []*ActiveUpstream{
+		makeUpstreamWithPatterns(1, "claude-provider", []string{"claude-*"}),
+		makeUpstreamWithPatterns(2, "gpt-provider", []string{"gpt-*"}),
+	}
+	result := filterUpstreamsByModel(all, "claude-sonnet-4-20250514")
+	require.Len(t, result, 1)
+	assert.Equal(t, int64(1), result[0].ID)
+}
+
+func TestFilterUpstreamsByModel_NoMatch(t *testing.T) {
+	all := []*ActiveUpstream{
+		makeUpstreamWithPatterns(1, "claude-only", []string{"claude-*"}),
+	}
+	result := filterUpstreamsByModel(all, "gpt-4o")
+	assert.Empty(t, result)
+}
+
+func TestFilterUpstreamsByModel_NoPatternsAcceptsAll(t *testing.T) {
+	all := []*ActiveUpstream{
+		makeUpstreamWithPatterns(1, "all-models", nil),
+		makeUpstreamWithPatterns(2, "claude-only", []string{"claude-*"}),
+	}
+	result := filterUpstreamsByModel(all, "gpt-4o")
+	require.Len(t, result, 1, "only the no-pattern upstream should match")
+	assert.Equal(t, int64(1), result[0].ID)
+}
+
+func TestFilterUpstreamsByModel_MixedUpstreams(t *testing.T) {
+	all := []*ActiveUpstream{
+		makeUpstreamWithPatterns(1, "claude", []string{"claude-*"}),
+		makeUpstreamWithPatterns(2, "gpt", []string{"gpt-*", "o1-*"}),
+		makeUpstreamWithPatterns(3, "wildcard", nil),
+	}
+	// claude model should match upstream 1 and 3
+	result := filterUpstreamsByModel(all, "claude-3-opus")
+	require.Len(t, result, 2)
+	assert.Equal(t, int64(1), result[0].ID)
+	assert.Equal(t, int64(3), result[1].ID)
+}
+
+func TestFilterUpstreamsByModel_MultiplePatterns(t *testing.T) {
+	all := []*ActiveUpstream{
+		makeUpstreamWithPatterns(1, "multi", []string{"gpt-*", "o1-*"}),
+	}
+	assert.Len(t, filterUpstreamsByModel(all, "gpt-4o"), 1)
+	assert.Len(t, filterUpstreamsByModel(all, "o1-mini"), 1)
+	assert.Empty(t, filterUpstreamsByModel(all, "claude-3"))
+}
+
+// ---------------------------------------------------------------------------
+// DynamicProxy model routing integration
+// ---------------------------------------------------------------------------
+
+func TestDynamicProxy_ModelRouting_Returns422WhenNoMatch(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	dp := NewDynamicProxy()
+	parsed, _ := url.Parse(upstream.URL)
+	dp.SetAllUpstreams([]*ActiveUpstream{
+		{ID: 1, BaseURL: parsed, APIKey: "k", Name: "claude-only", ModelPatterns: []string{"claude-*"}},
+	})
+
+	body := []byte(`{"model":"gpt-4o","messages":[]}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer test-key")
+	rec := httptest.NewRecorder()
+
+	dp.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+	var errResp map[string]interface{}
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&errResp))
+	errObj := errResp["error"].(map[string]interface{})
+	assert.Contains(t, errObj["message"], "gpt-4o")
+	assert.Equal(t, "model_not_available", errObj["code"])
+}
+
+func TestDynamicProxy_ModelRouting_RoutesToMatchingUpstream(t *testing.T) {
+	called := ""
+	claudeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = "claude"
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"ok":true}`)) //nolint:errcheck
+	}))
+	defer claudeServer.Close()
+
+	gptServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = "gpt"
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"ok":true}`)) //nolint:errcheck
+	}))
+	defer gptServer.Close()
+
+	dp := NewDynamicProxy()
+	claudeURL, _ := url.Parse(claudeServer.URL)
+	gptURL, _ := url.Parse(gptServer.URL)
+	dp.SetAllUpstreams([]*ActiveUpstream{
+		{ID: 1, BaseURL: claudeURL, APIKey: "k1", Name: "claude-up", ModelPatterns: []string{"claude-*"}},
+		{ID: 2, BaseURL: gptURL, APIKey: "k2", Name: "gpt-up", ModelPatterns: []string{"gpt-*"}},
+	})
+
+	// Request with claude model
+	body := []byte(`{"model":"claude-sonnet-4-20250514"}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer test-key")
+	rec := httptest.NewRecorder()
+
+	dp.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "claude", called)
+}
+
+func TestDynamicProxy_ModelRouting_GETSkipsFilter(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"object":"list","data":[]}`)) //nolint:errcheck
+	}))
+	defer upstream.Close()
+
+	dp := NewDynamicProxy()
+	parsed, _ := url.Parse(upstream.URL)
+	dp.SetAllUpstreams([]*ActiveUpstream{
+		{ID: 1, BaseURL: parsed, APIKey: "k", Name: "up", ModelPatterns: []string{"claude-*"}},
+	})
+
+	// GET /v1/models should NOT be filtered by model patterns
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer test-key")
+	rec := httptest.NewRecorder()
+
+	dp.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code, "GET requests should skip model filtering")
+}
+

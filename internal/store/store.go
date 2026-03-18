@@ -617,3 +617,87 @@ func (s *Store) GetAllKeyBindings() (map[int64][]int64, error) {
 	}
 	return result, rows.Err()
 }
+
+// ---------------------------------------------------------------------------
+// Upstream Model Patterns
+// ---------------------------------------------------------------------------
+
+// SetUpstreamModelPatterns 以全量覆盖方式更新某个上游的模型模式列表。
+// 先删后插放在同一事务中，空切片表示清空模式（该上游接受所有模型）。
+func (s *Store) SetUpstreamModelPatterns(upstreamID int64, patterns []string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+
+	if _, err = tx.Exec(`DELETE FROM upstream_model_patterns WHERE upstream_id = ?`, upstreamID); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("clear existing patterns: %w", err)
+	}
+
+	if len(patterns) > 0 {
+		now := time.Now().UTC()
+		stmt, err := tx.Prepare(`INSERT INTO upstream_model_patterns (upstream_id, pattern, created_at) VALUES (?, ?, ?)`)
+		if err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("prepare pattern insert: %w", err)
+		}
+		defer stmt.Close()
+
+		for _, p := range patterns {
+			if _, err = stmt.Exec(upstreamID, p, now); err != nil {
+				_ = tx.Rollback()
+				return fmt.Errorf("insert pattern (upstream=%d, pattern=%s): %w", upstreamID, p, err)
+			}
+		}
+	}
+
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit patterns: %w", err)
+	}
+	return nil
+}
+
+// GetUpstreamModelPatterns 返回单个上游的模型模式列表。
+// 返回空切片表示"未配置模式，接受所有模型"。
+func (s *Store) GetUpstreamModelPatterns(upstreamID int64) ([]string, error) {
+	rows, err := s.db.Query(
+		`SELECT pattern FROM upstream_model_patterns WHERE upstream_id = ? ORDER BY pattern`,
+		upstreamID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query upstream model patterns: %w", err)
+	}
+	defer rows.Close()
+
+	var patterns []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, fmt.Errorf("scan pattern: %w", err)
+		}
+		patterns = append(patterns, p)
+	}
+	return patterns, rows.Err()
+}
+
+// GetAllUpstreamModelPatterns 一次性加载所有上游的模型模式，供 prober 批量填充。
+func (s *Store) GetAllUpstreamModelPatterns() (map[int64][]string, error) {
+	rows, err := s.db.Query(`SELECT upstream_id, pattern FROM upstream_model_patterns ORDER BY upstream_id, pattern`)
+	if err != nil {
+		return nil, fmt.Errorf("query all upstream model patterns: %w", err)
+	}
+	defer rows.Close()
+
+	result := make(map[int64][]string)
+	for rows.Next() {
+		var upstreamID int64
+		var pattern string
+		if err := rows.Scan(&upstreamID, &pattern); err != nil {
+			return nil, fmt.Errorf("scan model pattern row: %w", err)
+		}
+		result[upstreamID] = append(result[upstreamID], pattern)
+	}
+	return result, rows.Err()
+}
+

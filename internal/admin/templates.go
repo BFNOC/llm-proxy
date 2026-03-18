@@ -34,7 +34,7 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
         .auth-card input:focus { outline: none; border-color: var(--accent); }
 
         /* Buttons */
-        .btn { display: inline-flex; align-items: center; gap: 6px; padding: 10px 20px; border: none; border-radius: var(--radius-sm); cursor: pointer; font-size: 0.875rem; font-weight: 500; transition: all 0.2s; font-family: inherit; white-space: nowrap; }
+        .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 10px 20px; border: 1px solid transparent; border-radius: var(--radius-sm); cursor: pointer; font-size: 0.875rem; font-weight: 500; transition: all 0.2s; font-family: inherit; white-space: nowrap; }
         .btn-primary { background: var(--accent); color: #fff; }
         .btn-primary:hover { background: var(--accent-hover); transform: translateY(-1px); }
         .btn-sm { padding: 6px 12px; font-size: 0.8rem; }
@@ -60,15 +60,16 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
         .card-header h2 { font-size: 1.15rem; font-weight: 600; }
 
         /* Tables */
+        .table-container { overflow-x: auto; -webkit-overflow-scrolling: touch; }
         table { width: 100%; border-collapse: collapse; }
-        thead th { text-align: left; padding: 12px 16px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-dim); border-bottom: 1px solid var(--border); }
+        thead th { text-align: left; padding: 12px 16px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-dim); border-bottom: 1px solid var(--border); white-space: nowrap; }
         tbody td { padding: 12px 16px; font-size: 0.875rem; border-bottom: 1px solid var(--border); vertical-align: middle; }
         tbody tr { transition: background 0.15s; }
         tbody tr:hover { background: var(--bg-hover); }
         tbody tr:last-child td { border-bottom: none; }
 
         /* Badges */
-        .badge { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 0.75rem; font-weight: 600; }
+        .badge { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 0.75rem; font-weight: 600; white-space: nowrap; }
         .badge-green { background: rgba(0,184,148,0.15); color: var(--green); }
         .badge-red { background: rgba(225,112,85,0.15); color: var(--red); }
         .badge-purple { background: rgba(108,92,231,0.15); color: var(--accent); }
@@ -109,12 +110,27 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
         /* Action buttons in table */
         .actions { display: flex; gap: 4px; flex-wrap: wrap; }
 
+        /* Truncate URL */
+        .truncate-url { display: inline-block; max-width: 150px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: middle; }
+
+        /* Model pattern tags */
+        .model-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+        .model-tag { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; background: rgba(108,92,231,0.12); color: var(--accent); border-radius: 4px; font-size: 0.75rem; font-family: 'SF Mono', 'JetBrains Mono', monospace; }
+        .model-tag-all { color: var(--text-dim); font-size: 0.8rem; font-style: italic; }
+
         /* Responsive */
         @media (max-width: 768px) {
-            .tab-nav { flex-wrap: wrap; }
-            .form-grid { grid-template-columns: 1fr; }
-            .container { padding: 16px; }
+            body { padding: 8px; font-size: 0.9rem; }
+            .card { padding: 12px; border-radius: var(--radius-sm); }
             .hide-on-mobile { display: none !important; }
+            .tab-nav { flex-wrap: wrap; }
+            .tab-nav button { flex: 1 1 calc(50% - 4px); justify-content: center; }
+            .form-grid { grid-template-columns: 1fr; }
+            .dialog-actions { flex-direction: column-reverse; }
+            .dialog-actions button { width: 100%; }
+            thead th, tbody td { padding: 10px 4px; font-size: 0.8rem; }
+            .truncate-url { max-width: 90px; }
+            .actions { gap: 6px; }
         }
     </style>
 </head>
@@ -152,8 +168,10 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
                     <h2>上游服务商</h2>
                     <button class="btn btn-primary btn-sm" onclick="document.getElementById('dlg-upstream').showModal()">+ 添加上游</button>
                 </div>
-                <table><thead><tr><th class="hide-on-mobile">ID</th><th>名称</th><th>地址</th><th class="hide-on-mobile">代理</th><th class="hide-on-mobile">优先级</th><th>状态</th><th>操作</th></tr></thead>
+                <div class="table-container">
+                <table><thead><tr><th class="hide-on-mobile">ID</th><th>名称</th><th>地址</th><th class="hide-on-mobile">代理</th><th class="hide-on-mobile">优先级</th><th class="hide-on-mobile">模型模式</th><th>状态</th><th>操作</th></tr></thead>
                 <tbody id="upstreams-table"></tbody></table>
+                </div>
             </div>
         </div>
 
@@ -170,8 +188,10 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
                         <div class="key-display" id="new-key-value"></div>
                     </div>
                 </div>
+                <div class="table-container">
                 <table><thead><tr><th class="hide-on-mobile">ID</th><th class="hide-on-mobile">前缀</th><th>名称</th><th>RPM</th><th>状态</th><th class="hide-on-mobile">绑定上游</th><th>操作</th></tr></thead>
                 <tbody id="keys-table"></tbody></table>
+                </div>
             </div>
         </div>
 
@@ -185,10 +205,12 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
                 <p style="color:var(--text-dim);font-size:0.85rem;margin-bottom:16px;">配置允许的模型（为空则不过滤）。支持 <code>*</code> 通配符（如 <code>claude-sonnet*</code>），不含通配符时精确匹配。</p>
                 <form onsubmit="addModelPattern(event)" class="form-grid narrow" style="margin-bottom:20px;">
                     <div class="form-group"><input name="pattern" placeholder="如: claude-sonnet*" required></div>
-                    <button type="submit" class="btn btn-primary btn-sm">添加</button>
+                    <button type="submit" class="btn btn-primary" style="align-self:end;">添加</button>
                 </form>
+                <div class="table-container">
                 <table><thead><tr><th style="width:32px"><input type="checkbox" id="model-select-all" onchange="toggleAllModelCheckboxes(this.checked)"></th><th class="hide-on-mobile">ID</th><th>模式</th><th class="hide-on-mobile">添加时间</th><th>操作</th></tr></thead>
                 <tbody id="models-table"></tbody></table>
+                </div>
             </div>
         </div>
 
@@ -201,9 +223,9 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
                 <form onsubmit="loadLogs(event)" class="form-grid" style="margin-bottom:20px;">
                     <div class="form-group"><label>密钥 ID</label><input name="key_id" type="number" placeholder="全部"></div>
                     <div class="form-group"><label>条数</label><input name="limit" type="number" value="50"></div>
-                    <button type="submit" class="btn btn-primary btn-sm" style="align-self:end;">查询</button>
+                    <div class="form-group"><label>&nbsp;</label><button type="submit" class="btn btn-primary">查询</button></div>
                 </form>
-                <div style="overflow-x:auto;">
+                <div class="table-container">
                 <table><thead><tr><th class="hide-on-mobile">ID</th><th>密钥</th><th>上游</th><th class="hide-on-mobile">IP</th><th class="hide-on-mobile">风格</th><th class="hide-on-mobile">路径</th><th>状态码</th><th class="hide-on-mobile">延迟</th><th>时间</th></tr></thead>
                 <tbody id="logs-table"></tbody></table>
                 </div>
@@ -219,8 +241,10 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
                 </div>
                 <div id="status-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-bottom:20px;"></div>
                 <h3 style="font-size:0.95rem;margin-bottom:12px;">健康上游</h3>
+                <div class="table-container">
                 <table><thead><tr><th class="hide-on-mobile">ID</th><th>名称</th><th>地址</th></tr></thead>
                 <tbody id="status-upstreams"></tbody></table>
+                </div>
             </div>
         </div>
     </div>
@@ -298,6 +322,22 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
     </div>
 </dialog>
 
+<!-- Model Patterns Dialog -->
+<dialog id="dlg-model-patterns">
+    <h3>配置模型模式</h3>
+    <p style="color:var(--text-dim);font-size:0.85rem;margin-bottom:16px;">配置此上游支持的模型。支持 <code>*</code> 通配符（如 <code>claude-*</code>）。空则接受所有模型。</p>
+    <input type="hidden" id="mp-upstream-id">
+    <div style="display:flex;gap:8px;margin-bottom:16px;">
+        <input id="mp-new-pattern" placeholder="如: claude-*" style="flex:1" onkeydown="if(event.key==='Enter'){event.preventDefault();addModelPatternTag()}">
+        <button type="button" class="btn btn-primary btn-sm" onclick="addModelPatternTag()">添加</button>
+    </div>
+    <div id="mp-tags" class="model-tags" style="min-height:32px;margin-bottom:16px;"></div>
+    <div class="dialog-actions">
+        <button type="button" class="btn btn-ghost" onclick="this.closest('dialog').close()">取消</button>
+        <button type="button" class="btn btn-primary" onclick="saveModelPatterns()">保存</button>
+    </div>
+</dialog>
+
 <script>
 let TOKEN = '';
 // --- Cookie helpers ---
@@ -361,25 +401,33 @@ function showTab(name, btn) {
 
 // --- Upstreams ---
 let allUpstreams = [];
+let allModelPatterns = {}; // upstream_id -> [patterns]
 function loadUpstreams() {
-    return api('/upstreams').then(data => {
+    return Promise.all([api('/upstreams'), api('/upstreams/models')]).then(([data, mp]) => {
         allUpstreams = data || [];
+        allModelPatterns = mp || {};
         const tbody = document.getElementById('upstreams-table');
         if (allUpstreams.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="7" class="empty-state">暂无上游服务</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="8" class="empty-state">暂无上游服务</td></tr>';
             return;
         }
-        tbody.innerHTML = allUpstreams.map(u =>
-            '<tr><td class="hide-on-mobile">'+u.id+'</td><td>'+esc(u.name)+'</td><td><code>'+esc(u.base_url)+'</code></td><td class="hide-on-mobile">'+(u.proxy_url?'<code>'+esc(u.proxy_url)+'</code>':'<span class="badge badge-green">环境代理</span>')+'</td><td class="hide-on-mobile">'+u.priority+'</td><td>'+
+        tbody.innerHTML = allUpstreams.map(u => {
+            const patterns = allModelPatterns[u.id] || [];
+            let modelHtml = '<span class="model-tag-all">*</span>';
+            if (patterns.length > 0) {
+                modelHtml = patterns.map(p => '<span class="model-tag">' + esc(p) + '</span>').join('');
+            }
+            return '<tr><td class="hide-on-mobile">'+u.id+'</td><td>'+esc(u.name)+'</td><td><code class="truncate-url" title="'+esc(u.base_url)+'">'+esc(u.base_url)+'</code></td><td class="hide-on-mobile">'+(u.proxy_url?'<code class="truncate-url" title="'+esc(u.proxy_url)+'">'+esc(u.proxy_url)+'</code>':'<span class="badge badge-green">环境代理</span>')+'</td><td class="hide-on-mobile">'+u.priority+'</td><td class="hide-on-mobile"><div class="model-tags">'+modelHtml+'</div></td><td>'+
             (u.enabled?'<span class="badge badge-green">启用</span>':'<span class="badge badge-red">禁用</span>')+
             '</td><td class="actions">'+
             '<button class="btn btn-ghost btn-sm" onclick="testProxy(event,'+u.id+')">测试</button> '+
             '<button class="btn btn-ghost btn-sm" onclick="checkQuota(event,'+u.id+')">查额</button> '+
+            '<button class="btn btn-ghost btn-sm" onclick="openModelPatternsDialog('+u.id+')">模型</button> '+
             '<button class="btn btn-ghost btn-sm" onclick="toggleUpstream('+u.id+','+(!u.enabled)+')">切换</button> '+
             '<button class="btn btn-ghost btn-sm" onclick="editUpstream('+u.id+')">编辑</button> '+
             '<button class="btn btn-danger btn-sm" onclick="deleteUpstream('+u.id+')">删除</button>'+
-            '</td></tr>'
-        ).join('');
+            '</td></tr>';
+        }).join('');
     });
 }
 
@@ -435,21 +483,56 @@ function toggleUpstream(id, enabled) {
 
 function testProxy(e, id) {
     const btn = e.target;
+    const row = btn.closest('tr');
+    // Eğer已有展开的测试行，则收起
+    const existingRow = document.getElementById('test-row-'+id);
+    if (existingRow) { existingRow.remove(); return; }
+    // 移除其他已展开的测试行
+    document.querySelectorAll('[id^="test-row-"]').forEach(r => r.remove());
+
     const origText = btn.textContent;
     btn.textContent = '测试中...';
     btn.disabled = true;
     api('/upstreams/'+id+'/test-proxy', {method:'POST'}).then(d => {
         btn.textContent = origText;
         btn.disabled = false;
+        const tr = document.createElement('tr');
+        tr.id = 'test-row-'+id;
+        const td = document.createElement('td');
+        td.colSpan = 8;
+        td.style.cssText = 'padding:0;border:none;';
+
         if (d.success) {
-            alert('✅ 连接成功\n状态码: '+d.status_code+'\n延迟: '+d.latency_ms+'ms');
+            let html = '<div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:16px;margin:8px 16px;">';
+            html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">';
+            html += '<span style="color:var(--green);font-weight:600;">✅ 连接成功</span>';
+            html += '<button class="btn btn-ghost btn-sm" onclick="this.closest(\'tr\').remove()" style="padding:2px 8px;">✕</button></div>';
+            html += '<div style="color:var(--text);font-size:0.85rem;margin-top:8px;">状态码: <strong>' + d.status_code + '</strong> &nbsp;|&nbsp; 延迟: <strong>' + d.latency_ms + 'ms</strong></div>';
+            html += '</div>';
+            td.innerHTML = html;
         } else {
-            alert('❌ 连接失败\n'+(d.error||'未知错误')+'\n延迟: '+(d.latency_ms||0)+'ms');
+            let msg = d.error || '未知错误';
+            let html = '<div style="background:rgba(225,112,85,0.08);border:1px solid var(--red);border-radius:var(--radius-sm);padding:16px;margin:8px 16px;">';
+            html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">';
+            html += '<span style="color:var(--red);font-weight:600;">❌ 连接失败</span>';
+            html += '<button class="btn btn-ghost btn-sm" onclick="this.closest(\'tr\').remove()" style="padding:2px 8px;">✕</button></div>';
+            html += '<div style="color:var(--text-dim);font-size:0.85rem;">' + esc(msg) + '</div>';
+            html += '<div style="color:var(--text);font-size:0.85rem;margin-top:8px;">延迟: <strong>' + (d.latency_ms||0) + 'ms</strong></div>';
+            html += '</div>';
+            td.innerHTML = html;
         }
-    }).catch(e => {
+        tr.appendChild(td);
+        row.after(tr);
+    }).catch(err => {
         btn.textContent = origText;
         btn.disabled = false;
-        alert('请求失败: '+e.message);
+        let tr = document.createElement('tr');
+        tr.id = 'test-row-'+id;
+        let td = document.createElement('td');
+        td.colSpan = 8;
+        td.innerHTML = '<div style="background:rgba(225,112,85,0.08);border:1px solid var(--red);border-radius:var(--radius-sm);padding:16px;margin:8px 16px;color:var(--red);">请求失败: '+esc(err.message)+'</div>';
+        tr.appendChild(td);
+        row.after(tr);
     });
 }
 
@@ -471,7 +554,7 @@ function checkQuota(e, id) {
         const tr = document.createElement('tr');
         tr.id = 'quota-row-'+id;
         const td = document.createElement('td');
-        td.colSpan = 7;
+        td.colSpan = 8;
         td.style.cssText = 'padding:0;border:none;';
 
         if (d.success) {
@@ -522,7 +605,7 @@ function checkQuota(e, id) {
         let tr = document.createElement('tr');
         tr.id = 'quota-row-'+id;
         let td = document.createElement('td');
-        td.colSpan = 7;
+        td.colSpan = 8;
         td.innerHTML = '<div style="background:rgba(225,112,85,0.08);border:1px solid var(--red);border-radius:var(--radius-sm);padding:16px;margin:8px 16px;color:var(--red);">请求失败: '+esc(err.message)+'</div>';
         tr.appendChild(td);
         row.after(tr);
@@ -630,6 +713,50 @@ function saveBindings() {
     });
 }
 
+// --- Upstream Model Patterns ---
+let mpCurrentPatterns = [];
+function openModelPatternsDialog(upstreamId) {
+    document.getElementById('mp-upstream-id').value = upstreamId;
+    document.getElementById('mp-new-pattern').value = '';
+    mpCurrentPatterns = (allModelPatterns[upstreamId] || []).slice();
+    renderModelPatternTags();
+    document.getElementById('dlg-model-patterns').showModal();
+}
+
+function renderModelPatternTags() {
+    const container = document.getElementById('mp-tags');
+    if (mpCurrentPatterns.length === 0) {
+        container.innerHTML = '<span class="model-tag-all">无模式（*）</span>';
+        return;
+    }
+    container.innerHTML = mpCurrentPatterns.map((p, i) =>
+        '<span class="model-tag">' + esc(p) + ' <span style="cursor:pointer;margin-left:2px;opacity:0.7" onclick="removeModelPatternTag('+i+')">✕</span></span>'
+    ).join('');
+}
+
+function addModelPatternTag() {
+    const input = document.getElementById('mp-new-pattern');
+    const v = input.value.trim();
+    if (!v) return;
+    if (mpCurrentPatterns.includes(v)) { input.value = ''; return; }
+    mpCurrentPatterns.push(v);
+    input.value = '';
+    renderModelPatternTags();
+}
+
+function removeModelPatternTag(idx) {
+    mpCurrentPatterns.splice(idx, 1);
+    renderModelPatternTags();
+}
+
+function saveModelPatterns() {
+    const id = document.getElementById('mp-upstream-id').value;
+    api('/upstreams/'+id+'/models', {method:'PUT', body: JSON.stringify({patterns: mpCurrentPatterns})}).then(d => {
+        if(d.error) alert(d.error);
+        else { document.getElementById('dlg-model-patterns').close(); loadUpstreams(); }
+    });
+}
+
 // --- Logs ---
 function loadLogs(e) {
     if(e) e.preventDefault();
@@ -729,7 +856,7 @@ function loadStatus() {
         if (ups.length === 0) {
             tbody.innerHTML = '<tr><td colspan="3" class="empty-state">暂无健康上游</td></tr>';
         } else {
-            tbody.innerHTML = ups.map(u => '<tr><td class="hide-on-mobile">'+u.id+'</td><td>'+esc(u.name)+'</td><td><code>'+esc(u.url)+'</code></td></tr>').join('');
+            tbody.innerHTML = ups.map(u => '<tr><td class="hide-on-mobile">'+u.id+'</td><td>'+esc(u.name)+'</td><td><code class="truncate-url" title="'+esc(u.url)+'">'+esc(u.url)+'</code></td></tr>').join('');
         }
     });
 }
