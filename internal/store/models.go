@@ -47,3 +47,13 @@ type ModelWhitelistEntry struct {
 	Pattern   string
 	CreatedAt time.Time
 }
+
+// UpstreamModelPattern 表示某个上游支持的模型 glob 模式。
+// 没有配置任何模式的上游视为支持所有模型（向后兼容）。
+type UpstreamModelPattern struct {
+	ID         int64
+	UpstreamID int64
+	Pattern    string
+	CreatedAt  time.Time
+}
+

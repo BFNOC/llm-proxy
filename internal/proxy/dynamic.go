@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"path"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -78,11 +79,12 @@ func AllowedUpstreamIDsFromContext(ctx context.Context) []int64 {
 // ActiveUpstream 保存当前可用的上游端点信息。
 type ActiveUpstream struct {
 	// ID 对应 upstream_providers 表主键，用于把运行时健康列表和持久化绑定关系做稳定关联。
-	ID       int64
-	BaseURL  *url.URL
-	APIKey   string
-	Name     string
-	ProxyURL string // 可选代理地址，空表示继承环境代理
+	ID            int64
+	BaseURL       *url.URL
+	APIKey        string
+	Name          string
+	ProxyURL      string   // 可选代理地址，空表示继承环境代理
+	ModelPatterns []string // 支持的模型 glob 模式，空表示接受所有模型
 }
 
 // DynamicProxy is a reverse proxy that supports 429-based failover across
@@ -180,6 +182,29 @@ func (dp *DynamicProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusRequestEntityTooLarge)
 		json.NewEncoder(w).Encode(map[string]string{"error": "request body too large (max 32MB)"}) //nolint:errcheck
 		return
+	}
+
+	// 从已缓冲的 body 提取 model 字段，按模型模式过滤上游。
+	// GET 请求（如 /v1/models）不含 model 字段，跳过过滤。
+	// 非 JSON body 也跳过过滤（可能是 multipart 等格式），由上游处理。
+	if r.Method != http.MethodGet {
+		model, isJSON := extractModelFromBody(bodyBytes)
+		if isJSON && model != "" {
+			filtered := filterUpstreamsByModel(upstreams, model)
+			if len(filtered) == 0 {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnprocessableEntity)
+				json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
+					"error": map[string]interface{}{
+						"message": fmt.Sprintf("no upstream available for model: %s", model),
+						"type":    "invalid_request_error",
+						"code":    "model_not_available",
+					},
+				})
+				return
+			}
+			upstreams = filtered
+		}
 	}
 
 	for i, active := range upstreams {
@@ -339,6 +364,52 @@ func filterUpstreams(all []*ActiveUpstream, allowedIDs []int64) []*ActiveUpstrea
 	for _, u := range all {
 		if set[u.ID] {
 			result = append(result, u)
+		}
+	}
+	return result
+}
+
+// extractModelFromBody 从 JSON body 提取顶层 model 字段。
+// 返回值: (model, isJSON)。isJSON 表示 body 是否为合法 JSON。
+// 非 JSON 时 isJSON 为 false，调用方应跳过模型过滤。
+// model 为非字符串类型（null、数字等）时视为无 model（isJSON=true, model=""）。
+func extractModelFromBody(body []byte) (string, bool) {
+	if len(body) == 0 {
+		return "", false
+	}
+	var partial struct {
+		Model json.RawMessage `json:"model"`
+	}
+	if err := json.Unmarshal(body, &partial); err != nil {
+		return "", false // 非 JSON
+	}
+	if partial.Model == nil {
+		return "", true // JSON 但无 model 字段
+	}
+	// 尝试解析为字符串；非字符串（null/数字/对象）时不报错，视为无可用 model
+	var model string
+	if err := json.Unmarshal(partial.Model, &model); err != nil {
+		return "", true // model 存在但非字符串
+	}
+	return model, true
+}
+
+// filterUpstreamsByModel 按模型模式过滤上游列表。
+// 没有配置模型模式的上游视为"支持所有模型"，始终保留。
+// 使用 path.Match（而非 filepath.Match）避免 OS 路径分隔符差异。
+func filterUpstreamsByModel(all []*ActiveUpstream, model string) []*ActiveUpstream {
+	var result []*ActiveUpstream
+	for _, u := range all {
+		if len(u.ModelPatterns) == 0 {
+			// 未配置模式 = 接受所有模型
+			result = append(result, u)
+			continue
+		}
+		for _, p := range u.ModelPatterns {
+			if matched, _ := path.Match(p, model); matched {
+				result = append(result, u)
+				break
+			}
 		}
 	}
 	return result

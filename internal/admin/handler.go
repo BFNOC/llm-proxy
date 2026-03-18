@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -67,6 +68,9 @@ func (h *AdminHandler) RegisterRoutes(r *mux.Router) {
 	api.HandleFunc("/upstreams/{id}", h.deleteUpstream).Methods("DELETE")
 	api.HandleFunc("/upstreams/{id}/test-proxy", h.testUpstreamProxy).Methods("POST")
 	api.HandleFunc("/upstreams/{id}/check-quota", h.checkUpstreamQuota).Methods("POST")
+	api.HandleFunc("/upstreams/models", h.getAllUpstreamModelPatterns).Methods("GET")
+	api.HandleFunc("/upstreams/{id}/models", h.getUpstreamModelPatterns).Methods("GET")
+	api.HandleFunc("/upstreams/{id}/models", h.setUpstreamModelPatterns).Methods("PUT")
 
 	// Keys
 	api.HandleFunc("/keys", h.listKeys).Methods("GET")
@@ -1022,5 +1026,97 @@ func (h *AdminHandler) checkUpstreamQuota(w http.ResponseWriter, r *http.Request
 			"model_limits_enabled": apiResp.Data.ModelLimitsEnabled,
 		},
 	})
+}
+
+// --- Upstream Model Patterns ---
+
+// getAllUpstreamModelPatterns 返回所有上游的模型模式，供管理页批量渲染。
+func (h *AdminHandler) getAllUpstreamModelPatterns(w http.ResponseWriter, r *http.Request) {
+	patterns, err := h.store.GetAllUpstreamModelPatterns()
+	if err != nil {
+		slog.Error("admin: store error", "error", err)
+		jsonError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	jsonOK(w, patterns)
+}
+
+// getUpstreamModelPatterns 返回单个上游的模型模式列表。
+func (h *AdminHandler) getUpstreamModelPatterns(w http.ResponseWriter, r *http.Request) {
+	id, err := parseID(r)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if _, err := h.store.GetUpstream(id); err != nil {
+		jsonError(w, http.StatusNotFound, fmt.Sprintf("upstream %d not found", id))
+		return
+	}
+	patterns, err := h.store.GetUpstreamModelPatterns(id)
+	if err != nil {
+		slog.Error("admin: store error", "error", err)
+		jsonError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if patterns == nil {
+		patterns = []string{}
+	}
+	jsonOK(w, map[string]interface{}{"patterns": patterns})
+}
+
+// setUpstreamModelPatterns 以全量覆盖方式更新上游的模型模式。
+// 写入前做格式校验（path.Match 预检）、trim 空白、去重。
+func (h *AdminHandler) setUpstreamModelPatterns(w http.ResponseWriter, r *http.Request) {
+	id, err := parseID(r)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if _, err := h.store.GetUpstream(id); err != nil {
+		jsonError(w, http.StatusNotFound, fmt.Sprintf("upstream %d not found", id))
+		return
+	}
+	var req struct {
+		Patterns *[]string `json:"patterns"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	// patterns 字段必填，防止 {} 漏传意外清空配置。
+	// 传 {"patterns":[]} 为合法清空操作。
+	if req.Patterns == nil {
+		jsonError(w, http.StatusBadRequest, "missing required field: patterns")
+		return
+	}
+
+	// 校验、trim、去重
+	seen := make(map[string]bool, len(*req.Patterns))
+	var cleaned []string
+	for _, p := range *req.Patterns {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue // 跳过空串
+		}
+		// 用 path.Match 预检 pattern 语法合法性
+		if _, err := path.Match(p, ""); err != nil {
+			jsonError(w, http.StatusBadRequest, fmt.Sprintf("invalid pattern %q: %v", p, err))
+			return
+		}
+		if !seen[p] {
+			seen[p] = true
+			cleaned = append(cleaned, p)
+		}
+	}
+
+	if err := h.store.SetUpstreamModelPatterns(id, cleaned); err != nil {
+		slog.Error("admin: store error", "error", err)
+		jsonError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	// 即时触发 prober 刷新，让模型模式立即生效
+	go h.prober.ProbeNow()
+	slog.Info("admin: updated upstream model patterns", "upstream_id", id, "patterns", cleaned)
+	jsonOK(w, map[string]interface{}{"status": "updated", "patterns": cleaned})
 }
 

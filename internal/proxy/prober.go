@@ -85,7 +85,22 @@ func (p *UpstreamProber) probeOnce() {
 		return enabled[i].Priority < enabled[j].Priority
 	})
 
+	// 批量加载所有上游的模型模式，避免在循环中对每个上游做单独查询。
+	// 加载失败的两种策略：
+	//   - 已有活跃上游（非冷启动）：放弃本轮更新，保持旧快照，避免 fail-open
+	//   - 无活跃上游（冷启动）：降级为空模式（接受所有模型），确保服务能启动
+	allModelPatterns, err := p.store.GetAllUpstreamModelPatterns()
+	if err != nil {
+		if existing := p.proxy.GetAllUpstreams(); len(existing) > 0 {
+			slog.Error("prober: failed to load upstream model patterns, keeping last active list", "error", err)
+			return
+		}
+		slog.Warn("prober: cold start - failed to load model patterns, proceeding without model routing", "error", err)
+		allModelPatterns = make(map[int64][]string)
+	}
+
 	// Probe all enabled upstreams and collect the healthy ones.
+
 	var healthy []*ActiveUpstream
 	for _, u := range enabled {
 		if !p.probeUpstream(u.BaseURL, u.ProxyURL) {
@@ -97,14 +112,15 @@ func (p *UpstreamProber) probeOnce() {
 			slog.Error("prober: invalid upstream URL", "url", u.BaseURL, "error", err)
 			continue
 		}
-		// 把数据库里的 upstream ID 和代理地址带入运行时快照，
+		// 把数据库里的 upstream ID、代理地址和模型模式带入运行时快照，
 		// 后续代理过滤才能和 key_upstream_bindings 按同一主键精确匹配。
 		healthy = append(healthy, &ActiveUpstream{
-			ID:       u.ID,
-			BaseURL:  parsed,
-			APIKey:   u.APIKey,
-			Name:     u.Name,
-			ProxyURL: u.ProxyURL,
+			ID:            u.ID,
+			BaseURL:       parsed,
+			APIKey:        u.APIKey,
+			Name:          u.Name,
+			ProxyURL:      u.ProxyURL,
+			ModelPatterns: allModelPatterns[u.ID],
 		})
 	}
 

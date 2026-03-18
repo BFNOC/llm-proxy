@@ -749,3 +749,96 @@ func TestGetAllKeyBindings_AfterReplaceAndClear(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, bindings[dk.ID])
 }
+
+// ---------------------------------------------------------------------------
+// Upstream Model Patterns
+// ---------------------------------------------------------------------------
+
+func TestUpstreamModelPatterns_SetAndGet(t *testing.T) {
+	s := newTestStore(t)
+	u, err := s.CreateUpstream("test-up", "https://a.example.com", "key-a", 0, "")
+	require.NoError(t, err)
+
+	err = s.SetUpstreamModelPatterns(u.ID, []string{"claude-*", "gpt-4o"})
+	require.NoError(t, err)
+
+	patterns, err := s.GetUpstreamModelPatterns(u.ID)
+	require.NoError(t, err)
+	assert.Len(t, patterns, 2)
+	assert.Contains(t, patterns, "claude-*")
+	assert.Contains(t, patterns, "gpt-4o")
+}
+
+func TestUpstreamModelPatterns_Overwrite(t *testing.T) {
+	s := newTestStore(t)
+	u, err := s.CreateUpstream("up", "https://a.example.com", "key", 0, "")
+	require.NoError(t, err)
+
+	err = s.SetUpstreamModelPatterns(u.ID, []string{"claude-*"})
+	require.NoError(t, err)
+
+	err = s.SetUpstreamModelPatterns(u.ID, []string{"gpt-*"})
+	require.NoError(t, err)
+
+	patterns, err := s.GetUpstreamModelPatterns(u.ID)
+	require.NoError(t, err)
+	assert.Len(t, patterns, 1)
+	assert.Equal(t, "gpt-*", patterns[0])
+}
+
+func TestUpstreamModelPatterns_ClearPatterns(t *testing.T) {
+	s := newTestStore(t)
+	u, err := s.CreateUpstream("up", "https://a.example.com", "key", 0, "")
+	require.NoError(t, err)
+
+	err = s.SetUpstreamModelPatterns(u.ID, []string{"claude-*"})
+	require.NoError(t, err)
+
+	err = s.SetUpstreamModelPatterns(u.ID, []string{})
+	require.NoError(t, err)
+
+	patterns, err := s.GetUpstreamModelPatterns(u.ID)
+	require.NoError(t, err)
+	assert.Empty(t, patterns)
+}
+
+func TestUpstreamModelPatterns_CascadeDeleteUpstream(t *testing.T) {
+	s := newTestStore(t)
+	u, err := s.CreateUpstream("up", "https://a.example.com", "key", 0, "")
+	require.NoError(t, err)
+
+	err = s.SetUpstreamModelPatterns(u.ID, []string{"claude-*", "gpt-*"})
+	require.NoError(t, err)
+
+	err = s.DeleteUpstream(u.ID)
+	require.NoError(t, err)
+
+	patterns, err := s.GetUpstreamModelPatterns(u.ID)
+	require.NoError(t, err)
+	assert.Empty(t, patterns, "patterns should cascade delete with upstream")
+}
+
+func TestUpstreamModelPatterns_GetAll(t *testing.T) {
+	s := newTestStore(t)
+	u1, _ := s.CreateUpstream("up1", "https://a.example.com", "ka", 0, "")
+	u2, _ := s.CreateUpstream("up2", "https://b.example.com", "kb", 0, "")
+
+	require.NoError(t, s.SetUpstreamModelPatterns(u1.ID, []string{"claude-*"}))
+	require.NoError(t, s.SetUpstreamModelPatterns(u2.ID, []string{"gpt-*", "o1-*"}))
+
+	all, err := s.GetAllUpstreamModelPatterns()
+	require.NoError(t, err)
+	assert.Len(t, all[u1.ID], 1)
+	assert.Equal(t, "claude-*", all[u1.ID][0])
+	assert.Len(t, all[u2.ID], 2)
+}
+
+func TestUpstreamModelPatterns_EmptyByDefault(t *testing.T) {
+	s := newTestStore(t)
+	u, _ := s.CreateUpstream("up", "https://a.example.com", "key", 0, "")
+
+	patterns, err := s.GetUpstreamModelPatterns(u.ID)
+	require.NoError(t, err)
+	assert.Empty(t, patterns, "no patterns by default")
+}
+
