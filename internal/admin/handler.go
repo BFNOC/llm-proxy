@@ -3,6 +3,7 @@ package admin
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -18,7 +19,7 @@ import (
 )
 
 var startTime = time.Now()
-var Version = "2.0.0" // set by main or build flags
+var Version = "2.1.0" // set by main or build flags
 
 type AdminHandler struct {
 	store        *store.Store
@@ -65,6 +66,7 @@ func (h *AdminHandler) RegisterRoutes(r *mux.Router) {
 	api.HandleFunc("/upstreams/{id}", h.updateUpstream).Methods("PUT")
 	api.HandleFunc("/upstreams/{id}", h.deleteUpstream).Methods("DELETE")
 	api.HandleFunc("/upstreams/{id}/test-proxy", h.testUpstreamProxy).Methods("POST")
+	api.HandleFunc("/upstreams/{id}/check-quota", h.checkUpstreamQuota).Methods("POST")
 
 	// Keys
 	api.HandleFunc("/keys", h.listKeys).Methods("GET")
@@ -862,3 +864,163 @@ func (h *AdminHandler) testUpstreamProxy(w http.ResponseWriter, r *http.Request)
 		"latency_ms":  latency.Milliseconds(),
 	})
 }
+
+// checkUpstreamQuota 通过 new-api 的 /api/usage/token 接口查询上游 Key 的剩余额度。
+// 仅解析 new-api 风格的响应（code=true, data.object="token_usage"），
+// 非 new-api 格式时返回截断的原始内容供管理员在 DevTools 中查看。
+func (h *AdminHandler) checkUpstreamQuota(w http.ResponseWriter, r *http.Request) {
+	id, err := parseID(r)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	upstream, err := h.store.GetUpstream(id)
+	if err != nil {
+		jsonError(w, http.StatusNotFound, fmt.Sprintf("upstream %d not found", id))
+		return
+	}
+
+	// 构造带代理的 HTTP client，复用 testUpstreamProxy 的安全策略
+	transport, err := proxy.BuildTransport(upstream.ProxyURL)
+	if err != nil {
+		jsonOK(w, map[string]interface{}{
+			"success": false,
+			"message": fmt.Sprintf("invalid proxy config: %v", err),
+		})
+		return
+	}
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   15 * time.Second,
+		// 允许同域重定向（如 /api/usage/token → /api/usage/token/），
+		// 但跨域时阻止，防止 Authorization 头泄露到意外域名
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return fmt.Errorf("too many redirects")
+			}
+			if req.URL.Host != via[0].URL.Host {
+				return fmt.Errorf("cross-host redirect blocked: %s → %s", via[0].URL.Host, req.URL.Host)
+			}
+			return nil
+		},
+	}
+
+	quotaURL := strings.TrimRight(upstream.BaseURL, "/") + "/api/usage/token"
+	req, err := http.NewRequestWithContext(r.Context(), "GET", quotaURL, nil)
+	if err != nil {
+		jsonOK(w, map[string]interface{}{
+			"success": false,
+			"message": fmt.Sprintf("构造请求失败: %v", err),
+		})
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+upstream.APIKey)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		jsonOK(w, map[string]interface{}{
+			"success": false,
+			"message": fmt.Sprintf("请求失败: %v", err),
+		})
+		return
+	}
+	defer resp.Body.Close()
+
+	// 限制读取 64KB，防止大响应体占满内存（同时避免截断合法 JSON）
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 65536))
+	if err != nil {
+		jsonOK(w, map[string]interface{}{
+			"success": false,
+			"message": fmt.Sprintf("读取响应失败: %v", err),
+		})
+		return
+	}
+
+	// 非 2xx 状态码直接报错
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		jsonOK(w, map[string]interface{}{
+			"success":        false,
+			"message":        fmt.Sprintf("上游返回 HTTP %d", resp.StatusCode),
+			"origin_content": string(body),
+		})
+		return
+	}
+
+	// Content-Type 非 JSON 时直接走"非 new-api"分支（大小写不敏感）
+	ct := resp.Header.Get("Content-Type")
+	if !strings.Contains(strings.ToLower(ct), "json") {
+		jsonOK(w, map[string]interface{}{
+			"success":        false,
+			"message":        "error",
+			"origin_content": string(body),
+		})
+		return
+	}
+
+	// 尝试解析 new-api 风格的响应
+	var apiResp struct {
+		Code    interface{} `json:"code"`
+		Message string      `json:"message"`
+		Data    struct {
+			Object             string `json:"object"`
+			Name               string `json:"name"`
+			TotalAvailable     int64  `json:"total_available"`
+			TotalGranted       int64  `json:"total_granted"`
+			TotalUsed          int64  `json:"total_used"`
+			UnlimitedQuota     bool   `json:"unlimited_quota"`
+			ExpiresAt          int64  `json:"expires_at"`
+			ModelLimitsEnabled bool   `json:"model_limits_enabled"`
+		} `json:"data"`
+	}
+
+	if err := json.Unmarshal(body, &apiResp); err != nil {
+		jsonOK(w, map[string]interface{}{
+			"success":        false,
+			"message":        "error",
+			"origin_content": string(body),
+		})
+		return
+	}
+
+	// 校验是否为 new-api 风格：data.object 必须是 "token_usage"
+	if apiResp.Data.Object != "token_usage" {
+		jsonOK(w, map[string]interface{}{
+			"success":        false,
+			"message":        "error",
+			"origin_content": string(body),
+		})
+		return
+	}
+
+	// 处理 code=false 的情况（new-api 返回错误）
+	codeOK := false
+	switch v := apiResp.Code.(type) {
+	case bool:
+		codeOK = v
+	case float64:
+		codeOK = v != 0
+	}
+	if !codeOK {
+		jsonOK(w, map[string]interface{}{
+			"success": false,
+			"message": fmt.Sprintf("上游返回错误: %s", apiResp.Message),
+		})
+		return
+	}
+
+	// 成功：返回解析后的额度信息
+	jsonOK(w, map[string]interface{}{
+		"success": true,
+		"data": map[string]interface{}{
+			"name":                 apiResp.Data.Name,
+			"total_available":      apiResp.Data.TotalAvailable,
+			"total_granted":        apiResp.Data.TotalGranted,
+			"total_used":           apiResp.Data.TotalUsed,
+			"unlimited_quota":      apiResp.Data.UnlimitedQuota,
+			"expires_at":           apiResp.Data.ExpiresAt,
+			"model_limits_enabled": apiResp.Data.ModelLimitsEnabled,
+		},
+	})
+}
+
