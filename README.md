@@ -8,7 +8,9 @@
 
 - **透明代理**: 统一 `/v1/...` 端点，自动检测 OpenAI / Anthropic 请求风格
 - **动态上游**: 管理多个上游服务商，按优先级自动探活和故障切换
+- **模型路由**: 按模型名自动路由到不同上游（如 `claude-*` → 上游 A，`gpt-*` → 上游 B）
 - **密钥管理**: 生成下游 API Key（`sk-` 前缀），SHA-256 哈希存储，明文仅返回一次
+- **上游绑定**: 每个下游 Key 可绑定特定上游，实现访问隔离
 - **RPM 限流**: 每个密钥独立的滑动窗口请求频率限制
 - **审计日志**: 异步批量写入 SQLite，不阻塞代理请求
 - **管理面板**: 内置中文 Web 管理界面 + JSON REST API
@@ -80,6 +82,32 @@ curl http://localhost:9002/v1/messages \
   -d '{"model":"claude-sonnet-4-20250514","messages":[{"role":"user","content":"你好"}]}'
 ```
 
+### 4. 配置模型路由（可选）
+
+为上游配置支持的模型模式后，代理会按请求中的 `model` 字段自动路由：
+
+```bash
+# 上游 1 只接受 Claude 系列
+curl -X PUT http://localhost:9002/admin/api/upstreams/1/models \
+  -H "Authorization: Bearer my-secret-token" \
+  -H "Content-Type: application/json" \
+  -d '{"patterns":["claude-*"]}'
+
+# 上游 2 只接受 GPT 系列
+curl -X PUT http://localhost:9002/admin/api/upstreams/2/models \
+  -H "Authorization: Bearer my-secret-token" \
+  -H "Content-Type: application/json" \
+  -d '{"patterns":["gpt-*","o1-*"]}'
+
+# 清空模式（恢复接受所有模型）
+curl -X PUT http://localhost:9002/admin/api/upstreams/1/models \
+  -H "Authorization: Bearer my-secret-token" \
+  -H "Content-Type: application/json" \
+  -d '{"patterns":[]}'
+```
+
+> 支持 glob 通配符（`*`、`?`）。未配置模式的上游接受所有模型。
+
 ## 架构
 
 ```
@@ -92,19 +120,20 @@ curl http://localhost:9002/v1/messages \
     │
  KeyResolver               ← 原子快照查找密钥哈希，401 无效密钥
     │
- RateLimiter               ← 滑动窗口 RPM 限流，429 超限
+ UpstreamBinding           ← 按 Key 绑定关系过滤可用上游
     │
- AuthRewrite               ← 用上游密钥替换下游密钥
+ RateLimiter               ← 滑动窗口 RPM 限流，429 超限
     │
  StreamingMiddleware        ← SSE 响应即时刷新
     │
- DynamicProxy              ← atomic.Value 读取活跃上游，转发请求
+ DynamicProxy              ← 缓冲 body → 提取 model → 按模型模式过滤上游
+    │                           → 认证头重写 → 转发请求 → 429 故障切换
     │                           │
     ▼                           ▼ (异步)
- 活跃上游                   AuditLogger → 批量写入 SQLite
+ 匹配的上游                  AuditLogger → 批量写入 SQLite
 
                             UpstreamProber (后台)
-                            → 定期健康检查，故障时自动切换
+                            → 定期健康检查 + 加载模型模式
 ```
 
 ## 配置
@@ -161,11 +190,22 @@ logging:
 | POST | `/admin/api/upstreams` | 添加上游 |
 | PUT | `/admin/api/upstreams/{id}` | 编辑上游 |
 | DELETE | `/admin/api/upstreams/{id}` | 删除上游 |
+| GET | `/admin/api/upstreams/models` | 批量获取所有上游模型模式 |
+| GET | `/admin/api/upstreams/{id}/models` | 获取单个上游模型模式 |
+| PUT | `/admin/api/upstreams/{id}/models` | 设置上游模型模式（全量覆盖） |
+| POST | `/admin/api/upstreams/{id}/test-proxy` | 测试上游代理连通性 |
+| POST | `/admin/api/upstreams/{id}/check-quota` | 查询上游额度 |
 | GET | `/admin/api/keys` | 列出下游密钥 |
 | POST | `/admin/api/keys` | 创建密钥（返回明文仅一次） |
 | PUT | `/admin/api/keys/{id}` | 编辑密钥（名称/RPM/启停） |
 | DELETE | `/admin/api/keys/{id}` | 删除密钥 |
+| GET | `/admin/api/keys/bindings` | 批量获取所有 Key 绑定 |
+| GET | `/admin/api/keys/{id}/upstreams` | 获取 Key 绑定的上游 |
+| PUT | `/admin/api/keys/{id}/upstreams` | 设置 Key 绑定的上游 |
 | GET | `/admin/api/logs` | 查询请求日志 |
+| GET | `/admin/api/models/whitelist` | 模型白名单列表 |
+| POST | `/admin/api/models/whitelist` | 添加白名单模式 |
+| DELETE | `/admin/api/models/whitelist/{id}` | 删除白名单模式 |
 | GET | `/admin/api/status` | 系统状态 |
 
 ## Docker
