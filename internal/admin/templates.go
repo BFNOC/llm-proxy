@@ -374,6 +374,7 @@ function loadUpstreams() {
             (u.enabled?'<span class="badge badge-green">启用</span>':'<span class="badge badge-red">禁用</span>')+
             '</td><td class="actions">'+
             '<button class="btn btn-ghost btn-sm" onclick="testProxy(event,'+u.id+')">测试</button> '+
+            '<button class="btn btn-ghost btn-sm" onclick="checkQuota(event,'+u.id+')">查额</button> '+
             '<button class="btn btn-ghost btn-sm" onclick="toggleUpstream('+u.id+','+(!u.enabled)+')">切换</button> '+
             '<button class="btn btn-ghost btn-sm" onclick="editUpstream('+u.id+')">编辑</button> '+
             '<button class="btn btn-danger btn-sm" onclick="deleteUpstream('+u.id+')">删除</button>'+
@@ -449,6 +450,82 @@ function testProxy(e, id) {
         btn.textContent = origText;
         btn.disabled = false;
         alert('请求失败: '+e.message);
+    });
+}
+
+function checkQuota(e, id) {
+    const btn = e.target;
+    const row = btn.closest('tr');
+    // 如果已有展开的额度行，则收起
+    const existingRow = document.getElementById('quota-row-'+id);
+    if (existingRow) { existingRow.remove(); return; }
+    // 移除其他已展开的额度行
+    document.querySelectorAll('[id^="quota-row-"]').forEach(r => r.remove());
+
+    const origText = btn.textContent;
+    btn.textContent = '查询中...';
+    btn.disabled = true;
+    api('/upstreams/'+id+'/check-quota', {method:'POST'}).then(d => {
+        btn.textContent = origText;
+        btn.disabled = false;
+        const tr = document.createElement('tr');
+        tr.id = 'quota-row-'+id;
+        const td = document.createElement('td');
+        td.colSpan = 7;
+        td.style.cssText = 'padding:0;border:none;';
+
+        if (d.success) {
+            const data = d.data;
+            const fmt = n => n.toLocaleString();
+            const toUSD = n => '$' + (n / 500000).toFixed(2);
+            const pct = data.total_granted > 0 ? (data.total_used / data.total_granted * 100).toFixed(1) : '0.0';
+            const barColor = pct > 80 ? 'var(--red)' : pct > 50 ? 'var(--orange)' : 'var(--green)';
+            let html = '<div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:16px;margin:8px 16px;">';
+            html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">';
+            html += '<span style="font-weight:600;">📊 ' + esc(data.name) + '</span>';
+            html += '<button class="btn btn-ghost btn-sm" onclick="this.closest(\'tr\').remove()" style="padding:2px 8px;">✕</button></div>';
+            if (data.unlimited_quota) {
+                html += '<span class="badge badge-green">无限额度</span>';
+            } else {
+                html += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:12px;">';
+                html += '<div style="text-align:center;"><div style="font-size:0.75rem;color:var(--text-dim);">可用</div><div style="font-size:1.1rem;font-weight:700;color:var(--green);">' + toUSD(data.total_available) + '</div><div style="font-size:0.7rem;color:var(--text-dim);">' + fmt(data.total_available) + '</div></div>';
+                html += '<div style="text-align:center;"><div style="font-size:0.75rem;color:var(--text-dim);">已用</div><div style="font-size:1.1rem;font-weight:700;color:var(--orange);">' + toUSD(data.total_used) + '</div><div style="font-size:0.7rem;color:var(--text-dim);">' + fmt(data.total_used) + '</div></div>';
+                html += '<div style="text-align:center;"><div style="font-size:0.75rem;color:var(--text-dim);">总额</div><div style="font-size:1.1rem;font-weight:700;">' + toUSD(data.total_granted) + '</div><div style="font-size:0.7rem;color:var(--text-dim);">' + fmt(data.total_granted) + '</div></div>';
+                html += '</div>';
+                html += '<div style="background:var(--bg-card);border-radius:4px;height:8px;overflow:hidden;">';
+                html += '<div style="height:100%;width:' + pct + '%;background:' + barColor + ';border-radius:4px;transition:width 0.3s;"></div></div>';
+                html += '<div style="text-align:right;font-size:0.75rem;color:var(--text-dim);margin-top:4px;">使用率 ' + pct + '%</div>';
+            }
+            if (data.expires_at > 0) {
+                html += '<div style="font-size:0.8rem;color:var(--text-dim);margin-top:8px;">过期时间: ' + fmtTime(new Date(data.expires_at * 1000).toISOString()) + '</div>';
+            }
+            html += '</div>';
+            td.innerHTML = html;
+        } else {
+            let msg = d.message || '未知错误';
+            let html = '<div style="background:rgba(225,112,85,0.08);border:1px solid var(--red);border-radius:var(--radius-sm);padding:16px;margin:8px 16px;">';
+            html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">';
+            html += '<span style="color:var(--red);font-weight:600;">❌ 查询失败</span>';
+            html += '<button class="btn btn-ghost btn-sm" onclick="this.closest(\'tr\').remove()" style="padding:2px 8px;">✕</button></div>';
+            html += '<div style="color:var(--text-dim);font-size:0.85rem;">' + esc(msg) + '</div>';
+            if (d.origin_content) {
+                html += '<pre style="margin-top:8px;padding:8px;background:var(--bg);border-radius:4px;font-size:0.75rem;overflow-x:auto;max-height:120px;color:var(--text-dim);">' + esc(d.origin_content) + '</pre>';
+            }
+            html += '</div>';
+            td.innerHTML = html;
+        }
+        tr.appendChild(td);
+        row.after(tr);
+    }).catch(err => {
+        btn.textContent = origText;
+        btn.disabled = false;
+        let tr = document.createElement('tr');
+        tr.id = 'quota-row-'+id;
+        let td = document.createElement('td');
+        td.colSpan = 7;
+        td.innerHTML = '<div style="background:rgba(225,112,85,0.08);border:1px solid var(--red);border-radius:var(--radius-sm);padding:16px;margin:8px 16px;color:var(--red);">请求失败: '+esc(err.message)+'</div>';
+        tr.appendChild(td);
+        row.after(tr);
     });
 }
 
