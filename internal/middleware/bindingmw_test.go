@@ -48,7 +48,7 @@ func (n *nextRecorder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func TestBindingMW_NoKeyID_PassesThrough(t *testing.T) {
 	s := newTestStore(t)
 	next := &nextRecorder{}
-	mw := UpstreamBindingMiddleware(s)(next)
+	mw := UpstreamBindingMiddleware(s, nil)(next)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	rec := httptest.NewRecorder()
@@ -70,7 +70,7 @@ func TestBindingMW_KeyWithBindings_SetsContext(t *testing.T) {
 	require.NoError(t, err)
 
 	next := &nextRecorder{}
-	mw := UpstreamBindingMiddleware(s)(next)
+	mw := UpstreamBindingMiddleware(s, nil)(next)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/chat", nil)
 	req = withKeyID(req, dk.ID)
@@ -87,7 +87,7 @@ func TestBindingMW_KeyWithNoBindings_NoContextValue(t *testing.T) {
 	require.NoError(t, err)
 
 	next := &nextRecorder{}
-	mw := UpstreamBindingMiddleware(s)(next)
+	mw := UpstreamBindingMiddleware(s, nil)(next)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/chat", nil)
 	req = withKeyID(req, dk.ID)
@@ -115,7 +115,7 @@ func TestBindingMW_StoreError_Returns503(t *testing.T) {
 	_ = os.Remove(filepath.Join(dir, "test.db"))
 
 	next := &nextRecorder{}
-	mw := UpstreamBindingMiddleware(s)(next)
+	mw := UpstreamBindingMiddleware(s, nil)(next)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/chat", nil)
 	req = withKeyID(req, dk.ID)

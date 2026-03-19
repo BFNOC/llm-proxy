@@ -184,6 +184,9 @@ func main() {
 	// Create dynamic proxy
 	dynamicProxy := proxy.NewDynamicProxy()
 
+	// Create model override cache (per-key model routing overrides)
+	overrideCache := middleware.NewModelOverrideCache(db)
+
 	// Create upstream prober and start background goroutine
 	probeInterval := time.Duration(yamlConfig.Upstream.ProbeIntervalSeconds) * time.Second
 	probeTimeout := time.Duration(yamlConfig.Upstream.ProbeTimeoutSeconds) * time.Second
@@ -238,13 +241,15 @@ func main() {
 	// Admin routes (separate subrouter, no CORS)
 	// Model whitelist filter
 	modelFilter := middleware.NewModelFilter(db)
+	// Inject whitelist matcher unconditionally (works even when admin is disabled)
+	dynamicProxy.WhitelistMatcher = modelFilter.MatchModel
 
 	// Create stats counters (纯内存，用于 Dashboard 实时统计)
 	globalCounter := middleware.NewGlobalRequestCounter()
 	perKeyStats := middleware.NewPerKeyStatsCollector()
 
 	if yamlConfig.Admin.Enabled {
-		adminHandler := admin.NewAdminHandler(db, keyCache, rateLimiter, prober, dynamicProxy, auditLogger, modelFilter, globalCounter, perKeyStats, adminToken)
+		adminHandler := admin.NewAdminHandler(db, keyCache, rateLimiter, prober, dynamicProxy, auditLogger, modelFilter, globalCounter, perKeyStats, overrideCache, adminToken)
 		adminHandler.RegisterRoutes(r)
 		slog.Info("Admin interface enabled", "dashboard", "/admin/", "api", "/admin/api/")
 	}
@@ -265,7 +270,7 @@ func main() {
 	// per-key 统计放在 KeyResolver 之后，确保只记录已通过鉴权的请求
 	proxyChain = middleware.PerKeyStatsMiddleware(perKeyStats)(proxyChain)
 	// 先做绑定查询再进入后续转发流程，避免存储异常时请求绕过授权边界。
-	proxyChain = middleware.UpstreamBindingMiddleware(db)(proxyChain)
+	proxyChain = middleware.UpstreamBindingMiddleware(db, overrideCache)(proxyChain)
 	proxyChain = middleware.KeyResolverMiddleware(keyCache)(proxyChain)
 	proxyChain = middleware.RequestClassifierMiddleware()(proxyChain)
 	// 全局 RPM/RPS 统计放在最外层，统计所有到达代理的请求

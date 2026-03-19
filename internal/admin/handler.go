@@ -20,7 +20,7 @@ import (
 )
 
 var startTime = time.Now()
-var Version = "2.2.0" // set by main or build flags
+var Version = "2.3.0" // set by main or build flags
 
 type AdminHandler struct {
 	store          *store.Store
@@ -32,6 +32,7 @@ type AdminHandler struct {
 	modelFilter    *middleware.ModelFilter
 	requestCounter *middleware.GlobalRequestCounter
 	perKeyStats    *middleware.PerKeyStatsCollector
+	overrideCache  *middleware.ModelOverrideCache
 	adminToken     string
 }
 
@@ -45,6 +46,7 @@ func NewAdminHandler(
 	mf *middleware.ModelFilter,
 	rc *middleware.GlobalRequestCounter,
 	pks *middleware.PerKeyStatsCollector,
+	oc *middleware.ModelOverrideCache,
 	adminToken string,
 ) *AdminHandler {
 	return &AdminHandler{
@@ -57,6 +59,7 @@ func NewAdminHandler(
 		modelFilter:    mf,
 		requestCounter: rc,
 		perKeyStats:    pks,
+		overrideCache:  oc,
 		adminToken:     adminToken,
 	}
 }
@@ -98,6 +101,11 @@ func (h *AdminHandler) RegisterRoutes(r *mux.Router) {
 	api.HandleFunc("/keys/bindings", h.getAllKeyBindings).Methods("GET")
 	api.HandleFunc("/keys/{id}/upstreams", h.getKeyUpstreams).Methods("GET")
 	api.HandleFunc("/keys/{id}/upstreams", h.setKeyUpstreams).Methods("PUT")
+
+	// Key model overrides
+	api.HandleFunc("/keys/model-overrides", h.getAllKeyModelOverrides).Methods("GET")
+	api.HandleFunc("/keys/{id}/model-overrides", h.getKeyModelOverrides).Methods("GET")
+	api.HandleFunc("/keys/{id}/model-overrides", h.setKeyModelOverrides).Methods("PUT")
 
 	// Status
 	api.HandleFunc("/status", h.getStatus).Methods("GET")
@@ -291,6 +299,10 @@ func (h *AdminHandler) deleteUpstream(w http.ResponseWriter, r *http.Request) {
 	}
 	// Trigger immediate probe to update active upstream if needed.
 	go h.prober.ProbeNow()
+	// FK cascade may have removed overrides referencing this upstream
+	if h.overrideCache != nil {
+		h.overrideCache.Reload()
+	}
 	slog.Info("admin: deleted upstream", "id", id)
 	jsonOK(w, map[string]string{"status": "deleted"})
 }
@@ -434,6 +446,10 @@ func (h *AdminHandler) deleteKey(w http.ResponseWriter, r *http.Request) {
 	if h.perKeyStats != nil {
 		h.perKeyStats.RemoveKey(id)
 	}
+	// FK cascade may have removed overrides for this key
+	if h.overrideCache != nil {
+		h.overrideCache.Reload()
+	}
 
 	slog.Info("admin: deleted key", "id", id)
 	jsonOK(w, map[string]string{"status": "deleted"})
@@ -516,6 +532,11 @@ func (h *AdminHandler) addModelWhitelist(w http.ResponseWriter, r *http.Request)
 	}
 	if req.Pattern == "" {
 		jsonError(w, http.StatusBadRequest, "pattern is required")
+		return
+	}
+	// Validate glob syntax to prevent invalid patterns from silently blocking all requests
+	if _, err := path.Match(req.Pattern, "test"); err != nil {
+		jsonError(w, http.StatusBadRequest, fmt.Sprintf("invalid pattern %q: %v", req.Pattern, err))
 		return
 	}
 	entry, err := h.store.AddModelWhitelist(req.Pattern)
@@ -671,7 +692,131 @@ func (h *AdminHandler) setKeyUpstreams(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]interface{}{"status": "updated", "upstream_ids": req.UpstreamIDs})
 }
 
-// getStatus 返回运行时视角的状态快照。
+// --- Key Model Overrides ---
+
+// getAllKeyModelOverrides 返回所有 Key 的模型路由覆盖，供管理页批量渲染。
+func (h *AdminHandler) getAllKeyModelOverrides(w http.ResponseWriter, r *http.Request) {
+	overrides, err := h.store.GetAllKeyModelOverrides()
+	if err != nil {
+		slog.Error("admin: store error", "error", err)
+		jsonError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if overrides == nil {
+		overrides = make(map[int64][]store.KeyModelOverride)
+	}
+	jsonOK(w, overrides)
+}
+
+// getKeyModelOverrides 返回单个 Key 的模型路由覆盖。
+func (h *AdminHandler) getKeyModelOverrides(w http.ResponseWriter, r *http.Request) {
+	id, err := parseID(r)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if _, err := h.store.LookupKeyByID(id); err != nil {
+		jsonError(w, http.StatusNotFound, fmt.Sprintf("key %d not found", id))
+		return
+	}
+	overrides, err := h.store.GetKeyModelOverrides(id)
+	if err != nil {
+		slog.Error("admin: store error", "error", err)
+		jsonError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if overrides == nil {
+		overrides = []store.KeyModelOverride{}
+	}
+	jsonOK(w, overrides)
+}
+
+// setKeyModelOverrides 以全量覆盖方式更新某个 Key 的模型路由覆盖。
+// 空数组表示清空所有覆盖。
+func (h *AdminHandler) setKeyModelOverrides(w http.ResponseWriter, r *http.Request) {
+	id, err := parseID(r)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if _, err := h.store.LookupKeyByID(id); err != nil {
+		jsonError(w, http.StatusNotFound, fmt.Sprintf("key %d not found", id))
+		return
+	}
+
+	var req struct {
+		Overrides []struct {
+			ModelPattern string `json:"model_pattern"`
+			UpstreamID   int64  `json:"upstream_id"`
+		} `json:"overrides"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+
+	// Validate and deduplicate overrides
+	if len(req.Overrides) > 0 {
+		upstreams, err := h.store.ListUpstreams()
+		if err != nil {
+			slog.Error("admin: store error", "error", err)
+			jsonError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		validIDs := make(map[int64]bool, len(upstreams))
+		for _, u := range upstreams {
+			validIDs[u.ID] = true
+		}
+
+		seen := make(map[string]bool)
+		for _, o := range req.Overrides {
+			if o.ModelPattern == "" {
+				jsonError(w, http.StatusBadRequest, "model_pattern is required")
+				return
+			}
+			// Validate pattern syntax
+			if _, err := path.Match(o.ModelPattern, "test"); err != nil {
+				jsonError(w, http.StatusBadRequest, fmt.Sprintf("invalid pattern %q: %v", o.ModelPattern, err))
+				return
+			}
+			if !validIDs[o.UpstreamID] {
+				jsonError(w, http.StatusBadRequest, fmt.Sprintf("upstream %d not found", o.UpstreamID))
+				return
+			}
+			// Deduplicate
+			key := fmt.Sprintf("%s:%d", o.ModelPattern, o.UpstreamID)
+			if seen[key] {
+				jsonError(w, http.StatusBadRequest, fmt.Sprintf("duplicate override: pattern=%q upstream=%d", o.ModelPattern, o.UpstreamID))
+				return
+			}
+			seen[key] = true
+		}
+	}
+
+	// Convert to store input
+	inputs := make([]store.KeyModelOverrideInput, len(req.Overrides))
+	for i, o := range req.Overrides {
+		inputs[i] = store.KeyModelOverrideInput{
+			ModelPattern: o.ModelPattern,
+			UpstreamID:   o.UpstreamID,
+		}
+	}
+
+	if err := h.store.SetKeyModelOverrides(id, inputs); err != nil {
+		slog.Error("admin: store error", "error", err)
+		jsonError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	// Refresh override cache
+	if h.overrideCache != nil {
+		h.overrideCache.Reload()
+	}
+
+	slog.Info("admin: updated key model overrides", "key_id", id, "count", len(inputs))
+	jsonOK(w, map[string]interface{}{"status": "updated", "count": len(inputs)})
+}
+
 // healthy_upstreams 取自 DynamicProxy 当前可用的健康列表，
 // 而不是数据库静态配置，这样管理端看到的状态才和实际转发行为一致。
 
@@ -1199,4 +1344,3 @@ func (h *AdminHandler) setUpstreamModelPatterns(w http.ResponseWriter, r *http.R
 	slog.Info("admin: updated upstream model patterns", "upstream_id", id, "patterns", cleaned)
 	jsonOK(w, map[string]interface{}{"status": "updated", "patterns": cleaned})
 }
-
