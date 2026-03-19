@@ -58,7 +58,7 @@ func (h *CustomPrettyHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
 func (h *CustomPrettyHandler) WithGroup(_ string) slog.Handler      { return h }
 
 const (
-	version     = "2.1.0"
+	version     = "2.2.0"
 	defaultPort = "9002"
 )
 
@@ -227,8 +227,12 @@ func main() {
 	// Model whitelist filter
 	modelFilter := middleware.NewModelFilter(db)
 
+	// Create stats counters (纯内存，用于 Dashboard 实时统计)
+	globalCounter := middleware.NewGlobalRequestCounter()
+	perKeyStats := middleware.NewPerKeyStatsCollector()
+
 	if yamlConfig.Admin.Enabled {
-		adminHandler := admin.NewAdminHandler(db, keyCache, rateLimiter, prober, dynamicProxy, auditLogger, modelFilter, adminToken)
+		adminHandler := admin.NewAdminHandler(db, keyCache, rateLimiter, prober, dynamicProxy, auditLogger, modelFilter, globalCounter, perKeyStats, adminToken)
 		adminHandler.RegisterRoutes(r)
 		slog.Info("Admin interface enabled", "dashboard", "/admin/", "api", "/admin/api/")
 	}
@@ -246,10 +250,14 @@ func main() {
 		proxyChain = middleware.AuditLogMiddleware(auditLogger)(proxyChain)
 	}
 	proxyChain = middleware.RateLimitMiddleware(rateLimiter)(proxyChain)
+	// per-key 统计放在 KeyResolver 之后，确保只记录已通过鉴权的请求
+	proxyChain = middleware.PerKeyStatsMiddleware(perKeyStats)(proxyChain)
 	// 先做绑定查询再进入后续转发流程，避免存储异常时请求绕过授权边界。
 	proxyChain = middleware.UpstreamBindingMiddleware(db)(proxyChain)
 	proxyChain = middleware.KeyResolverMiddleware(keyCache)(proxyChain)
 	proxyChain = middleware.RequestClassifierMiddleware()(proxyChain)
+	// 全局 RPM/RPS 统计放在最外层，统计所有到达代理的请求
+	proxyChain = middleware.StatsMiddleware(globalCounter)(proxyChain)
 	proxyChain = middleware.CORSMiddleware()(proxyChain)
 
 	r.PathPrefix("/v1/").Handler(proxyChain)

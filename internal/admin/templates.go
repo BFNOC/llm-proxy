@@ -189,7 +189,7 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
                     </div>
                 </div>
                 <div class="table-container">
-                <table><thead><tr><th class="hide-on-mobile">ID</th><th class="hide-on-mobile">前缀</th><th>名称</th><th>RPM</th><th>状态</th><th class="hide-on-mobile">绑定上游</th><th>操作</th></tr></thead>
+                <table><thead><tr><th class="hide-on-mobile">ID</th><th class="hide-on-mobile">前缀</th><th>名称</th><th>RPM</th><th>当前 RPM</th><th>状态</th><th class="hide-on-mobile">绑定上游</th><th>操作</th></tr></thead>
                 <tbody id="keys-table"></tbody></table>
                 </div>
             </div>
@@ -372,6 +372,7 @@ function authenticate() {
 function logout() {
     clearToken();
     TOKEN = '';
+    stopStatusTimer();
     document.getElementById('main-section').style.display = 'none';
     document.getElementById('auth-section').style.display = 'flex';
 }
@@ -390,13 +391,22 @@ window.addEventListener('DOMContentLoaded', () => {
 });
 
 // --- Tabs ---
+let statusTimer = null;
 function showTab(name, btn) {
     document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
     document.querySelectorAll('.tab-nav button').forEach(b => b.classList.remove('active'));
     document.getElementById('tab-'+name).classList.add('active');
     btn.classList.add('active');
-    if (name === 'status') loadStatus();
+    if (name === 'status') { loadStatus(); startStatusTimer(); } else { stopStatusTimer(); }
     if (name === 'models') loadModelWhitelist();
+    if (name === 'keys') loadKeys();
+}
+function startStatusTimer() {
+    stopStatusTimer();
+    statusTimer = setInterval(loadStatus, 5000);
+}
+function stopStatusTimer() {
+    if (statusTimer) { clearInterval(statusTimer); statusTimer = null; }
 }
 
 // --- Upstreams ---
@@ -624,12 +634,13 @@ function checkQuota(e, id) {
 
 // --- Keys ---
 function loadKeys() {
-    Promise.all([api('/keys'), api('/keys/bindings')]).then(([data, bindMap]) => {
+    Promise.all([api('/keys'), api('/keys/bindings'), api('/key-rpm')]).then(([data, bindMap, rpmData]) => {
         const keys = data || [];
         bindMap = bindMap || {};
+        rpmData = rpmData || {};
         const tbody = document.getElementById('keys-table');
         if (keys.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="7" class="empty-state">暂无密钥</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="8" class="empty-state">暂无密钥</td></tr>';
             return;
         }
         tbody.innerHTML = keys.map(k => {
@@ -639,7 +650,10 @@ function loadKeys() {
                 const names = bound.map(uid => { const u = allUpstreams.find(x=>x.id===uid); return u ? esc(u.name) : uid; });
                 bindText = names.join(', ');
             }
-            return '<tr><td class="hide-on-mobile">'+k.id+'</td><td class="hide-on-mobile"><code>'+esc(k.key_prefix)+'...</code></td><td>'+esc(k.name)+'</td><td>'+(k.rpm_limit||'不限')+'</td><td>'+
+            const currentRpm = rpmData[k.id] || 0;
+            const limitText = k.rpm_limit || '不限';
+            const rpmColor = k.rpm_limit > 0 && currentRpm >= k.rpm_limit * 0.8 ? 'var(--red)' : currentRpm > 0 ? 'var(--green)' : 'var(--text-dim)';
+            return '<tr><td class="hide-on-mobile">'+k.id+'</td><td class="hide-on-mobile"><code>'+esc(k.key_prefix)+'...</code></td><td>'+esc(k.name)+'</td><td>'+(k.rpm_limit||'不限')+'</td><td><span style="color:'+rpmColor+';font-weight:600">'+currentRpm+'</span><span style="color:var(--text-dim)">/'+ limitText+'</span></td><td>'+
             (k.enabled?'<span class="badge badge-green">启用</span>':'<span class="badge badge-red">禁用</span>')+
             '</td><td class="hide-on-mobile">'+bindText+'</td><td class="actions">'+
             '<button class="btn btn-ghost btn-sm" onclick="openBindingDialog('+k.id+')">绑定</button> '+
@@ -859,6 +873,9 @@ function loadStatus() {
             statCard('运行时间', esc(d.uptime||'-'), 'var(--green)') +
             statCard('密钥数量', d.total_keys||0) +
             statCard('今日请求', d.today_requests||0, 'var(--orange)') +
+            statCard('并发请求', d.active_requests||0, 'var(--accent)') +
+            statCard('RPM', d.rpm||0, 'var(--green)') +
+            statCard('RPS', d.rps||'0.0', 'var(--orange)') +
             statCard('审计丢弃', d.audit_dropped||0, d.audit_dropped>0?'var(--red)':'var(--green)');
 
         const tbody = document.getElementById('status-upstreams');
