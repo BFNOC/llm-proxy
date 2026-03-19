@@ -815,7 +815,8 @@ func sanitizeProxyForLog(raw string) string {
 	return parsed.String()
 }
 
-// testUpstreamProxy 通过上游配置的代理对其 base_url 发 HEAD 请求，验证连通性。
+// testUpstreamProxy 通过上游配置的代理对其 base_url 发 GET /v1/models 请求，
+// 携带 API Key 验证连通性并返回支持的模型列表。
 func (h *AdminHandler) testUpstreamProxy(w http.ResponseWriter, r *http.Request) {
 	id, err := parseID(r)
 	if err != nil {
@@ -840,7 +841,7 @@ func (h *AdminHandler) testUpstreamProxy(w http.ResponseWriter, r *http.Request)
 	}
 	client := &http.Client{
 		Transport: transport,
-		Timeout:   10 * time.Second,
+		Timeout:   15 * time.Second,
 		// 禁止跟随重定向，防止 302 到内网地址的 SSRF 绕过
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
@@ -848,8 +849,18 @@ func (h *AdminHandler) testUpstreamProxy(w http.ResponseWriter, r *http.Request)
 	}
 
 	testURL := strings.TrimRight(upstream.BaseURL, "/") + "/v1/models"
+	req, err := http.NewRequestWithContext(r.Context(), "GET", testURL, nil)
+	if err != nil {
+		jsonOK(w, map[string]interface{}{
+			"success": false,
+			"error":   fmt.Sprintf("构造请求失败: %v", err),
+		})
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+upstream.APIKey)
+
 	start := time.Now()
-	resp, err := client.Head(testURL)
+	resp, err := client.Do(req)
 	latency := time.Since(start)
 
 	if err != nil {
@@ -860,12 +871,50 @@ func (h *AdminHandler) testUpstreamProxy(w http.ResponseWriter, r *http.Request)
 		})
 		return
 	}
-	resp.Body.Close()
+	defer resp.Body.Close()
+
+	// 限制读取 256KB
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 262144))
+	if err != nil {
+		jsonOK(w, map[string]interface{}{
+			"success":     false,
+			"error":       fmt.Sprintf("读取响应失败: %v", err),
+			"status_code": resp.StatusCode,
+			"latency_ms":  latency.Milliseconds(),
+		})
+		return
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		jsonOK(w, map[string]interface{}{
+			"success":     false,
+			"error":       fmt.Sprintf("上游返回 HTTP %d", resp.StatusCode),
+			"status_code": resp.StatusCode,
+			"latency_ms":  latency.Milliseconds(),
+		})
+		return
+	}
+
+	// 解析 OpenAI 风格的 /v1/models 响应
+	var modelsResp struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	var models []string
+	if err := json.Unmarshal(body, &modelsResp); err == nil && len(modelsResp.Data) > 0 {
+		for _, m := range modelsResp.Data {
+			if m.ID != "" {
+				models = append(models, m.ID)
+			}
+		}
+	}
 
 	jsonOK(w, map[string]interface{}{
-		"success":     resp.StatusCode < 500,
+		"success":     true,
 		"status_code": resp.StatusCode,
 		"latency_ms":  latency.Milliseconds(),
+		"models":      models,
 	})
 }
 

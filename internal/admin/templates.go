@@ -484,7 +484,7 @@ function toggleUpstream(id, enabled) {
 function testProxy(e, id) {
     const btn = e.target;
     const row = btn.closest('tr');
-    // Eğer已有展开的测试行，则收起
+    // 如果已有展开的测试行，则收起
     const existingRow = document.getElementById('test-row-'+id);
     if (existingRow) { existingRow.remove(); return; }
     // 移除其他已展开的测试行
@@ -503,11 +503,21 @@ function testProxy(e, id) {
         td.style.cssText = 'padding:0;border:none;';
 
         if (d.success) {
+            const models = d.models || [];
             let html = '<div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:16px;margin:8px 16px;">';
             html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">';
             html += '<span style="color:var(--green);font-weight:600;">✅ 连接成功</span>';
             html += '<button class="btn btn-ghost btn-sm" onclick="this.closest(\'tr\').remove()" style="padding:2px 8px;">✕</button></div>';
-            html += '<div style="color:var(--text);font-size:0.85rem;margin-top:8px;">状态码: <strong>' + d.status_code + '</strong> &nbsp;|&nbsp; 延迟: <strong>' + d.latency_ms + 'ms</strong></div>';
+            html += '<div style="color:var(--text);font-size:0.85rem;margin-top:4px;">状态码: <strong>' + d.status_code + '</strong> &nbsp;|&nbsp; 延迟: <strong>' + d.latency_ms + 'ms</strong> &nbsp;|&nbsp; 模型数: <strong>' + models.length + '</strong></div>';
+            if (models.length > 0) {
+                html += '<div style="margin-top:12px;max-height:200px;overflow-y:auto;display:flex;flex-wrap:wrap;gap:6px;">';
+                models.forEach(m => {
+                    html += '<span class="model-tag">' + esc(m) + '</span>';
+                });
+                html += '</div>';
+            } else {
+                html += '<div style="margin-top:8px;color:var(--text-dim);font-size:0.85rem;">未能解析模型列表（上游可能非标准 OpenAI 格式）</div>';
+            }
             html += '</div>';
             td.innerHTML = html;
         } else {
