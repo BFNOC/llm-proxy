@@ -9,6 +9,8 @@
 - **透明代理**: 统一 `/v1/...` 端点，自动检测 OpenAI / Anthropic 请求风格
 - **动态上游**: 管理多个上游服务商，按优先级自动探活和故障切换
 - **模型路由**: 按模型名自动路由到不同上游（如 `claude-*` → 上游 A，`gpt-*` → 上游 B）
+- **Per-Key 模型路由覆盖**: 为特定密钥指定模型走指定上游，覆盖默认路由（精确匹配优先于通配）
+- **模型白名单**: 全局模型白名单，同时过滤展示和拦截请求（不在白名单中的模型返回 403）
 - **密钥管理**: 生成下游 API Key（`sk-` 前缀），SHA-256 哈希存储，明文仅返回一次
 - **上游绑定**: 每个下游 Key 可绑定特定上游，实现访问隔离
 - **RPM 限流**: 每个密钥独立的滑动窗口请求频率限制
@@ -108,6 +110,36 @@ curl -X PUT http://localhost:9002/admin/api/upstreams/1/models \
 
 > 支持 glob 通配符（`*`、`?`）。未配置模式的上游接受所有模型。
 
+### 5. 配置 Per-Key 模型路由覆盖（可选）
+
+为特定密钥指定某些模型走指定上游，覆盖默认的优先级路由：
+
+```bash
+# 密钥 1 的 claude-opus-4-6 强制走上游 2
+curl -X PUT http://localhost:9002/admin/api/keys/1/model-overrides \
+  -H "Authorization: Bearer my-secret-token" \
+  -H "Content-Type: application/json" \
+  -d '{"overrides":[{"model_pattern":"claude-opus-4-6","upstream_id":2}]}'
+
+# 一个模型可映射多个上游（failover）
+curl -X PUT http://localhost:9002/admin/api/keys/1/model-overrides \
+  -H "Authorization: Bearer my-secret-token" \
+  -H "Content-Type: application/json" \
+  -d '{"overrides":[
+    {"model_pattern":"claude-opus-4-6","upstream_id":2},
+    {"model_pattern":"claude-opus-4-6","upstream_id":3},
+    {"model_pattern":"gpt-*","upstream_id":1}
+  ]}'
+
+# 清空覆盖（恢复默认路由）
+curl -X PUT http://localhost:9002/admin/api/keys/1/model-overrides \
+  -H "Authorization: Bearer my-secret-token" \
+  -H "Content-Type: application/json" \
+  -d '{"overrides":[]}'
+```
+
+> 匹配优先级：精确匹配 > 最具体的通配模式（最长 pattern）。覆盖上游不可用时返回 422，不回退默认路由。
+
 ## 架构
 
 ```
@@ -121,12 +153,16 @@ curl -X PUT http://localhost:9002/admin/api/upstreams/1/models \
  KeyResolver               ← 原子快照查找密钥哈希，401 无效密钥
     │
  UpstreamBinding           ← 按 Key 绑定关系过滤可用上游
+    │                         + 加载 per-key 模型路由覆盖（原子缓存）
     │
  RateLimiter               ← 滑动窗口 RPM 限流，429 超限
     │
  StreamingMiddleware        ← SSE 响应即时刷新
     │
- DynamicProxy              ← 缓冲 body → 提取 model → 按模型模式过滤上游
+ DynamicProxy              ← 缓冲 body → 提取 model
+    │                           → 全局白名单校验（403 拦截）
+    │                           → 按模型模式过滤上游
+    │                           → 应用 per-key 模型路由覆盖（422 不可用）
     │                           → 认证头重写 → 转发请求 → 429 故障切换
     │                           │
     ▼                           ▼ (异步)
@@ -202,6 +238,9 @@ logging:
 | GET | `/admin/api/keys/bindings` | 批量获取所有 Key 绑定 |
 | GET | `/admin/api/keys/{id}/upstreams` | 获取 Key 绑定的上游 |
 | PUT | `/admin/api/keys/{id}/upstreams` | 设置 Key 绑定的上游 |
+| GET | `/admin/api/keys/model-overrides` | 批量获取所有 Key 模型路由覆盖 |
+| GET | `/admin/api/keys/{id}/model-overrides` | 获取 Key 模型路由覆盖 |
+| PUT | `/admin/api/keys/{id}/model-overrides` | 设置 Key 模型路由覆盖（全量覆盖） |
 | GET | `/admin/api/logs` | 查询请求日志 |
 | GET | `/admin/api/models/whitelist` | 模型白名单列表 |
 | POST | `/admin/api/models/whitelist` | 添加白名单模式 |
