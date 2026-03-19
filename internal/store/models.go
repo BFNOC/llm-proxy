@@ -31,6 +31,7 @@ type RequestLog struct {
 	DownstreamKeyID int64
 	UpstreamName    string
 	ClientIP        string
+	IPRegion        string
 	ProviderStyle   string
 	Path            string
 	StatusCode      int

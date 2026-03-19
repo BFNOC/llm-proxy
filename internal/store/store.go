@@ -366,8 +366,8 @@ func (s *Store) InsertRequestLogBatch(logs []RequestLog) error {
 	}
 
 	stmt, err := tx.Prepare(
-		`INSERT INTO request_logs (downstream_key_id, upstream_name, client_ip, provider_style, path, status_code, latency_ms, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO request_logs (downstream_key_id, upstream_name, client_ip, ip_region, provider_style, path, status_code, latency_ms, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	)
 	if err != nil {
 		_ = tx.Rollback()
@@ -380,7 +380,7 @@ func (s *Store) InsertRequestLogBatch(logs []RequestLog) error {
 		if createdAt.IsZero() {
 			createdAt = time.Now().UTC()
 		}
-		if _, err = stmt.Exec(log.DownstreamKeyID, log.UpstreamName, log.ClientIP, log.ProviderStyle, log.Path, log.StatusCode, log.LatencyMs, createdAt); err != nil {
+		if _, err = stmt.Exec(log.DownstreamKeyID, log.UpstreamName, log.ClientIP, log.IPRegion, log.ProviderStyle, log.Path, log.StatusCode, log.LatencyMs, createdAt); err != nil {
 			_ = tx.Rollback()
 			return fmt.Errorf("insert request log: %w", err)
 		}
@@ -404,7 +404,7 @@ func (s *Store) DeleteLogsOlderThan(d time.Duration) error {
 // QueryLogs retrieves request logs for a given key within a time range.
 // Pass keyID=0 to query across all keys. limit<=0 means no limit.
 func (s *Store) QueryLogs(keyID int64, from, to time.Time, limit int) ([]RequestLog, error) {
-	query := `SELECT id, downstream_key_id, upstream_name, client_ip, provider_style, path, status_code, latency_ms, created_at
+	query := `SELECT id, downstream_key_id, upstream_name, client_ip, ip_region, provider_style, path, status_code, latency_ms, created_at
 	          FROM request_logs WHERE created_at >= ? AND created_at <= ?`
 	args := []interface{}{from.UTC(), to.UTC()}
 
@@ -429,7 +429,7 @@ func (s *Store) QueryLogs(keyID int64, from, to time.Time, limit int) ([]Request
 	var result []RequestLog
 	for rows.Next() {
 		var rl RequestLog
-		if err := rows.Scan(&rl.ID, &rl.DownstreamKeyID, &rl.UpstreamName, &rl.ClientIP, &rl.ProviderStyle, &rl.Path, &rl.StatusCode, &rl.LatencyMs, &rl.CreatedAt); err != nil {
+		if err := rows.Scan(&rl.ID, &rl.DownstreamKeyID, &rl.UpstreamName, &rl.ClientIP, &rl.IPRegion, &rl.ProviderStyle, &rl.Path, &rl.StatusCode, &rl.LatencyMs, &rl.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan request log row: %w", err)
 		}
 		result = append(result, rl)

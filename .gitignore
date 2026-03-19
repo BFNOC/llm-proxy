@@ -31,3 +31,4 @@ logs/
 
 # SQLite data
 data/
+tmp/

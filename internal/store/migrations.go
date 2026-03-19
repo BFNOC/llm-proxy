@@ -125,6 +125,13 @@ CREATE TABLE IF NOT EXISTS upstream_model_patterns (
 CREATE INDEX IF NOT EXISTS idx_upstream_model_patterns_upstream ON upstream_model_patterns (upstream_id);
 `,
 	},
+	{
+		// v9: 为请求日志增加 IP 归属地字段，由 ip2region 在日志批写时填充。
+		version: 9,
+		up: `
+ALTER TABLE request_logs ADD COLUMN ip_region TEXT NOT NULL DEFAULT '';
+`,
+	},
 }
 
 // RunMigrations applies all pending schema migrations in order.

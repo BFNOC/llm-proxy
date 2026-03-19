@@ -16,6 +16,7 @@ import (
 
 	"github.com/Instawork/llm-proxy/internal/admin"
 	"github.com/Instawork/llm-proxy/internal/config"
+	"github.com/Instawork/llm-proxy/internal/geoip"
 	"github.com/Instawork/llm-proxy/internal/middleware"
 	"github.com/Instawork/llm-proxy/internal/proxy"
 	"github.com/Instawork/llm-proxy/internal/store"
@@ -58,7 +59,7 @@ func (h *CustomPrettyHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
 func (h *CustomPrettyHandler) WithGroup(_ string) slog.Handler      { return h }
 
 const (
-	version     = "2.2.0"
+	version     = "2.3.0"
 	defaultPort = "9002"
 )
 
@@ -195,8 +196,19 @@ func main() {
 	// Create audit logger
 	var auditLogger *middleware.AuditLogger
 	if yamlConfig.Audit.Enabled {
+		// Initialize GeoIP for IP region lookup (only needed with audit logging).
+		// Graceful degradation: if mmdb is missing, geo will be nil and lookups skipped.
+		geoIPDBPath := "data/GeoLite2-City.mmdb"
+		if v := os.Getenv("GEOIP_DB_PATH"); v != "" {
+			geoIPDBPath = v
+		}
+		geo := geoip.New(geoIPDBPath)
+		if geo != nil {
+			defer geo.Close()
+		}
+
 		flushInterval := time.Duration(yamlConfig.Audit.FlushInterval) * time.Millisecond
-		auditLogger = middleware.NewAuditLogger(db, yamlConfig.Audit.ChannelBuffer, yamlConfig.Audit.BatchSize, flushInterval)
+		auditLogger = middleware.NewAuditLogger(db, geo, yamlConfig.Audit.ChannelBuffer, yamlConfig.Audit.BatchSize, flushInterval)
 		slog.Info("Audit logger started", "buffer", yamlConfig.Audit.ChannelBuffer, "batch_size", yamlConfig.Audit.BatchSize)
 	}
 

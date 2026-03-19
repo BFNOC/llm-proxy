@@ -226,7 +226,7 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
                     <div class="form-group"><label>&nbsp;</label><button type="submit" class="btn btn-primary">查询</button></div>
                 </form>
                 <div class="table-container">
-                <table><thead><tr><th class="hide-on-mobile">ID</th><th>密钥</th><th>上游</th><th class="hide-on-mobile">IP</th><th class="hide-on-mobile">风格</th><th class="hide-on-mobile">路径</th><th>状态码</th><th class="hide-on-mobile">延迟</th><th>时间</th></tr></thead>
+                <table><thead><tr><th class="hide-on-mobile">ID</th><th>密钥</th><th>上游</th><th class="hide-on-mobile">IP</th><th>地区</th><th class="hide-on-mobile">风格</th><th class="hide-on-mobile">路径</th><th>状态码</th><th class="hide-on-mobile">延迟</th><th>时间</th></tr></thead>
                 <tbody id="logs-table"></tbody></table>
                 </div>
             </div>
@@ -790,11 +790,11 @@ function loadLogs(e) {
     api('/logs'+q).then(data => {
         const tbody = document.getElementById('logs-table');
         if (!data || data.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="9" class="empty-state">暂无日志</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="10" class="empty-state">暂无日志</td></tr>';
             return;
         }
         tbody.innerHTML = (data||[]).map(l =>
-            '<tr><td class="hide-on-mobile">'+l.ID+'</td><td>'+l.DownstreamKeyID+'</td><td>'+esc(l.UpstreamName||'-')+'</td><td class="hide-on-mobile">'+esc(l.ClientIP||'-')+'</td><td class="hide-on-mobile">'+esc(l.ProviderStyle)+'</td><td class="hide-on-mobile">'+esc(l.Path)+'</td><td><span class="badge '+(l.StatusCode<400?'badge-green':'badge-red')+'">'+l.StatusCode+'</span></td><td class="hide-on-mobile">'+l.LatencyMs+'ms</td><td>'+fmtTime(l.CreatedAt)+'</td></tr>'
+            '<tr><td class="hide-on-mobile">'+l.ID+'</td><td>'+l.DownstreamKeyID+'</td><td>'+esc(l.UpstreamName||'-')+'</td><td class="hide-on-mobile">'+esc(l.ClientIP||'-')+'</td><td>'+esc(l.IPRegion||'-')+'</td><td class="hide-on-mobile">'+esc(l.ProviderStyle)+'</td><td class="hide-on-mobile">'+esc(l.Path)+'</td><td><span class="badge '+(l.StatusCode<400?'badge-green':'badge-red')+'">'+l.StatusCode+'</span></td><td class="hide-on-mobile">'+l.LatencyMs+'ms</td><td>'+fmtTime(l.CreatedAt)+'</td></tr>'
         ).join('');
     });
 }
