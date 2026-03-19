@@ -93,7 +93,8 @@ type ActiveUpstream struct {
 // upstreams return 429 is the response forwarded to the client.
 // 每个上游通过 BuildTransport 获取对应代理的 *http.Transport，相同代理复用连接池。
 type DynamicProxy struct {
-	allUpstreams atomic.Value // stores []*ActiveUpstream
+	allUpstreams    atomic.Value // stores []*ActiveUpstream
+	activeRequests atomic.Int64 // 当前正在处理的并发请求数
 }
 
 // NewDynamicProxy creates a DynamicProxy.
@@ -136,12 +137,20 @@ func (dp *DynamicProxy) GetAllUpstreams() []*ActiveUpstream {
 	return v.([]*ActiveUpstream)
 }
 
+// ActiveRequests 返回当前正在处理的并发请求数（原子读取，零开销）。
+func (dp *DynamicProxy) ActiveRequests() int64 {
+	return dp.activeRequests.Load()
+}
+
 // ServeHTTP 实现 http.Handler 接口。按优先级顺序尝试上游，
 // 遇到 429 时自动故障切换到下一个。请求体会被缓冲一次用于重试。
 //
 // 如果请求上下文里带有允许访问的 upstream ID 集合，代理只会尝试这些健康上游。
 // 过滤发生在真正发起 RoundTrip 之前，确保未授权上游不会收到任何请求。
 func (dp *DynamicProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	dp.activeRequests.Add(1)
+	defer dp.activeRequests.Add(-1)
+
 	upstreams := dp.GetAllUpstreams()
 	if len(upstreams) == 0 {
 		w.Header().Set("Content-Type", "application/json")

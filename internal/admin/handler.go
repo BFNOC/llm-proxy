@@ -20,17 +20,19 @@ import (
 )
 
 var startTime = time.Now()
-var Version = "2.1.0" // set by main or build flags
+var Version = "2.2.0" // set by main or build flags
 
 type AdminHandler struct {
-	store        *store.Store
-	keyCache     *middleware.KeyCache
-	rateLimiter  *middleware.PerKeyRPMLimiter
-	prober       *proxy.UpstreamProber
-	dynamicProxy *proxy.DynamicProxy
-	auditLogger  *middleware.AuditLogger
-	modelFilter  *middleware.ModelFilter
-	adminToken   string
+	store          *store.Store
+	keyCache       *middleware.KeyCache
+	rateLimiter    *middleware.PerKeyRPMLimiter
+	prober         *proxy.UpstreamProber
+	dynamicProxy   *proxy.DynamicProxy
+	auditLogger    *middleware.AuditLogger
+	modelFilter    *middleware.ModelFilter
+	requestCounter *middleware.GlobalRequestCounter
+	perKeyStats    *middleware.PerKeyStatsCollector
+	adminToken     string
 }
 
 func NewAdminHandler(
@@ -41,17 +43,21 @@ func NewAdminHandler(
 	dp *proxy.DynamicProxy,
 	al *middleware.AuditLogger,
 	mf *middleware.ModelFilter,
+	rc *middleware.GlobalRequestCounter,
+	pks *middleware.PerKeyStatsCollector,
 	adminToken string,
 ) *AdminHandler {
 	return &AdminHandler{
-		store:        s,
-		keyCache:     kc,
-		rateLimiter:  rl,
-		prober:       prober,
-		dynamicProxy: dp,
-		auditLogger:  al,
-		modelFilter:  mf,
-		adminToken:   adminToken,
+		store:          s,
+		keyCache:       kc,
+		rateLimiter:    rl,
+		prober:         prober,
+		dynamicProxy:   dp,
+		auditLogger:    al,
+		modelFilter:    mf,
+		requestCounter: rc,
+		perKeyStats:    pks,
+		adminToken:     adminToken,
 	}
 }
 
@@ -95,6 +101,7 @@ func (h *AdminHandler) RegisterRoutes(r *mux.Router) {
 
 	// Status
 	api.HandleFunc("/status", h.getStatus).Methods("GET")
+	api.HandleFunc("/key-rpm", h.getKeyRPM).Methods("GET")
 
 	// Dashboard (serve embedded HTML)
 	r.PathPrefix("/admin/").HandlerFunc(h.serveDashboard)
@@ -419,11 +426,14 @@ func (h *AdminHandler) deleteKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Reload key cache + clean rate limiter
+	// Reload key cache + clean rate limiter + clean stats
 	if err := h.keyCache.Reload(h.store); err != nil {
 		slog.Error("admin: failed to reload key cache", "error", err)
 	}
 	h.rateLimiter.RemoveKey(id)
+	if h.perKeyStats != nil {
+		h.perKeyStats.RemoveKey(id)
+	}
 
 	slog.Info("admin: deleted key", "id", id)
 	jsonOK(w, map[string]string{"status": "deleted"})
@@ -708,8 +718,29 @@ func (h *AdminHandler) getStatus(w http.ResponseWriter, r *http.Request) {
 		"uptime":            uptime,
 		"version":           Version,
 		"timestamp":         time.Now().UTC(),
+		"active_requests":   h.dynamicProxy.ActiveRequests(),
 	}
+
+	// 实时 RPM/RPS 统计；计数器可能未初始化（单元测试场景），用尽力而为策略。
+	if h.requestCounter != nil {
+		status["rpm"] = h.requestCounter.RPM()
+		status["rps"] = fmt.Sprintf("%.1f", h.requestCounter.RPS())
+	} else {
+		status["rpm"] = 0
+		status["rps"] = "0.0"
+	}
+
 	jsonOK(w, status)
+}
+
+// getKeyRPM 返回所有活跃 Key 的实时 RPM 数据。
+// 拆分为独立端点，避免 /status 轮询时携带大量 per-key 数据。
+func (h *AdminHandler) getKeyRPM(w http.ResponseWriter, r *http.Request) {
+	if h.perKeyStats == nil {
+		jsonOK(w, map[string]int{})
+		return
+	}
+	jsonOK(w, h.perKeyStats.AllActiveRPMs())
 }
 
 // --- Dashboard ---
