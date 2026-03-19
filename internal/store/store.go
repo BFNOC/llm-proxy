@@ -701,3 +701,93 @@ func (s *Store) GetAllUpstreamModelPatterns() (map[int64][]string, error) {
 	return result, rows.Err()
 }
 
+// ---------------------------------------------------------------------------
+// Key Model Overrides
+// ---------------------------------------------------------------------------
+
+// KeyModelOverrideInput 是写入覆盖规则时使用的输入结构。
+type KeyModelOverrideInput struct {
+	ModelPattern string
+	UpstreamID   int64
+}
+
+// SetKeyModelOverrides 以全量覆盖方式更新某个下游 Key 的模型路由覆盖。
+// 先删后插放在同一事务中；空切片表示清空所有覆盖。
+func (s *Store) SetKeyModelOverrides(keyID int64, overrides []KeyModelOverrideInput) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+
+	if _, err = tx.Exec(`DELETE FROM key_model_overrides WHERE downstream_key_id = ?`, keyID); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("clear existing overrides: %w", err)
+	}
+
+	if len(overrides) > 0 {
+		now := time.Now().UTC()
+		stmt, err := tx.Prepare(`INSERT INTO key_model_overrides (downstream_key_id, model_pattern, upstream_id, created_at) VALUES (?, ?, ?, ?)`)
+		if err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("prepare override insert: %w", err)
+		}
+		defer stmt.Close()
+
+		for _, o := range overrides {
+			if _, err = stmt.Exec(keyID, o.ModelPattern, o.UpstreamID, now); err != nil {
+				_ = tx.Rollback()
+				return fmt.Errorf("insert override (key=%d, pattern=%s, upstream=%d): %w", keyID, o.ModelPattern, o.UpstreamID, err)
+			}
+		}
+	}
+
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit overrides: %w", err)
+	}
+	return nil
+}
+
+// GetKeyModelOverrides 返回某个下游 Key 的模型路由覆盖列表。
+func (s *Store) GetKeyModelOverrides(keyID int64) ([]KeyModelOverride, error) {
+	rows, err := s.db.Query(
+		`SELECT id, downstream_key_id, model_pattern, upstream_id, created_at
+		 FROM key_model_overrides WHERE downstream_key_id = ? ORDER BY model_pattern, upstream_id`,
+		keyID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query key model overrides: %w", err)
+	}
+	defer rows.Close()
+
+	var result []KeyModelOverride
+	for rows.Next() {
+		var o KeyModelOverride
+		if err := rows.Scan(&o.ID, &o.DownstreamKeyID, &o.ModelPattern, &o.UpstreamID, &o.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan key model override: %w", err)
+		}
+		result = append(result, o)
+	}
+	return result, rows.Err()
+}
+
+// GetAllKeyModelOverrides 一次性加载所有 Key 的模型路由覆盖，供缓存批量填充。
+func (s *Store) GetAllKeyModelOverrides() (map[int64][]KeyModelOverride, error) {
+	rows, err := s.db.Query(
+		`SELECT id, downstream_key_id, model_pattern, upstream_id, created_at
+		 FROM key_model_overrides ORDER BY downstream_key_id, model_pattern, upstream_id`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query all key model overrides: %w", err)
+	}
+	defer rows.Close()
+
+	result := make(map[int64][]KeyModelOverride)
+	for rows.Next() {
+		var o KeyModelOverride
+		if err := rows.Scan(&o.ID, &o.DownstreamKeyID, &o.ModelPattern, &o.UpstreamID, &o.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan key model override row: %w", err)
+		}
+		result[o.DownstreamKeyID] = append(result[o.DownstreamKeyID], o)
+	}
+	return result, rows.Err()
+}

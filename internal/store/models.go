@@ -58,3 +58,14 @@ type UpstreamModelPattern struct {
 	CreatedAt  time.Time
 }
 
+// KeyModelOverride 表示某个下游 Key 对特定模型的上游路由覆盖。
+// 一个 key + 一个 model_pattern 可以对应多个 upstream_id（多行），支持 failover。
+// 当请求匹配到覆盖规则时，优先使用精确匹配，否则按最具体的通配模式。
+type KeyModelOverride struct {
+	ID              int64
+	DownstreamKeyID int64
+	ModelPattern    string
+	UpstreamID      int64
+	CreatedAt       time.Time
+}
+

@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
-	"path/filepath"
+	"path"
 	"strings"
 	"sync/atomic"
 
@@ -49,17 +49,18 @@ func (mf *ModelFilter) getPatterns() []string {
 	return v.([]string)
 }
 
-// matchModel checks if a model ID matches any whitelist pattern.
-// Patterns with * or ? use glob matching; patterns without wildcards require exact match.
-func (mf *ModelFilter) matchModel(modelID string) bool {
+// MatchModel checks if a model ID matches any whitelist pattern.
+// Patterns with * or ? use glob matching (path.Match); patterns without wildcards require exact match.
+// Returns true if the whitelist is empty (allow all).
+func (mf *ModelFilter) MatchModel(modelID string) bool {
 	patterns := mf.getPatterns()
 	if len(patterns) == 0 {
 		return true // empty whitelist = allow all
 	}
 	for _, p := range patterns {
 		if strings.Contains(p, "*") || strings.Contains(p, "?") {
-			// Glob match
-			if matched, _ := filepath.Match(p, modelID); matched {
+			// Glob match (path.Match avoids OS-specific separator issues)
+			if matched, _ := path.Match(p, modelID); matched {
 				return true
 			}
 		} else {
@@ -134,7 +135,7 @@ func ModelFilterMiddleware(mf *ModelFilter) func(http.Handler) http.Handler {
 				if !ok {
 					continue
 				}
-				if mf.matchModel(id) {
+				if mf.MatchModel(id) {
 					filtered = append(filtered, model)
 				}
 			}

@@ -69,10 +69,33 @@ func ContextWithAllowedUpstreamIDs(ctx context.Context, ids []int64) context.Con
 	return context.WithValue(ctx, allowedUpstreamIDsKey{}, ids)
 }
 
-// AllowedUpstreamIDsFromContext 读取当前请求的上游访问白名单。
-// 约定 nil 或空切片表示“没有显式绑定”，调用方应继续允许全部健康上游。
+// AllowedUpstreamIDsFromContext reads the upstream access whitelist.
 func AllowedUpstreamIDsFromContext(ctx context.Context) []int64 {
 	v, _ := ctx.Value(allowedUpstreamIDsKey{}).([]int64)
+	return v
+}
+
+// ---------------------------------------------------------------------------
+// Per-Key Model Override context helpers
+// ---------------------------------------------------------------------------
+
+type keyModelOverridesKey struct{}
+
+// KeyModelOverrideRule is a runtime override rule.
+// One ModelPattern can map to multiple UpstreamIDs (failover list).
+type KeyModelOverrideRule struct {
+	ModelPattern string
+	UpstreamIDs  []int64
+}
+
+// ContextWithKeyModelOverrides writes per-key model routing overrides to context.
+func ContextWithKeyModelOverrides(ctx context.Context, overrides []KeyModelOverrideRule) context.Context {
+	return context.WithValue(ctx, keyModelOverridesKey{}, overrides)
+}
+
+// KeyModelOverridesFromContext reads per-key model routing overrides.
+func KeyModelOverridesFromContext(ctx context.Context) []KeyModelOverrideRule {
+	v, _ := ctx.Value(keyModelOverridesKey{}).([]KeyModelOverrideRule)
 	return v
 }
 
@@ -94,7 +117,12 @@ type ActiveUpstream struct {
 // 每个上游通过 BuildTransport 获取对应代理的 *http.Transport，相同代理复用连接池。
 type DynamicProxy struct {
 	allUpstreams    atomic.Value // stores []*ActiveUpstream
-	activeRequests atomic.Int64 // 当前正在处理的并发请求数
+	activeRequests atomic.Int64
+
+	// WhitelistMatcher checks if a model is in the global whitelist.
+	// Injected from main.go to avoid proxy->middleware circular dependency.
+	// Returns true if model is allowed; nil means no whitelist enforcement.
+	WhitelistMatcher func(model string) bool
 }
 
 // NewDynamicProxy creates a DynamicProxy.
@@ -196,8 +224,28 @@ func (dp *DynamicProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// 从已缓冲的 body 提取 model 字段，按模型模式过滤上游。
 	// GET 请求（如 /v1/models）不含 model 字段，跳过过滤。
 	// 非 JSON body 也跳过过滤（可能是 multipart 等格式），由上游处理。
+	var model string
 	if r.Method != http.MethodGet {
-		model, isJSON := extractModelFromBody(bodyBytes)
+		var isJSON bool
+		model, isJSON = extractModelFromBody(bodyBytes)
+
+		// 全局白名单请求拦截：校验 model 是否在白名单中。
+		// 仅在白名单非空且 model 有效时执行校验。
+		if isJSON && model != "" && dp.WhitelistMatcher != nil {
+			if !dp.WhitelistMatcher(model) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusForbidden)
+				json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
+					"error": map[string]interface{}{
+						"message": fmt.Sprintf("model %q is not allowed by the model whitelist", model),
+						"type":    "invalid_request_error",
+						"code":    "model_not_allowed",
+					},
+				})
+				return
+			}
+		}
+
 		if isJSON && model != "" {
 			filtered := filterUpstreamsByModel(upstreams, model)
 			if len(filtered) == 0 {
@@ -213,6 +261,31 @@ func (dp *DynamicProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			upstreams = filtered
+		}
+	}
+
+	// Per-key 模型路由覆盖：如果命中覆盖规则，强制使用指定上游。
+	// 覆盖后无可用上游时 hard fail，不回退到默认路由。
+	if model != "" {
+		if overrides := KeyModelOverridesFromContext(r.Context()); len(overrides) > 0 {
+			if overrideIDs := matchModelOverrides(overrides, model); len(overrideIDs) > 0 {
+				filtered := filterUpstreams(upstreams, overrideIDs)
+				if len(filtered) == 0 {
+					slog.Warn("proxy: per-key model override matched but no upstream available",
+						"model", model, "override_upstreams", overrideIDs)
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusUnprocessableEntity)
+					json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
+						"error": map[string]interface{}{
+							"message": fmt.Sprintf("override upstream for model %q is not available", model),
+							"type":    "invalid_request_error",
+							"code":    "override_upstream_unavailable",
+						},
+					})
+					return
+				}
+				upstreams = filtered
+			}
 		}
 	}
 
@@ -424,3 +497,32 @@ func filterUpstreamsByModel(all []*ActiveUpstream, model string) []*ActiveUpstre
 	return result
 }
 
+// matchModelOverrides 按 per-key 覆盖规则匹配模型，返回应该使用的上游 ID 列表。
+// 优先级：精确匹配 > 最具体的通配模式（按 pattern 长度降序）。
+// 返回空切片表示没有匹配的覆盖规则。
+func matchModelOverrides(overrides []KeyModelOverrideRule, model string) []int64 {
+	// Phase 1: 优先找精确匹配（无通配符的 pattern）
+	for _, o := range overrides {
+		if !strings.Contains(o.ModelPattern, "*") && !strings.Contains(o.ModelPattern, "?") {
+			if model == o.ModelPattern {
+				return o.UpstreamIDs
+			}
+		}
+	}
+
+	// Phase 2: 找最具体（最长）的通配匹配
+	var bestIDs []int64
+	bestLen := -1
+	for _, o := range overrides {
+		if !strings.Contains(o.ModelPattern, "*") && !strings.Contains(o.ModelPattern, "?") {
+			continue // 精确匹配的规则已在 Phase 1 处理
+		}
+		if matched, _ := path.Match(o.ModelPattern, model); matched {
+			if len(o.ModelPattern) > bestLen {
+				bestLen = len(o.ModelPattern)
+				bestIDs = o.UpstreamIDs
+			}
+		}
+	}
+	return bestIDs
+}

@@ -189,7 +189,7 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
                     </div>
                 </div>
                 <div class="table-container">
-                <table><thead><tr><th class="hide-on-mobile">ID</th><th class="hide-on-mobile">前缀</th><th>名称</th><th>RPM</th><th>当前 RPM</th><th>状态</th><th class="hide-on-mobile">绑定上游</th><th>操作</th></tr></thead>
+                <table><thead><tr><th class="hide-on-mobile">ID</th><th class="hide-on-mobile">前缀</th><th>名称</th><th>RPM</th><th>当前 RPM</th><th>状态</th><th class="hide-on-mobile">绑定上游</th><th class="hide-on-mobile">模型路由</th><th>操作</th></tr></thead>
                 <tbody id="keys-table"></tbody></table>
                 </div>
             </div>
@@ -335,6 +335,29 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
     <div class="dialog-actions">
         <button type="button" class="btn btn-ghost" onclick="this.closest('dialog').close()">取消</button>
         <button type="button" class="btn btn-primary" onclick="saveModelPatterns()">保存</button>
+    </div>
+</dialog>
+
+<!-- Key Model Override Dialog -->
+<dialog id="dlg-model-override" style="max-width:600px;">
+    <h3>配置模型路由覆盖</h3>
+    <p style="color:var(--text-dim);font-size:0.85rem;margin-bottom:16px;">为此密钥指定特定模型走指定上游。支持 <code>*</code> 通配符。精确匹配优先于通配。覆盖上游不可用时请求将被拒绝。</p>
+    <input type="hidden" id="mo-key-id">
+    <div style="display:flex;gap:8px;margin-bottom:16px;align-items:end;">
+        <div class="form-group" style="flex:1">
+            <label>模型模式</label>
+            <input id="mo-new-pattern" placeholder="如: claude-opus-4-6">
+        </div>
+        <div class="form-group" style="flex:1">
+            <label>目标上游</label>
+            <select id="mo-new-upstream"></select>
+        </div>
+        <button type="button" class="btn btn-primary btn-sm" style="margin-bottom:2px;" onclick="addOverrideRule()">添加</button>
+    </div>
+    <div id="mo-rules" style="min-height:32px;margin-bottom:16px;"></div>
+    <div class="dialog-actions">
+        <button type="button" class="btn btn-ghost" onclick="this.closest('dialog').close()">取消</button>
+        <button type="button" class="btn btn-primary" onclick="saveOverrides()">保存</button>
     </div>
 </dialog>
 
@@ -634,13 +657,14 @@ function checkQuota(e, id) {
 
 // --- Keys ---
 function loadKeys() {
-    Promise.all([api('/keys'), api('/keys/bindings'), api('/key-rpm')]).then(([data, bindMap, rpmData]) => {
+    Promise.all([api('/keys'), api('/keys/bindings'), api('/key-rpm'), api('/keys/model-overrides')]).then(([data, bindMap, rpmData, overrideMap]) => {
         const keys = data || [];
         bindMap = bindMap || {};
         rpmData = rpmData || {};
+        overrideMap = overrideMap || {};
         const tbody = document.getElementById('keys-table');
         if (keys.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="8" class="empty-state">暂无密钥</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="9" class="empty-state">暂无密钥</td></tr>';
             return;
         }
         tbody.innerHTML = keys.map(k => {
@@ -650,13 +674,20 @@ function loadKeys() {
                 const names = bound.map(uid => { const u = allUpstreams.find(x=>x.id===uid); return u ? esc(u.name) : uid; });
                 bindText = names.join(', ');
             }
+            const overrides = overrideMap[k.id] || [];
+            let overrideText = '<span style="color:var(--text-dim)">无</span>';
+            if (overrides.length > 0) {
+                const patterns = [...new Set(overrides.map(o => o.ModelPattern))];
+                overrideText = patterns.map(p => '<span class="model-tag">' + esc(p) + '</span>').join('');
+            }
             const currentRpm = rpmData[k.id] || 0;
             const limitText = k.rpm_limit || '不限';
             const rpmColor = k.rpm_limit > 0 && currentRpm >= k.rpm_limit * 0.8 ? 'var(--red)' : currentRpm > 0 ? 'var(--green)' : 'var(--text-dim)';
             return '<tr><td class="hide-on-mobile">'+k.id+'</td><td class="hide-on-mobile"><code>'+esc(k.key_prefix)+'...</code></td><td>'+esc(k.name)+'</td><td>'+(k.rpm_limit||'不限')+'</td><td><span style="color:'+rpmColor+';font-weight:600">'+currentRpm+'</span><span style="color:var(--text-dim)">/'+ limitText+'</span></td><td>'+
             (k.enabled?'<span class="badge badge-green">启用</span>':'<span class="badge badge-red">禁用</span>')+
-            '</td><td class="hide-on-mobile">'+bindText+'</td><td class="actions">'+
+            '</td><td class="hide-on-mobile">'+bindText+'</td><td class="hide-on-mobile"><div class="model-tags" style="gap:4px">'+overrideText+'</div></td><td class="actions">'+
             '<button class="btn btn-ghost btn-sm" onclick="openBindingDialog('+k.id+')">绑定</button> '+
+            '<button class="btn btn-ghost btn-sm" onclick="openOverrideDialog('+k.id+')">路由</button> '+
             '<button class="btn btn-ghost btn-sm" onclick="editKey('+k.id+')">编辑</button> '+
             '<button class="btn btn-success btn-sm" onclick="toggleKey('+k.id+','+(!k.enabled)+')">切换</button> '+
             '<button class="btn btn-danger btn-sm" onclick="deleteKey('+k.id+')">删除</button>'+
@@ -734,6 +765,63 @@ function saveBindings() {
     api('/keys/'+keyId+'/upstreams', {method:'PUT', body: JSON.stringify({upstream_ids: ids})}).then(d => {
         if(d.error) alert(d.error);
         else { document.getElementById('dlg-binding').close(); loadKeys(); }
+    });
+}
+
+// --- Key Model Override ---
+let moCurrentRules = []; // [{model_pattern, upstream_id}]
+function openOverrideDialog(keyId) {
+    document.getElementById('mo-key-id').value = keyId;
+    // Populate upstream select
+    const sel = document.getElementById('mo-new-upstream');
+    sel.innerHTML = allUpstreams.map(u => '<option value="'+u.id+'">'+esc(u.name)+'</option>').join('');
+    document.getElementById('mo-new-pattern').value = '';
+    // Load existing overrides
+    api('/keys/'+keyId+'/model-overrides').then(data => {
+        moCurrentRules = (data || []).map(o => ({model_pattern: o.ModelPattern, upstream_id: o.UpstreamID}));
+        renderOverrideRules();
+        document.getElementById('dlg-model-override').showModal();
+    });
+}
+
+function renderOverrideRules() {
+    const container = document.getElementById('mo-rules');
+    if (moCurrentRules.length === 0) {
+        container.innerHTML = '<div class="empty-state" style="padding:16px;">无覆盖规则（使用默认路由）</div>';
+        return;
+    }
+    container.innerHTML = '<table style="width:100%"><thead><tr><th>模型模式</th><th>目标上游</th><th></th></tr></thead><tbody>' +
+        moCurrentRules.map((r, i) => {
+            const u = allUpstreams.find(x => x.id === r.upstream_id);
+            const uName = u ? esc(u.name) : 'ID:'+r.upstream_id;
+            return '<tr><td><code>'+esc(r.model_pattern)+'</code></td><td>'+uName+'</td><td><button class="btn btn-danger btn-sm" onclick="removeOverrideRule('+i+')">删除</button></td></tr>';
+        }).join('') + '</tbody></table>';
+}
+
+function addOverrideRule() {
+    const pattern = document.getElementById('mo-new-pattern').value.trim();
+    const upstreamId = parseInt(document.getElementById('mo-new-upstream').value);
+    if (!pattern) { alert('请输入模型模式'); return; }
+    if (!upstreamId) { alert('请选择目标上游'); return; }
+    // Check duplicate
+    if (moCurrentRules.some(r => r.model_pattern === pattern && r.upstream_id === upstreamId)) {
+        alert('规则已存在'); return;
+    }
+    moCurrentRules.push({model_pattern: pattern, upstream_id: upstreamId});
+    document.getElementById('mo-new-pattern').value = '';
+    renderOverrideRules();
+}
+
+function removeOverrideRule(idx) {
+    moCurrentRules.splice(idx, 1);
+    renderOverrideRules();
+}
+
+function saveOverrides() {
+    const keyId = document.getElementById('mo-key-id').value;
+    api('/keys/'+keyId+'/model-overrides', {method:'PUT', body: JSON.stringify({overrides: moCurrentRules})}).then(d => {
+        if(d.error) alert(d.error);
+        else { document.getElementById('dlg-model-override').close(); loadKeys(); }
     });
 }
 

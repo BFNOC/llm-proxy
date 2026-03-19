@@ -132,6 +132,23 @@ CREATE INDEX IF NOT EXISTS idx_upstream_model_patterns_upstream ON upstream_mode
 ALTER TABLE request_logs ADD COLUMN ip_region TEXT NOT NULL DEFAULT '';
 `,
 	},
+	{
+		// v10: 为每个下游 Key 配置 per-model 的上游路由覆盖。
+		// 一个 key + 一个 model pattern 可以映射到多个上游（多行），支持 failover。
+		// 外键级联删除保证删除 key 或 upstream 时自动清理关联覆盖规则。
+		version: 10,
+		up: `
+CREATE TABLE IF NOT EXISTS key_model_overrides (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    downstream_key_id INTEGER NOT NULL REFERENCES downstream_keys(id) ON DELETE CASCADE,
+    model_pattern     TEXT NOT NULL,
+    upstream_id       INTEGER NOT NULL REFERENCES upstream_providers(id) ON DELETE CASCADE,
+    created_at        DATETIME,
+    UNIQUE(downstream_key_id, model_pattern, upstream_id)
+);
+CREATE INDEX IF NOT EXISTS idx_key_model_overrides_key ON key_model_overrides (downstream_key_id);
+`,
+	},
 }
 
 // RunMigrations applies all pending schema migrations in order.
