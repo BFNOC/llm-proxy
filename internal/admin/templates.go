@@ -623,7 +623,25 @@ function checkQuota(e, id) {
                 html += '<div style="text-align:right;font-size:0.75rem;color:var(--text-dim);margin-top:4px;">使用率 ' + pct + '%</div>';
             }
             if (data.expires_at > 0) {
-                html += '<div style="font-size:0.8rem;color:var(--text-dim);margin-top:8px;">过期时间: ' + fmtTime(new Date(data.expires_at * 1000).toISOString()) + '</div>';
+                const expDate = new Date(data.expires_at * 1000);
+                const remain = data.expires_at * 1000 - Date.now();
+                let remainStr = '';
+                let remainColor = 'var(--text-dim)';
+                if (remain <= 0) {
+                    remainStr = '已过期';
+                    remainColor = 'var(--red)';
+                } else {
+                    const days = Math.floor(remain / 86400000);
+                    const hrs = Math.floor((remain % 86400000) / 3600000);
+                    const mins = Math.floor((remain % 3600000) / 60000);
+                    if (days > 0) remainStr = days + '天' + hrs + '小时';
+                    else if (hrs > 0) remainStr = hrs + '小时' + mins + '分';
+                    else remainStr = mins + '分钟';
+                    remainStr = '剩余 ' + remainStr;
+                    if (remain < 86400000) remainColor = 'var(--red)';
+                    else if (remain < 86400000 * 3) remainColor = 'var(--orange)';
+                }
+                html += '<div style="font-size:0.8rem;margin-top:8px;">过期时间: ' + fmtTime(expDate.toISOString()) + ' <span style="color:' + remainColor + ';font-weight:600;">(' + remainStr + ')</span></div>';
             }
             html += '</div>';
             td.innerHTML = html;
