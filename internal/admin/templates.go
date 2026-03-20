@@ -108,7 +108,7 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
         .empty-state { text-align: center; padding: 32px; color: var(--text-dim); font-size: 0.9rem; }
 
         /* Action buttons in table */
-        .actions { display: flex; gap: 4px; flex-wrap: wrap; }
+        .actions { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
 
         /* Truncate URL */
         .truncate-url { display: inline-block; max-width: 150px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: middle; }
@@ -159,6 +159,7 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
             <button onclick="showTab('models',this)">模型白名单</button>
             <button onclick="showTab('logs',this)">请求日志</button>
             <button onclick="showTab('status',this)">系统状态</button>
+            <button onclick="showTab('tools',this)">实用工具</button>
         </nav>
 
         <!-- Upstreams Tab -->
@@ -245,6 +246,22 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
                 <table><thead><tr><th class="hide-on-mobile">ID</th><th>名称</th><th>地址</th></tr></thead>
                 <tbody id="status-upstreams"></tbody></table>
                 </div>
+            </div>
+        </div>
+
+        <!-- Tools Tab -->
+        <div id="tab-tools" class="tab-content">
+            <div class="card">
+                <div class="card-header">
+                    <h2>额度 JSON 解析</h2>
+                </div>
+                <p style="color:var(--text-dim);font-size:0.85rem;margin-bottom:12px;">粘贴 new-api 查额返回的 JSON，自动解析并展示额度信息。</p>
+                <textarea id="tools-json-input" rows="6" style="width:100%;font-family:'SF Mono','JetBrains Mono',monospace;font-size:0.8rem;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px;resize:vertical;" placeholder='粘贴 JSON 如: {"code":true,"data":{...}}'></textarea>
+                <div style="margin-top:12px;">
+                    <button class="btn btn-primary btn-sm" onclick="parseQuotaJSON()">解析</button>
+                    <button class="btn btn-ghost btn-sm" onclick="document.getElementById('tools-json-input').value='';document.getElementById('tools-result').innerHTML=''">清空</button>
+                </div>
+                <div id="tools-result" style="margin-top:16px;"></div>
             </div>
         </div>
     </div>
@@ -361,6 +378,21 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
     </div>
 </dialog>
 
+<!-- CF Bypass Config Dialog -->
+<dialog id="dlg-cf" style="max-width:480px;">
+    <h3>CF 防御绕过</h3>
+    <p style="color:var(--text-dim);font-size:0.85rem;margin-bottom:16px;">填入从浏览器获取的 <code>cf_clearance</code> Cookie 和 <code>User-Agent</code>，用于绕过 Cloudflare 验证。保存在浏览器 localStorage。</p>
+    <input type="hidden" id="cf-upstream-id">
+    <div class="form-group"><label>cf_clearance</label><input id="cf-clearance" placeholder="cf_clearance cookie 值"></div>
+    <div class="form-group" style="margin-top:12px;"><label>User-Agent</label><input id="cf-ua" placeholder="与获取 cookie 时相同的浏览器 UA"></div>
+    <div class="dialog-actions">
+        <button type="button" class="btn btn-danger btn-sm" onclick="clearCFConfig()">清除</button>
+        <div style="flex:1"></div>
+        <button type="button" class="btn btn-ghost" onclick="this.closest('dialog').close()">取消</button>
+        <button type="button" class="btn btn-primary" onclick="saveCFConfig()">保存</button>
+    </div>
+</dialog>
+
 <script>
 let TOKEN = '';
 // --- Cookie helpers ---
@@ -396,6 +428,8 @@ function logout() {
     clearToken();
     TOKEN = '';
     stopStatusTimer();
+    // 清理 CF 绕过配置
+    Object.keys(localStorage).filter(k => k.startsWith('cf_config_')).forEach(k => localStorage.removeItem(k));
     document.getElementById('main-section').style.display = 'none';
     document.getElementById('auth-section').style.display = 'flex';
 }
@@ -455,6 +489,7 @@ function loadUpstreams() {
             '</td><td class="actions">'+
             '<button class="btn btn-ghost btn-sm" onclick="testProxy(event,'+u.id+')">测试</button> '+
             '<button class="btn btn-ghost btn-sm" onclick="checkQuota(event,'+u.id+')">查额</button> '+
+            '<button class="btn btn-ghost btn-sm" style="'+(getCFConfig(u.id)?'color:var(--green)':'')+';font-size:0.8em" onclick="openCFDialog('+u.id+')">CF</button> '+
             '<button class="btn btn-ghost btn-sm" onclick="openModelPatternsDialog('+u.id+')">模型</button> '+
             '<button class="btn btn-ghost btn-sm" onclick="toggleUpstream('+u.id+','+(!u.enabled)+')">切换</button> '+
             '<button class="btn btn-ghost btn-sm" onclick="editUpstream('+u.id+')">编辑</button> '+
@@ -526,7 +561,8 @@ function testProxy(e, id) {
     const origText = btn.textContent;
     btn.textContent = '测试中...';
     btn.disabled = true;
-    api('/upstreams/'+id+'/test-proxy', {method:'POST'}).then(d => {
+    const cfBody = getCFConfig(id);
+    api('/upstreams/'+id+'/test-proxy', {method:'POST', body: JSON.stringify(cfBody||{})}).then(d => {
         btn.textContent = origText;
         btn.disabled = false;
         const tr = document.createElement('tr');
@@ -561,6 +597,9 @@ function testProxy(e, id) {
             html += '<button class="btn btn-ghost btn-sm" onclick="this.closest(\'tr\').remove()" style="padding:2px 8px;">✕</button></div>';
             html += '<div style="color:var(--text-dim);font-size:0.85rem;">' + esc(msg) + '</div>';
             html += '<div style="color:var(--text);font-size:0.85rem;margin-top:8px;">延迟: <strong>' + (d.latency_ms||0) + 'ms</strong></div>';
+            if (msg.indexOf('403') !== -1) {
+                html += '<div style="margin-top:8px;"><button class="btn btn-ghost btn-sm" style="color:var(--orange)" onclick="this.closest(\'tr\').remove();openCFDialog('+id+')">🔧 可能需要配置 CF 绕过</button></div>';
+            }
             html += '</div>';
             td.innerHTML = html;
         }
@@ -591,7 +630,8 @@ function checkQuota(e, id) {
     const origText = btn.textContent;
     btn.textContent = '查询中...';
     btn.disabled = true;
-    api('/upstreams/'+id+'/check-quota', {method:'POST'}).then(d => {
+    const cfBody = getCFConfig(id);
+    api('/upstreams/'+id+'/check-quota', {method:'POST', body: JSON.stringify(cfBody||{})}).then(d => {
         btn.textContent = origText;
         btn.disabled = false;
         const tr = document.createElement('tr');
@@ -602,47 +642,11 @@ function checkQuota(e, id) {
 
         if (d.success) {
             const data = d.data;
-            const fmt = n => n.toLocaleString();
-            const toUSD = n => '$' + (n / 500000).toFixed(2);
-            const pct = data.total_granted > 0 ? (data.total_used / data.total_granted * 100).toFixed(1) : '0.0';
-            const barColor = pct > 80 ? 'var(--red)' : pct > 50 ? 'var(--orange)' : 'var(--green)';
             let html = '<div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:16px;margin:8px 16px;">';
             html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">';
             html += '<span style="font-weight:600;">📊 ' + esc(data.name) + '</span>';
             html += '<button class="btn btn-ghost btn-sm" onclick="this.closest(\'tr\').remove()" style="padding:2px 8px;">✕</button></div>';
-            if (data.unlimited_quota) {
-                html += '<span class="badge badge-green">无限额度</span>';
-            } else {
-                html += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:12px;">';
-                html += '<div style="text-align:center;"><div style="font-size:0.75rem;color:var(--text-dim);">可用</div><div style="font-size:1.1rem;font-weight:700;color:var(--green);">' + toUSD(data.total_available) + '</div><div style="font-size:0.7rem;color:var(--text-dim);">' + fmt(data.total_available) + '</div></div>';
-                html += '<div style="text-align:center;"><div style="font-size:0.75rem;color:var(--text-dim);">已用</div><div style="font-size:1.1rem;font-weight:700;color:var(--orange);">' + toUSD(data.total_used) + '</div><div style="font-size:0.7rem;color:var(--text-dim);">' + fmt(data.total_used) + '</div></div>';
-                html += '<div style="text-align:center;"><div style="font-size:0.75rem;color:var(--text-dim);">总额</div><div style="font-size:1.1rem;font-weight:700;">' + toUSD(data.total_granted) + '</div><div style="font-size:0.7rem;color:var(--text-dim);">' + fmt(data.total_granted) + '</div></div>';
-                html += '</div>';
-                html += '<div style="background:var(--bg-card);border-radius:4px;height:8px;overflow:hidden;">';
-                html += '<div style="height:100%;width:' + pct + '%;background:' + barColor + ';border-radius:4px;transition:width 0.3s;"></div></div>';
-                html += '<div style="text-align:right;font-size:0.75rem;color:var(--text-dim);margin-top:4px;">使用率 ' + pct + '%</div>';
-            }
-            if (data.expires_at > 0) {
-                const expDate = new Date(data.expires_at * 1000);
-                const remain = data.expires_at * 1000 - Date.now();
-                let remainStr = '';
-                let remainColor = 'var(--text-dim)';
-                if (remain <= 0) {
-                    remainStr = '已过期';
-                    remainColor = 'var(--red)';
-                } else {
-                    const days = Math.floor(remain / 86400000);
-                    const hrs = Math.floor((remain % 86400000) / 3600000);
-                    const mins = Math.floor((remain % 3600000) / 60000);
-                    if (days > 0) remainStr = days + '天' + hrs + '小时';
-                    else if (hrs > 0) remainStr = hrs + '小时' + mins + '分';
-                    else remainStr = mins + '分钟';
-                    remainStr = '剩余 ' + remainStr;
-                    if (remain < 86400000) remainColor = 'var(--red)';
-                    else if (remain < 86400000 * 3) remainColor = 'var(--orange)';
-                }
-                html += '<div style="font-size:0.8rem;margin-top:8px;">过期时间: ' + fmtTime(expDate.toISOString()) + ' <span style="color:' + remainColor + ';font-weight:600;">(' + remainStr + ')</span></div>';
-            }
+            html += renderQuotaDetails(data);
             html += '</div>';
             td.innerHTML = html;
         } else {
@@ -654,6 +658,9 @@ function checkQuota(e, id) {
             html += '<div style="color:var(--text-dim);font-size:0.85rem;">' + esc(msg) + '</div>';
             if (d.origin_content) {
                 html += '<pre style="margin-top:8px;padding:8px;background:var(--bg);border-radius:4px;font-size:0.75rem;overflow-x:auto;max-height:120px;color:var(--text-dim);white-space:pre-wrap;word-break:break-all;">' + esc(d.origin_content) + '</pre>';
+            }
+            if (d.origin_content || (msg && msg.indexOf('403') !== -1)) {
+                html += '<div style="margin-top:8px;"><button class="btn btn-ghost btn-sm" style="color:var(--orange)" onclick="this.closest(\'tr\').remove();openCFDialog('+id+')">🔧 可能需要配置 CF 绕过</button></div>';
             }
             html += '</div>';
             td.innerHTML = html;
@@ -885,6 +892,119 @@ function saveModelPatterns() {
         if(d.error) alert(d.error);
         else { document.getElementById('dlg-model-patterns').close(); loadUpstreams(); }
     });
+}
+
+// --- CF Bypass Config (localStorage) ---
+function getCFConfig(upstreamId) {
+    try {
+        const raw = localStorage.getItem('cf_config_'+upstreamId);
+        if (!raw) return null;
+        const cfg = JSON.parse(raw);
+        if (cfg.cf_clearance && cfg.cf_user_agent) return cfg;
+    } catch(e) {}
+    return null;
+}
+
+function openCFDialog(upstreamId) {
+    document.getElementById('cf-upstream-id').value = upstreamId;
+    const cfg = getCFConfig(upstreamId) || {};
+    document.getElementById('cf-clearance').value = cfg.cf_clearance || '';
+    document.getElementById('cf-ua').value = cfg.cf_user_agent || '';
+    document.getElementById('dlg-cf').showModal();
+}
+
+function saveCFConfig() {
+    const id = document.getElementById('cf-upstream-id').value;
+    const clearance = document.getElementById('cf-clearance').value.trim();
+    const ua = document.getElementById('cf-ua').value.trim();
+    if (!clearance && !ua) {
+        localStorage.removeItem('cf_config_'+id);
+    } else if (!clearance || !ua) {
+        alert('cf_clearance 和 User-Agent 需要同时填写');
+        return;
+    } else {
+        localStorage.setItem('cf_config_'+id, JSON.stringify({cf_clearance: clearance, cf_user_agent: ua}));
+    }
+    document.getElementById('dlg-cf').close();
+    loadUpstreams();
+}
+
+function clearCFConfig() {
+    const id = document.getElementById('cf-upstream-id').value;
+    localStorage.removeItem('cf_config_'+id);
+    document.getElementById('cf-clearance').value = '';
+    document.getElementById('cf-ua').value = '';
+    document.getElementById('dlg-cf').close();
+    loadUpstreams();
+}
+
+// --- Quota Rendering (shared by checkQuota and Tools tab) ---
+function renderQuotaDetails(data) {
+    const fmt = n => n.toLocaleString();
+    const toUSD = n => '$' + (n / 500000).toFixed(2);
+    let html = '';
+    if (data.unlimited_quota) {
+        html += '<span class="badge badge-green">无限额度</span>';
+    } else {
+        const pct = data.total_granted > 0 ? (data.total_used / data.total_granted * 100).toFixed(1) : '0.0';
+        const barColor = pct > 80 ? 'var(--red)' : pct > 50 ? 'var(--orange)' : 'var(--green)';
+        html += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:12px;">';
+        html += '<div style="text-align:center;"><div style="font-size:0.75rem;color:var(--text-dim);">可用</div><div style="font-size:1.1rem;font-weight:700;color:var(--green);">' + toUSD(data.total_available) + '</div><div style="font-size:0.7rem;color:var(--text-dim);">' + fmt(data.total_available) + '</div></div>';
+        html += '<div style="text-align:center;"><div style="font-size:0.75rem;color:var(--text-dim);">已用</div><div style="font-size:1.1rem;font-weight:700;color:var(--orange);">' + toUSD(data.total_used) + '</div><div style="font-size:0.7rem;color:var(--text-dim);">' + fmt(data.total_used) + '</div></div>';
+        html += '<div style="text-align:center;"><div style="font-size:0.75rem;color:var(--text-dim);">总额</div><div style="font-size:1.1rem;font-weight:700;">' + toUSD(data.total_granted) + '</div><div style="font-size:0.7rem;color:var(--text-dim);">' + fmt(data.total_granted) + '</div></div>';
+        html += '</div>';
+        html += '<div style="background:var(--bg-card);border-radius:4px;height:8px;overflow:hidden;">';
+        html += '<div style="height:100%;width:' + pct + '%;background:' + barColor + ';border-radius:4px;transition:width 0.3s;"></div></div>';
+        html += '<div style="text-align:right;font-size:0.75rem;color:var(--text-dim);margin-top:4px;">使用率 ' + pct + '%</div>';
+    }
+    if (data.expires_at > 0) {
+        const expDate = new Date(data.expires_at * 1000);
+        const remain = data.expires_at * 1000 - Date.now();
+        let remainStr = '', remainColor = 'var(--text-dim)';
+        if (remain <= 0) { remainStr = '已过期'; remainColor = 'var(--red)'; }
+        else {
+            const days = Math.floor(remain / 86400000);
+            const hrs = Math.floor((remain % 86400000) / 3600000);
+            const mins = Math.floor((remain % 3600000) / 60000);
+            if (days > 0) remainStr = days + '天' + hrs + '小时';
+            else if (hrs > 0) remainStr = hrs + '小时' + mins + '分';
+            else remainStr = mins + '分钟';
+            remainStr = '剩余 ' + remainStr;
+            if (remain < 86400000) remainColor = 'var(--red)';
+            else if (remain < 86400000 * 3) remainColor = 'var(--orange)';
+        }
+        html += '<div style="font-size:0.8rem;margin-top:8px;">过期时间: ' + fmtTime(expDate.toISOString()) + ' <span style="color:' + remainColor + ';font-weight:600;">(' + remainStr + ')</span></div>';
+    }
+    if (data.model_limits_enabled) {
+        html += '<div style="font-size:0.8rem;margin-top:8px;color:var(--text-dim);">模型限制: <span class="badge badge-green">已启用</span></div>';
+    }
+    if (data.model_limits && typeof data.model_limits === 'object') {
+        const models = Object.keys(data.model_limits).filter(k => data.model_limits[k]);
+        if (models.length > 0) {
+            html += '<div style="margin-top:8px;"><div style="font-size:0.75rem;color:var(--text-dim);margin-bottom:4px;">可用模型 (' + models.length + ')</div>';
+            html += '<div class="model-tags">' + models.map(m => '<span class="model-tag">' + esc(m) + '</span>').join('') + '</div></div>';
+        }
+    }
+    return html;
+}
+
+function parseQuotaJSON() {
+    const input = document.getElementById('tools-json-input').value.trim();
+    const container = document.getElementById('tools-result');
+    if (!input) { container.innerHTML = '<div style="color:var(--text-dim);">请粘贴 JSON</div>'; return; }
+    let parsed;
+    try { parsed = JSON.parse(input); } catch(e) {
+        container.innerHTML = '<div style="color:var(--red);">JSON 解析失败: ' + esc(e.message) + '</div>';
+        return;
+    }
+    // 尝试提取 data 字段（new-api 格式）
+    const data = parsed.data || parsed;
+    let html = '<div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:16px;">';
+    html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">';
+    html += '<span style="font-weight:600;">📊 ' + esc(data.name || '未知') + '</span></div>';
+    html += renderQuotaDetails(data);
+    html += '</div>';
+    container.innerHTML = html;
 }
 
 // --- Logs ---
