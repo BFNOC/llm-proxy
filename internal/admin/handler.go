@@ -933,6 +933,17 @@ func jsonError(w http.ResponseWriter, status int, message string) {
 	json.NewEncoder(w).Encode(map[string]string{"error": message})
 }
 
+// applyCFHeaders 在传出请求上注入 Cloudflare 绕过所需的 Cookie 和 User-Agent。
+// 仅当 clearance 非空时才设置，避免覆盖默认行为。
+func applyCFHeaders(req *http.Request, clearance, userAgent string) {
+	if clearance != "" {
+		req.AddCookie(&http.Cookie{Name: "cf_clearance", Value: clearance})
+	}
+	if userAgent != "" {
+		req.Header.Set("User-Agent", userAgent)
+	}
+}
+
 // validateBaseURL enforces https and rejects private/loopback/link-local IPs.
 func validateBaseURL(rawURL string) error {
 	parsed, err := url.Parse(rawURL)
@@ -1002,6 +1013,16 @@ func (h *AdminHandler) testUpstreamProxy(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// 解析可选的 CF 绕过参数
+	var cfOpts struct {
+		CFClearance string `json:"cf_clearance"`
+		CFUserAgent string `json:"cf_user_agent"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&cfOpts); err != nil && err.Error() != "EOF" {
+		jsonError(w, http.StatusBadRequest, "invalid CF params JSON")
+		return
+	}
+
 	upstream, err := h.store.GetUpstream(id)
 	if err != nil {
 		jsonError(w, http.StatusNotFound, fmt.Sprintf("upstream %d not found", id))
@@ -1036,6 +1057,7 @@ func (h *AdminHandler) testUpstreamProxy(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	req.Header.Set("Authorization", "Bearer "+upstream.APIKey)
+	applyCFHeaders(req, cfOpts.CFClearance, cfOpts.CFUserAgent)
 
 	start := time.Now()
 	resp, err := client.Do(req)
@@ -1106,6 +1128,16 @@ func (h *AdminHandler) checkUpstreamQuota(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// 解析可选的 CF 绕过参数
+	var cfOpts struct {
+		CFClearance string `json:"cf_clearance"`
+		CFUserAgent string `json:"cf_user_agent"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&cfOpts); err != nil && err.Error() != "EOF" {
+		jsonError(w, http.StatusBadRequest, "invalid CF params JSON")
+		return
+	}
+
 	upstream, err := h.store.GetUpstream(id)
 	if err != nil {
 		jsonError(w, http.StatusNotFound, fmt.Sprintf("upstream %d not found", id))
@@ -1147,6 +1179,7 @@ func (h *AdminHandler) checkUpstreamQuota(w http.ResponseWriter, r *http.Request
 		return
 	}
 	req.Header.Set("Authorization", "Bearer "+upstream.APIKey)
+	applyCFHeaders(req, cfOpts.CFClearance, cfOpts.CFUserAgent)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -1194,14 +1227,15 @@ func (h *AdminHandler) checkUpstreamQuota(w http.ResponseWriter, r *http.Request
 		Code    interface{} `json:"code"`
 		Message string      `json:"message"`
 		Data    struct {
-			Object             string `json:"object"`
-			Name               string `json:"name"`
-			TotalAvailable     int64  `json:"total_available"`
-			TotalGranted       int64  `json:"total_granted"`
-			TotalUsed          int64  `json:"total_used"`
-			UnlimitedQuota     bool   `json:"unlimited_quota"`
-			ExpiresAt          int64  `json:"expires_at"`
-			ModelLimitsEnabled bool   `json:"model_limits_enabled"`
+			Object             string          `json:"object"`
+			Name               string          `json:"name"`
+			TotalAvailable     int64           `json:"total_available"`
+			TotalGranted       int64           `json:"total_granted"`
+			TotalUsed          int64           `json:"total_used"`
+			UnlimitedQuota     bool            `json:"unlimited_quota"`
+			ExpiresAt          int64           `json:"expires_at"`
+			ModelLimitsEnabled bool            `json:"model_limits_enabled"`
+			ModelLimits        map[string]bool `json:"model_limits"`
 		} `json:"data"`
 	}
 
@@ -1251,6 +1285,7 @@ func (h *AdminHandler) checkUpstreamQuota(w http.ResponseWriter, r *http.Request
 			"unlimited_quota":      apiResp.Data.UnlimitedQuota,
 			"expires_at":           apiResp.Data.ExpiresAt,
 			"model_limits_enabled": apiResp.Data.ModelLimitsEnabled,
+			"model_limits":         apiResp.Data.ModelLimits,
 		},
 	})
 }
