@@ -635,7 +635,7 @@ function checkQuota(e, id) {
             html += '<button class="btn btn-ghost btn-sm" onclick="this.closest(\'tr\').remove()" style="padding:2px 8px;">✕</button></div>';
             html += '<div style="color:var(--text-dim);font-size:0.85rem;">' + esc(msg) + '</div>';
             if (d.origin_content) {
-                html += '<pre style="margin-top:8px;padding:8px;background:var(--bg);border-radius:4px;font-size:0.75rem;overflow-x:auto;max-height:120px;color:var(--text-dim);">' + esc(d.origin_content) + '</pre>';
+                html += '<pre style="margin-top:8px;padding:8px;background:var(--bg);border-radius:4px;font-size:0.75rem;overflow-x:auto;max-height:120px;color:var(--text-dim);white-space:pre-wrap;word-break:break-all;">' + esc(d.origin_content) + '</pre>';
             }
             html += '</div>';
             td.innerHTML = html;

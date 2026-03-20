@@ -20,7 +20,6 @@ import (
 )
 
 var startTime = time.Now()
-var Version = "2.3.0" // set by main or build flags
 
 type AdminHandler struct {
 	store          *store.Store
@@ -34,6 +33,7 @@ type AdminHandler struct {
 	perKeyStats    *middleware.PerKeyStatsCollector
 	overrideCache  *middleware.ModelOverrideCache
 	adminToken     string
+	version        string
 }
 
 func NewAdminHandler(
@@ -48,6 +48,7 @@ func NewAdminHandler(
 	pks *middleware.PerKeyStatsCollector,
 	oc *middleware.ModelOverrideCache,
 	adminToken string,
+	version string,
 ) *AdminHandler {
 	return &AdminHandler{
 		store:          s,
@@ -61,6 +62,7 @@ func NewAdminHandler(
 		perKeyStats:    pks,
 		overrideCache:  oc,
 		adminToken:     adminToken,
+		version:        version,
 	}
 }
 
@@ -861,7 +863,7 @@ func (h *AdminHandler) getStatus(w http.ResponseWriter, r *http.Request) {
 		"today_requests":    todayRequests,
 		"audit_dropped":     auditDropped,
 		"uptime":            uptime,
-		"version":           Version,
+		"version":           h.version,
 		"timestamp":         time.Now().UTC(),
 		"active_requests":   h.dynamicProxy.ActiveRequests(),
 	}
