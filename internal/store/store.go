@@ -329,11 +329,17 @@ func (s *Store) CreateKey(name string, rpmLimit int) (plaintext string, key *Dow
 	hashBytes := sha256.Sum256([]byte(plaintext))
 	keyHash := hex.EncodeToString(hashBytes[:])
 
+	// 加密存储明文密钥，支持二次复制
+	encrypted, err := Encrypt(plaintext, s.encryptionKey)
+	if err != nil {
+		return "", nil, fmt.Errorf("encrypt key plaintext: %w", err)
+	}
+
 	now := time.Now().UTC()
 	res, err := s.db.Exec(
-		`INSERT INTO downstream_keys (key_hash, key_prefix, name, rpm_limit, enabled, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, 1, ?, ?)`,
-		keyHash, prefix, name, rpmLimit, now, now,
+		`INSERT INTO downstream_keys (key_hash, key_prefix, name, rpm_limit, enabled, key_encrypted, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, 1, ?, ?, ?)`,
+		keyHash, prefix, name, rpmLimit, encrypted, now, now,
 	)
 	if err != nil {
 		return "", nil, fmt.Errorf("insert downstream key: %w", err)
@@ -355,6 +361,27 @@ func (s *Store) CreateKey(name string, rpmLimit int) (plaintext string, key *Dow
 		UpdatedAt: now,
 	}
 	return plaintext, key, nil
+}
+
+// GetKeyPlaintext 解密并返回下游密钥的明文。
+// 旧密钥（v12 迁移前创建的）返回空字符串和 nil 错误。
+func (s *Store) GetKeyPlaintext(id int64) (string, error) {
+	var encrypted string
+	err := s.db.QueryRow(`SELECT key_encrypted FROM downstream_keys WHERE id = ?`, id).Scan(&encrypted)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", fmt.Errorf("key %d not found", id)
+		}
+		return "", fmt.Errorf("query key: %w", err)
+	}
+	if encrypted == "" {
+		return "", nil // 旧密钥，无法恢复
+	}
+	plain, err := Decrypt(encrypted, s.encryptionKey)
+	if err != nil {
+		return "", fmt.Errorf("decrypt key: %w", err)
+	}
+	return plain, nil
 }
 
 // LookupKeyByHash retrieves a downstream key by its SHA-256 hash.

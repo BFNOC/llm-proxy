@@ -169,6 +169,14 @@ INSERT INTO upstream_api_keys (upstream_id, api_key, created_at)
 SELECT id, api_key, updated_at FROM upstream_providers WHERE api_key != '';
 `,
 	},
+	{
+		// v12: 为下游密钥增加加密存储的明文字段，支持密钥二次复制。
+		// 旧密钥的 key_encrypted 为空，仅新创建的密钥可复制。
+		version: 12,
+		up: `
+ALTER TABLE downstream_keys ADD COLUMN key_encrypted TEXT NOT NULL DEFAULT '';
+`,
+	},
 }
 
 // RunMigrations applies all pending schema migrations in order.

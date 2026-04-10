@@ -721,6 +721,7 @@ function loadKeys() {
             return '<tr><td class="hide-on-mobile">'+k.id+'</td><td class="hide-on-mobile"><code>'+esc(k.key_prefix)+'...</code></td><td>'+esc(k.name)+'</td><td>'+(k.rpm_limit||'不限')+'</td><td><span style="color:'+rpmColor+';font-weight:600">'+currentRpm+'</span><span style="color:var(--text-dim)">/'+ limitText+'</span></td><td>'+
             (k.enabled?'<span class="badge badge-green">启用</span>':'<span class="badge badge-red">禁用</span>')+
             '</td><td class="hide-on-mobile">'+bindText+'</td><td class="hide-on-mobile"><div class="model-tags" style="gap:4px">'+overrideText+'</div></td><td class="actions">'+
+            '<button class="btn btn-ghost btn-sm" onclick="copyKey(event,'+k.id+')">复制</button> '+
             '<button class="btn btn-ghost btn-sm" onclick="openBindingDialog('+k.id+')">绑定</button> '+
             '<button class="btn btn-ghost btn-sm" onclick="openOverrideDialog('+k.id+')">路由</button> '+
             '<button class="btn btn-ghost btn-sm" onclick="editKey('+k.id+')">编辑</button> '+
@@ -729,6 +730,23 @@ function loadKeys() {
             '</td></tr>';
         }).join('');
     });
+}
+
+function copyKey(e, id) {
+    const btn = e.target;
+    const orig = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '...';
+    api('/keys/'+id+'/reveal').then(d => {
+        if (d.error) { alert(d.error); btn.textContent = orig; btn.disabled = false; return; }
+        navigator.clipboard.writeText(d.key).then(() => {
+            btn.textContent = '✅ 已复制';
+            setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 1500);
+        }).catch(() => {
+            prompt('复制密钥:', d.key);
+            btn.textContent = orig; btn.disabled = false;
+        });
+    }).catch(() => { btn.textContent = orig; btn.disabled = false; });
 }
 
 function createKey(e) {

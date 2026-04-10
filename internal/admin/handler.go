@@ -88,6 +88,7 @@ func (h *AdminHandler) RegisterRoutes(r *mux.Router) {
 	api.HandleFunc("/keys", h.createKey).Methods("POST")
 	api.HandleFunc("/keys/{id}", h.updateKey).Methods("PUT")
 	api.HandleFunc("/keys/{id}", h.deleteKey).Methods("DELETE")
+	api.HandleFunc("/keys/{id}/reveal", h.revealKey).Methods("GET")
 
 	// Logs
 	api.HandleFunc("/logs", h.queryLogs).Methods("GET")
@@ -470,6 +471,24 @@ func (h *AdminHandler) deleteKey(w http.ResponseWriter, r *http.Request) {
 
 	slog.Info("admin: deleted key", "id", id)
 	jsonOK(w, map[string]string{"status": "deleted"})
+}
+
+func (h *AdminHandler) revealKey(w http.ResponseWriter, r *http.Request) {
+	id, err := parseID(r)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	plain, err := h.store.GetKeyPlaintext(id)
+	if err != nil {
+		jsonError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if plain == "" {
+		jsonError(w, http.StatusGone, "该密钥创建于旧版本，无法恢复明文")
+		return
+	}
+	jsonOK(w, map[string]string{"key": plain})
 }
 
 // --- Logs ---
