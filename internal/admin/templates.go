@@ -10,10 +10,10 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         :root {
-            --bg: #0f1117; --bg-card: #1a1d27; --bg-hover: #252836;
-            --border: #2a2d3a; --text: #e4e5eb; --text-dim: #8b8ea3;
-            --accent: #6c5ce7; --accent-hover: #7c6ff7;
-            --green: #00b894; --red: #e17055; --orange: #fdcb6e;
+            --bg: #f5f6fa; --bg-card: #ffffff; --bg-hover: #eef0f6;
+            --border: #dfe1e8; --text: #2d3436; --text-dim: #636e72;
+            --accent: #6c5ce7; --accent-hover: #5b4cdb;
+            --green: #00a878; --red: #d63031; --orange: #e17055;
             --radius: 12px; --radius-sm: 8px;
         }
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
@@ -27,7 +27,7 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
 
         /* Auth */
         #auth-section { display: flex; align-items: center; justify-content: center; min-height: 80vh; }
-        .auth-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 48px; text-align: center; width: 400px; }
+        .auth-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 48px; text-align: center; width: 400px; box-shadow: 0 2px 12px rgba(0,0,0,0.06); }
         .auth-card h2 { font-size: 1.4rem; margin-bottom: 8px; }
         .auth-card p { color: var(--text-dim); margin-bottom: 24px; font-size: 0.9rem; }
         .auth-card input { width: 100%; padding: 12px 16px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-size: 0.95rem; margin-bottom: 16px; transition: border-color 0.2s; }
@@ -55,7 +55,7 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
         @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 
         /* Cards */
-        .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; margin-bottom: 20px; }
+        .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; margin-bottom: 20px; box-shadow: 0 1px 4px rgba(0,0,0,0.04); }
         .card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
         .card-header h2 { font-size: 1.15rem; font-weight: 600; }
 
@@ -90,7 +90,7 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
 
         /* Dialog / Modal */
         dialog { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text); padding: 32px; max-width: 520px; width: 90%; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); margin: 0; }
-        dialog::backdrop { background: rgba(0,0,0,0.6); backdrop-filter: blur(4px); }
+        dialog::backdrop { background: rgba(0,0,0,0.3); backdrop-filter: blur(4px); }
         dialog h3 { font-size: 1.1rem; margin-bottom: 20px; }
         dialog .form-group { margin-bottom: 12px; }
         dialog .dialog-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 24px; }
