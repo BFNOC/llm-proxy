@@ -12,6 +12,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 )
 
@@ -104,10 +105,29 @@ type ActiveUpstream struct {
 	// ID 对应 upstream_providers 表主键，用于把运行时健康列表和持久化绑定关系做稳定关联。
 	ID            int64
 	BaseURL       *url.URL
-	APIKey        string
+	APIKeys       []string // 支持多个 API Key，通过 NextAPIKey() 轮询选取
 	Name          string
 	ProxyURL      string   // 可选代理地址，空表示继承环境代理
 	ModelPatterns []string // 支持的模型 glob 模式，空表示接受所有模型
+
+	keyMu    sync.Mutex
+	keyIndex int // 轮询索引，通过 NextAPIKey() 原子递增
+}
+
+// NextAPIKey 以 round-robin 方式返回下一个 API Key。
+// 如果只有一个 Key，始终返回该 Key，无锁开销。
+func (u *ActiveUpstream) NextAPIKey() string {
+	if len(u.APIKeys) == 0 {
+		return ""
+	}
+	if len(u.APIKeys) == 1 {
+		return u.APIKeys[0]
+	}
+	u.keyMu.Lock()
+	idx := u.keyIndex % len(u.APIKeys)
+	u.keyIndex++
+	u.keyMu.Unlock()
+	return u.APIKeys[idx]
 }
 
 // DynamicProxy is a reverse proxy that supports 429-based failover across
@@ -139,7 +159,7 @@ func (dp *DynamicProxy) SetAllUpstreams(upstreams []*ActiveUpstream) {
 // SetActiveUpstream is a convenience method that sets a single-element upstream
 // list. Kept for backward compatibility with existing callers.
 func (dp *DynamicProxy) SetActiveUpstream(baseURL *url.URL, apiKey, name string) {
-	dp.SetAllUpstreams([]*ActiveUpstream{{BaseURL: baseURL, APIKey: apiKey, Name: name}})
+	dp.SetAllUpstreams([]*ActiveUpstream{{BaseURL: baseURL, APIKeys: []string{apiKey}, Name: name}})
 }
 
 // ClearActiveUpstream removes all upstreams so the proxy returns 503.
@@ -305,8 +325,8 @@ func (dp *DynamicProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			outReq.URL.Path = strings.TrimRight(active.BaseURL.Path, "/") + outReq.URL.Path
 		}
 
-		// Rewrite auth headers for this specific upstream.
-		RewriteAuthHeaders(outReq, style, active.APIKey)
+		// Rewrite auth headers for this specific upstream (round-robin key).
+		RewriteAuthHeaders(outReq, style, active.NextAPIKey())
 
 		// Strip untrusted proxy/identity headers to prevent downstream
 		// clients from spoofing their identity at the upstream.

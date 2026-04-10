@@ -170,7 +170,7 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
                     <button class="btn btn-primary btn-sm" onclick="document.getElementById('dlg-upstream').showModal()">+ 添加上游</button>
                 </div>
                 <div class="table-container">
-                <table><thead><tr><th class="hide-on-mobile">ID</th><th>名称</th><th>地址</th><th class="hide-on-mobile">代理</th><th class="hide-on-mobile">优先级</th><th class="hide-on-mobile">模型模式</th><th>状态</th><th>操作</th></tr></thead>
+                <table><thead><tr><th class="hide-on-mobile">ID</th><th>名称</th><th>地址</th><th class="hide-on-mobile">密钥</th><th class="hide-on-mobile">代理</th><th class="hide-on-mobile">优先级</th><th class="hide-on-mobile">模型模式</th><th>状态</th><th>操作</th></tr></thead>
                 <tbody id="upstreams-table"></tbody></table>
                 </div>
             </div>
@@ -273,7 +273,8 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
     <form onsubmit="createUpstream(event)">
         <div class="form-group"><label>名称</label><input name="name" required></div>
         <div class="form-group"><label>地址</label><input name="base_url" placeholder="https://api.example.com" required></div>
-        <div class="form-group"><label>API 密钥</label><input name="api_key" type="password" required></div>
+        <div class="form-group"><label>API 密钥（每行一个，支持多个）</label><textarea name="api_keys" rows="3" required style="font-family:'SF Mono','JetBrains Mono',monospace;font-size:0.85rem;resize:vertical;" placeholder="sk-key1
+sk-key2"></textarea></div>
         <div class="form-group"><label>代理地址（可选）</label><input name="proxy_url" placeholder="socks5://127.0.0.1:1080"></div>
         <div class="form-group"><label>优先级 (0=最高)</label><input name="priority" type="number" value="0"></div>
         <div class="dialog-actions">
@@ -290,7 +291,7 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
         <input type="hidden" name="id">
         <div class="form-group"><label>名称</label><input name="name" required></div>
         <div class="form-group"><label>地址</label><input name="base_url" required></div>
-        <div class="form-group"><label>API 密钥（留空不修改）</label><input name="api_key" type="password"></div>
+        <div class="form-group"><label>API 密钥（每行一个，留空不修改）</label><textarea name="api_keys" rows="3" style="font-family:'SF Mono','JetBrains Mono',monospace;font-size:0.85rem;resize:vertical;" placeholder="留空不修改"></textarea></div>
         <div class="form-group"><label>代理地址（留空=环境代理）</label><input name="proxy_url" placeholder="socks5://127.0.0.1:1080"></div>
         <div class="form-group"><label>优先级</label><input name="priority" type="number"></div>
         <div class="dialog-actions">
@@ -475,7 +476,7 @@ function loadUpstreams() {
         allModelPatterns = mp || {};
         const tbody = document.getElementById('upstreams-table');
         if (allUpstreams.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="8" class="empty-state">暂无上游服务</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="9" class="empty-state">暂无上游服务</td></tr>';
             return;
         }
         tbody.innerHTML = allUpstreams.map(u => {
@@ -484,7 +485,9 @@ function loadUpstreams() {
             if (patterns.length > 0) {
                 modelHtml = patterns.map(p => '<span class="model-tag">' + esc(p) + '</span>').join('');
             }
-            return '<tr><td class="hide-on-mobile">'+u.id+'</td><td>'+esc(u.name)+'</td><td><code class="truncate-url" title="'+esc(u.base_url)+'">'+esc(u.base_url)+'</code></td><td class="hide-on-mobile">'+(u.proxy_url?'<code class="truncate-url" title="'+esc(u.proxy_url)+'">'+esc(u.proxy_url)+'</code>':'<span class="badge badge-green">环境代理</span>')+'</td><td class="hide-on-mobile">'+u.priority+'</td><td class="hide-on-mobile"><div class="model-tags">'+modelHtml+'</div></td><td>'+
+            const keys = u.api_keys || [];
+            const keyCountBadge = '<span class="badge badge-purple">' + keys.length + ' Key' + (keys.length > 1 ? 's' : '') + '</span>';
+            return '<tr><td class="hide-on-mobile">'+u.id+'</td><td>'+esc(u.name)+'</td><td><code class="truncate-url" title="'+esc(u.base_url)+'">'+esc(u.base_url)+'</code></td><td class="hide-on-mobile">'+keyCountBadge+'</td><td class="hide-on-mobile">'+(u.proxy_url?'<code class="truncate-url" title="'+esc(u.proxy_url)+'">'+esc(u.proxy_url)+'</code>':'<span class="badge badge-green">环境代理</span>')+'</td><td class="hide-on-mobile">'+u.priority+'</td><td class="hide-on-mobile"><div class="model-tags">'+modelHtml+'</div></td><td>'+
             (u.enabled?'<span class="badge badge-green">启用</span>':'<span class="badge badge-red">禁用</span>')+
             '</td><td class="actions">'+
             '<button class="btn btn-ghost btn-sm" onclick="testProxy(event,'+u.id+')">测试</button> '+
@@ -502,9 +505,12 @@ function loadUpstreams() {
 function createUpstream(e) {
     e.preventDefault();
     const f = new FormData(e.target);
+    const keysRaw = f.get('api_keys') || '';
+    const apiKeys = keysRaw.split('\n').map(s => s.trim()).filter(s => s.length > 0);
+    if (apiKeys.length === 0) { alert('请输入至少一个 API 密钥'); return; }
     api('/upstreams', {method:'POST', body: JSON.stringify({
         name: f.get('name'), base_url: f.get('base_url'),
-        api_key: f.get('api_key'), proxy_url: f.get('proxy_url')||'',
+        api_keys: apiKeys, proxy_url: f.get('proxy_url')||'',
         priority: parseInt(f.get('priority')||'0')
     })}).then(d => {
         if(d.error) alert(d.error);
@@ -519,7 +525,7 @@ function editUpstream(id) {
     dlg.querySelector('[name=id]').value = id;
     dlg.querySelector('[name=name]').value = u.name;
     dlg.querySelector('[name=base_url]').value = u.base_url;
-    dlg.querySelector('[name=api_key]').value = '';
+    dlg.querySelector('[name=api_keys]').value = (u.api_keys || []).join('\n');
     dlg.querySelector('[name=proxy_url]').value = u.proxy_url||'';
     dlg.querySelector('[name=priority]').value = u.priority;
     dlg.showModal();
@@ -530,8 +536,9 @@ function submitEditUpstream(e) {
     const f = new FormData(e.target);
     const id = f.get('id');
     const body = {name: f.get('name'), base_url: f.get('base_url'), proxy_url: f.get('proxy_url')||'', priority: parseInt(f.get('priority')||'0')};
-    const key = f.get('api_key');
-    if (key) body.api_key = key;
+    const keysRaw = f.get('api_keys') || '';
+    const apiKeys = keysRaw.split('\n').map(s => s.trim()).filter(s => s.length > 0);
+    if (apiKeys.length > 0) body.api_keys = apiKeys;
     api('/upstreams/'+id, {method:'PUT', body: JSON.stringify(body)}).then(d => {
         if(d.error) alert(d.error);
         else { document.getElementById('dlg-edit-upstream').close(); loadUpstreams(); }
@@ -568,7 +575,7 @@ function testProxy(e, id) {
         const tr = document.createElement('tr');
         tr.id = 'test-row-'+id;
         const td = document.createElement('td');
-        td.colSpan = 8;
+        td.colSpan = 9;
         td.style.cssText = 'padding:0;border:none;';
 
         if (d.success) {
@@ -611,7 +618,7 @@ function testProxy(e, id) {
         let tr = document.createElement('tr');
         tr.id = 'test-row-'+id;
         let td = document.createElement('td');
-        td.colSpan = 8;
+        td.colSpan = 9;
         td.innerHTML = '<div style="background:rgba(225,112,85,0.08);border:1px solid var(--red);border-radius:var(--radius-sm);padding:16px;margin:8px 16px;color:var(--red);">请求失败: '+esc(err.message)+'</div>';
         tr.appendChild(td);
         row.after(tr);
@@ -637,7 +644,7 @@ function checkQuota(e, id) {
         const tr = document.createElement('tr');
         tr.id = 'quota-row-'+id;
         const td = document.createElement('td');
-        td.colSpan = 8;
+        td.colSpan = 9;
         td.style.cssText = 'padding:0;border:none;';
 
         if (d.success) {
@@ -673,7 +680,7 @@ function checkQuota(e, id) {
         let tr = document.createElement('tr');
         tr.id = 'quota-row-'+id;
         let td = document.createElement('td');
-        td.colSpan = 8;
+        td.colSpan = 9;
         td.innerHTML = '<div style="background:rgba(225,112,85,0.08);border:1px solid var(--red);border-radius:var(--radius-sm);padding:16px;margin:8px 16px;color:var(--red);">请求失败: '+esc(err.message)+'</div>';
         tr.appendChild(td);
         row.after(tr);

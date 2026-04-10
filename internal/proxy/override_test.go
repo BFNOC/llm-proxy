@@ -91,7 +91,7 @@ func TestDynamicProxy_WhitelistBlocks(t *testing.T) {
 
 	dp := NewDynamicProxy()
 	parsed, _ := url.Parse(upstream.URL)
-	dp.SetAllUpstreams([]*ActiveUpstream{{ID: 1, BaseURL: parsed, APIKey: "k", Name: "up1"}})
+	dp.SetAllUpstreams([]*ActiveUpstream{{ID: 1, BaseURL: parsed, APIKeys: []string{"k"}, Name: "up1"}})
 	dp.WhitelistMatcher = func(model string) bool {
 		return model == "allowed-model"
 	}
@@ -120,7 +120,7 @@ func TestDynamicProxy_WhitelistAllows(t *testing.T) {
 
 	dp := NewDynamicProxy()
 	parsed, _ := url.Parse(upstream.URL)
-	dp.SetAllUpstreams([]*ActiveUpstream{{ID: 1, BaseURL: parsed, APIKey: "k", Name: "up1"}})
+	dp.SetAllUpstreams([]*ActiveUpstream{{ID: 1, BaseURL: parsed, APIKeys: []string{"k"}, Name: "up1"}})
 	dp.WhitelistMatcher = func(model string) bool {
 		return model == "allowed-model"
 	}
@@ -145,7 +145,7 @@ func TestDynamicProxy_WhitelistNilMatcher_PassesAll(t *testing.T) {
 
 	dp := NewDynamicProxy()
 	parsed, _ := url.Parse(upstream.URL)
-	dp.SetAllUpstreams([]*ActiveUpstream{{ID: 1, BaseURL: parsed, APIKey: "k", Name: "up1"}})
+	dp.SetAllUpstreams([]*ActiveUpstream{{ID: 1, BaseURL: parsed, APIKeys: []string{"k"}, Name: "up1"}})
 	// WhitelistMatcher is nil  - should allow all
 
 	body := []byte(`{"model":"anything","messages":[]}`)
@@ -167,7 +167,7 @@ func TestDynamicProxy_WhitelistNonJSON_Passes(t *testing.T) {
 
 	dp := NewDynamicProxy()
 	parsed, _ := url.Parse(upstream.URL)
-	dp.SetAllUpstreams([]*ActiveUpstream{{ID: 1, BaseURL: parsed, APIKey: "k", Name: "up1"}})
+	dp.SetAllUpstreams([]*ActiveUpstream{{ID: 1, BaseURL: parsed, APIKeys: []string{"k"}, Name: "up1"}})
 	dp.WhitelistMatcher = func(model string) bool {
 		return false // block everything
 	}
@@ -207,8 +207,8 @@ func TestDynamicProxy_OverrideRoutesToSpecificUpstream(t *testing.T) {
 	parsedA, _ := url.Parse(upA.URL)
 	parsedB, _ := url.Parse(upB.URL)
 	dp.SetAllUpstreams([]*ActiveUpstream{
-		{ID: 1, BaseURL: parsedA, APIKey: "k1", Name: "A"},
-		{ID: 2, BaseURL: parsedB, APIKey: "k2", Name: "B"},
+		{ID: 1, BaseURL: parsedA, APIKeys: []string{"k1"}, Name: "A"},
+		{ID: 2, BaseURL: parsedB, APIKeys: []string{"k2"}, Name: "B"},
 	})
 
 	// Set override: claude-opus-4-6 -> upstream B (ID=2)
@@ -238,7 +238,7 @@ func TestDynamicProxy_OverrideHardFail(t *testing.T) {
 	dp := NewDynamicProxy()
 	parsed, _ := url.Parse(upstream.URL)
 	dp.SetAllUpstreams([]*ActiveUpstream{
-		{ID: 1, BaseURL: parsed, APIKey: "k", Name: "up1"},
+		{ID: 1, BaseURL: parsed, APIKeys: []string{"k"}, Name: "up1"},
 	})
 
 	// Override says go to upstream 99, which doesn't exist in healthy list
@@ -274,7 +274,7 @@ func TestDynamicProxy_NoOverride_DefaultBehavior(t *testing.T) {
 	dp := NewDynamicProxy()
 	parsedA, _ := url.Parse(upA.URL)
 	dp.SetAllUpstreams([]*ActiveUpstream{
-		{ID: 1, BaseURL: parsedA, APIKey: "k1", Name: "A"},
+		{ID: 1, BaseURL: parsedA, APIKeys: []string{"k1"}, Name: "A"},
 	})
 
 	// No override in context

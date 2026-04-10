@@ -52,36 +52,68 @@ func (s *Store) Close() error {
 // Upstream CRUD
 // ---------------------------------------------------------------------------
 
-// CreateUpstream inserts a new upstream provider. apiKey is encrypted before
-// storage. URL validation (scheme, SSRF) is the responsibility of the HTTP
-// handler layer; the store accepts any non-empty URL to remain testable with
-// loopback addresses.
-func (s *Store) CreateUpstream(name, baseURL, apiKey string, priority int, proxyURL string) (*UpstreamProvider, error) {
-	encryptedKey, err := Encrypt(apiKey, s.encryptionKey)
-	if err != nil {
-		return nil, fmt.Errorf("encrypt api key: %w", err)
+// CreateUpstream inserts a new upstream provider with one or more API keys.
+// Each key is encrypted before storage in the upstream_api_keys table.
+// URL validation (scheme, SSRF) is the responsibility of the HTTP handler layer;
+// the store accepts any non-empty URL to remain testable with loopback addresses.
+func (s *Store) CreateUpstream(name, baseURL string, apiKeys []string, priority int, proxyURL string) (*UpstreamProvider, error) {
+	if len(apiKeys) == 0 {
+		return nil, fmt.Errorf("at least one api key is required")
 	}
 
 	now := time.Now().UTC()
-	res, err := s.db.Exec(
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("begin transaction: %w", err)
+	}
+
+	// 旧 api_key 列保留占位值（NOT NULL 约束无法删除）
+	res, err := tx.Exec(
 		`INSERT INTO upstream_providers (name, base_url, api_key, priority, enabled, proxy_url, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, 1, ?, ?, ?)`,
-		name, baseURL, encryptedKey, priority, proxyURL, now, now,
+		name, baseURL, "_migrated_to_upstream_api_keys", priority, proxyURL, now, now,
 	)
 	if err != nil {
+		_ = tx.Rollback()
 		return nil, fmt.Errorf("insert upstream: %w", err)
 	}
 
 	id, err := res.LastInsertId()
 	if err != nil {
+		_ = tx.Rollback()
 		return nil, fmt.Errorf("last insert id: %w", err)
+	}
+
+	// 将所有 Key 加密写入 upstream_api_keys 表
+	stmt, err := tx.Prepare(`INSERT INTO upstream_api_keys (upstream_id, api_key, created_at) VALUES (?, ?, ?)`)
+	if err != nil {
+		_ = tx.Rollback()
+		return nil, fmt.Errorf("prepare api key insert: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, key := range apiKeys {
+		encrypted, err := Encrypt(key, s.encryptionKey)
+		if err != nil {
+			_ = tx.Rollback()
+			return nil, fmt.Errorf("encrypt api key: %w", err)
+		}
+		if _, err = stmt.Exec(id, encrypted, now); err != nil {
+			_ = tx.Rollback()
+			return nil, fmt.Errorf("insert api key: %w", err)
+		}
+	}
+
+	if err = tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit upstream creation: %w", err)
 	}
 
 	return &UpstreamProvider{
 		ID:        id,
 		Name:      name,
 		BaseURL:   baseURL,
-		APIKey:    apiKey,
+		APIKeys:   apiKeys,
 		ProxyURL:  proxyURL,
 		Priority:  priority,
 		Enabled:   true,
@@ -91,27 +123,26 @@ func (s *Store) CreateUpstream(name, baseURL, apiKey string, priority int, proxy
 	}, nil
 }
 
-// GetUpstream retrieves an upstream provider by ID, decrypting its API key.
+// GetUpstream retrieves an upstream provider by ID, decrypting all its API keys.
 func (s *Store) GetUpstream(id int64) (*UpstreamProvider, error) {
 	row := s.db.QueryRow(
-		`SELECT id, name, base_url, api_key, priority, enabled, proxy_url, created_at, updated_at
+		`SELECT id, name, base_url, priority, enabled, proxy_url, created_at, updated_at
 		 FROM upstream_providers WHERE id = ?`, id,
 	)
 
 	var up UpstreamProvider
-	var encryptedKey string
-	if err := row.Scan(&up.ID, &up.Name, &up.BaseURL, &encryptedKey, &up.Priority, &up.Enabled, &up.ProxyURL, &up.CreatedAt, &up.UpdatedAt); err != nil {
+	if err := row.Scan(&up.ID, &up.Name, &up.BaseURL, &up.Priority, &up.Enabled, &up.ProxyURL, &up.CreatedAt, &up.UpdatedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("upstream %d not found", id)
 		}
 		return nil, fmt.Errorf("scan upstream: %w", err)
 	}
 
-	plainKey, err := Decrypt(encryptedKey, s.encryptionKey)
+	keys, err := s.getUpstreamAPIKeys(id)
 	if err != nil {
-		return nil, fmt.Errorf("decrypt api key: %w", err)
+		return nil, err
 	}
-	up.APIKey = plainKey
+	up.APIKeys = keys
 	up.Healthy = true
 	return &up, nil
 }
@@ -119,7 +150,7 @@ func (s *Store) GetUpstream(id int64) (*UpstreamProvider, error) {
 // ListUpstreams returns all upstream providers with decrypted API keys.
 func (s *Store) ListUpstreams() ([]UpstreamProvider, error) {
 	rows, err := s.db.Query(
-		`SELECT id, name, base_url, api_key, priority, enabled, proxy_url, created_at, updated_at
+		`SELECT id, name, base_url, priority, enabled, proxy_url, created_at, updated_at
 		 FROM upstream_providers ORDER BY priority ASC, id ASC`,
 	)
 	if err != nil {
@@ -130,52 +161,92 @@ func (s *Store) ListUpstreams() ([]UpstreamProvider, error) {
 	var result []UpstreamProvider
 	for rows.Next() {
 		var up UpstreamProvider
-		var encryptedKey string
-		if err := rows.Scan(&up.ID, &up.Name, &up.BaseURL, &encryptedKey, &up.Priority, &up.Enabled, &up.ProxyURL, &up.CreatedAt, &up.UpdatedAt); err != nil {
+		if err := rows.Scan(&up.ID, &up.Name, &up.BaseURL, &up.Priority, &up.Enabled, &up.ProxyURL, &up.CreatedAt, &up.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan upstream row: %w", err)
 		}
-		plainKey, err := Decrypt(encryptedKey, s.encryptionKey)
-		if err != nil {
-			return nil, fmt.Errorf("decrypt api key for upstream %d: %w", up.ID, err)
-		}
-		up.APIKey = plainKey
 		up.Healthy = true
 		result = append(result, up)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate upstream rows: %w", err)
 	}
+
+	// 批量加载所有上游的 API Keys，避免 N+1 查询
+	allKeys, err := s.getAllUpstreamAPIKeys()
+	if err != nil {
+		return nil, err
+	}
+	for i := range result {
+		result[i].APIKeys = allKeys[result[i].ID]
+	}
+
 	return result, nil
 }
 
 // UpdateUpstream replaces all mutable fields of an upstream provider.
-func (s *Store) UpdateUpstream(id int64, name, baseURL, apiKey string, priority int, enabled bool, proxyURL string) (*UpstreamProvider, error) {
-	encryptedKey, err := Encrypt(apiKey, s.encryptionKey)
+// If apiKeys is non-nil, fully replaces the upstream's API keys.
+func (s *Store) UpdateUpstream(id int64, name, baseURL string, apiKeys []string, priority int, enabled bool, proxyURL string) (*UpstreamProvider, error) {
+	now := time.Now().UTC()
+
+	tx, err := s.db.Begin()
 	if err != nil {
-		return nil, fmt.Errorf("encrypt api key: %w", err)
+		return nil, fmt.Errorf("begin transaction: %w", err)
 	}
 
-	now := time.Now().UTC()
-	res, err := s.db.Exec(
-		`UPDATE upstream_providers SET name=?, base_url=?, api_key=?, priority=?, enabled=?, proxy_url=?, updated_at=?
+	res, err := tx.Exec(
+		`UPDATE upstream_providers SET name=?, base_url=?, priority=?, enabled=?, proxy_url=?, updated_at=?
 		 WHERE id=?`,
-		name, baseURL, encryptedKey, priority, enabled, proxyURL, now, id,
+		name, baseURL, priority, enabled, proxyURL, now, id,
 	)
 	if err != nil {
+		_ = tx.Rollback()
 		return nil, fmt.Errorf("update upstream: %w", err)
 	}
 	affected, err := res.RowsAffected()
 	if err != nil {
+		_ = tx.Rollback()
 		return nil, fmt.Errorf("rows affected: %w", err)
 	}
 	if affected == 0 {
+		_ = tx.Rollback()
 		return nil, fmt.Errorf("upstream %d not found", id)
+	}
+
+	// 如果提供了新的 Key 列表，全量替换
+	if apiKeys != nil {
+		if _, err = tx.Exec(`DELETE FROM upstream_api_keys WHERE upstream_id = ?`, id); err != nil {
+			_ = tx.Rollback()
+			return nil, fmt.Errorf("clear existing api keys: %w", err)
+		}
+		stmt, err := tx.Prepare(`INSERT INTO upstream_api_keys (upstream_id, api_key, created_at) VALUES (?, ?, ?)`)
+		if err != nil {
+			_ = tx.Rollback()
+			return nil, fmt.Errorf("prepare api key insert: %w", err)
+		}
+		defer stmt.Close()
+
+		for _, key := range apiKeys {
+			encrypted, err := Encrypt(key, s.encryptionKey)
+			if err != nil {
+				_ = tx.Rollback()
+				return nil, fmt.Errorf("encrypt api key: %w", err)
+			}
+			if _, err = stmt.Exec(id, encrypted, now); err != nil {
+				_ = tx.Rollback()
+				return nil, fmt.Errorf("insert api key: %w", err)
+			}
+		}
+	}
+
+	if err = tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit upstream update: %w", err)
 	}
 
 	return s.GetUpstream(id)
 }
 
 // DeleteUpstream removes an upstream provider by ID.
+// CASCADE 外键会自动删除 upstream_api_keys 中的关联 Key。
 func (s *Store) DeleteUpstream(id int64) error {
 	res, err := s.db.Exec(`DELETE FROM upstream_providers WHERE id=?`, id)
 	if err != nil {
@@ -189,6 +260,55 @@ func (s *Store) DeleteUpstream(id int64) error {
 		return fmt.Errorf("upstream %d not found", id)
 	}
 	return nil
+}
+
+// getUpstreamAPIKeys 返回单个上游的所有 API Key（已解密）。
+func (s *Store) getUpstreamAPIKeys(upstreamID int64) ([]string, error) {
+	rows, err := s.db.Query(
+		`SELECT api_key FROM upstream_api_keys WHERE upstream_id = ? ORDER BY id`, upstreamID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query upstream api keys: %w", err)
+	}
+	defer rows.Close()
+
+	var keys []string
+	for rows.Next() {
+		var encrypted string
+		if err := rows.Scan(&encrypted); err != nil {
+			return nil, fmt.Errorf("scan api key: %w", err)
+		}
+		plain, err := Decrypt(encrypted, s.encryptionKey)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt api key for upstream %d: %w", upstreamID, err)
+		}
+		keys = append(keys, plain)
+	}
+	return keys, rows.Err()
+}
+
+// getAllUpstreamAPIKeys 一次性加载所有上游的 API Key（已解密），供 ListUpstreams 批量填充。
+func (s *Store) getAllUpstreamAPIKeys() (map[int64][]string, error) {
+	rows, err := s.db.Query(`SELECT upstream_id, api_key FROM upstream_api_keys ORDER BY upstream_id, id`)
+	if err != nil {
+		return nil, fmt.Errorf("query all upstream api keys: %w", err)
+	}
+	defer rows.Close()
+
+	result := make(map[int64][]string)
+	for rows.Next() {
+		var upstreamID int64
+		var encrypted string
+		if err := rows.Scan(&upstreamID, &encrypted); err != nil {
+			return nil, fmt.Errorf("scan api key row: %w", err)
+		}
+		plain, err := Decrypt(encrypted, s.encryptionKey)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt api key for upstream %d: %w", upstreamID, err)
+		}
+		result[upstreamID] = append(result[upstreamID], plain)
+	}
+	return result, rows.Err()
 }
 
 // ---------------------------------------------------------------------------

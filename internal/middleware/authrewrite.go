@@ -14,7 +14,7 @@ func AuthRewriteMiddleware(dp *proxy.DynamicProxy) func(http.Handler) http.Handl
 			active := dp.GetActiveUpstream()
 			if active != nil {
 				style := StyleFromContext(r.Context())
-				proxy.RewriteAuthHeaders(r, style, active.APIKey)
+				proxy.RewriteAuthHeaders(r, style, active.NextAPIKey())
 			}
 			next.ServeHTTP(w, r)
 		})

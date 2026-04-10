@@ -149,6 +149,26 @@ CREATE TABLE IF NOT EXISTS key_model_overrides (
 CREATE INDEX IF NOT EXISTS idx_key_model_overrides_key ON key_model_overrides (downstream_key_id);
 `,
 	},
+	{
+		// v11: 支持每个上游配置多个 API Key，实现轮询调度。
+		// 新建 upstream_api_keys 表存储多 Key（加密存储），
+		// 并把旧 upstream_providers.api_key 列现有数据迁移到新表。
+		// 旧列保留（NOT NULL 约束不方便删除），但运行时不再使用。
+		version: 11,
+		up: `
+CREATE TABLE IF NOT EXISTS upstream_api_keys (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    upstream_id INTEGER NOT NULL REFERENCES upstream_providers(id) ON DELETE CASCADE,
+    api_key     TEXT NOT NULL,
+    created_at  DATETIME
+);
+CREATE INDEX IF NOT EXISTS idx_upstream_api_keys_upstream ON upstream_api_keys (upstream_id);
+
+-- 把旧的单 Key 迁移到新表（仅非空的），保留加密格式不变
+INSERT INTO upstream_api_keys (upstream_id, api_key, created_at)
+SELECT id, api_key, updated_at FROM upstream_providers WHERE api_key != '';
+`,
+	},
 }
 
 // RunMigrations applies all pending schema migrations in order.

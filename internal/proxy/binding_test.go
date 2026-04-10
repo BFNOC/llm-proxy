@@ -45,7 +45,7 @@ func TestAllowedUpstreamIDs_EmptySlice(t *testing.T) {
 
 func makeUpstream(id int64, name string) *ActiveUpstream {
 	u, _ := url.Parse("https://" + name + ".example.com")
-	return &ActiveUpstream{ID: id, BaseURL: u, APIKey: "key", Name: name}
+	return &ActiveUpstream{ID: id, BaseURL: u, APIKeys: []string{"key"}, Name: name}
 }
 
 func TestFilterUpstreams_SubsetMatch(t *testing.T) {
@@ -105,7 +105,7 @@ func TestDynamicProxy_BindingFilter_Returns403WhenNoMatch(t *testing.T) {
 
 	dp := NewDynamicProxy()
 	parsed, _ := url.Parse(upstream.URL)
-	dp.SetAllUpstreams([]*ActiveUpstream{{ID: 1, BaseURL: parsed, APIKey: "k", Name: "up1"}})
+	dp.SetAllUpstreams([]*ActiveUpstream{{ID: 1, BaseURL: parsed, APIKeys: []string{"k"}, Name: "up1"}})
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	// Set allowed IDs to non-existent upstream
@@ -131,7 +131,7 @@ func TestDynamicProxy_BindingFilter_AllowsMatchingUpstream(t *testing.T) {
 
 	dp := NewDynamicProxy()
 	parsed, _ := url.Parse(upstream.URL)
-	dp.SetAllUpstreams([]*ActiveUpstream{{ID: 42, BaseURL: parsed, APIKey: "k", Name: "up42"}})
+	dp.SetAllUpstreams([]*ActiveUpstream{{ID: 42, BaseURL: parsed, APIKeys: []string{"k"}, Name: "up42"}})
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	ctx := ContextWithAllowedUpstreamIDs(req.Context(), []int64{42})
@@ -153,7 +153,7 @@ func TestDynamicProxy_NoBinding_UsesAllUpstreams(t *testing.T) {
 
 	dp := NewDynamicProxy()
 	parsed, _ := url.Parse(upstream.URL)
-	dp.SetAllUpstreams([]*ActiveUpstream{{ID: 1, BaseURL: parsed, APIKey: "k", Name: "up1"}})
+	dp.SetAllUpstreams([]*ActiveUpstream{{ID: 1, BaseURL: parsed, APIKeys: []string{"k"}, Name: "up1"}})
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	// No binding set in context
@@ -221,7 +221,7 @@ func TestExtractModelFromBody_ArrayBody(t *testing.T) {
 
 func makeUpstreamWithPatterns(id int64, name string, patterns []string) *ActiveUpstream {
 	u, _ := url.Parse("https://" + name + ".example.com")
-	return &ActiveUpstream{ID: id, BaseURL: u, APIKey: "key", Name: name, ModelPatterns: patterns}
+	return &ActiveUpstream{ID: id, BaseURL: u, APIKeys: []string{"key"}, Name: name, ModelPatterns: patterns}
 }
 
 func TestFilterUpstreamsByModel_MatchesPattern(t *testing.T) {
@@ -287,7 +287,7 @@ func TestDynamicProxy_ModelRouting_Returns422WhenNoMatch(t *testing.T) {
 	dp := NewDynamicProxy()
 	parsed, _ := url.Parse(upstream.URL)
 	dp.SetAllUpstreams([]*ActiveUpstream{
-		{ID: 1, BaseURL: parsed, APIKey: "k", Name: "claude-only", ModelPatterns: []string{"claude-*"}},
+		{ID: 1, BaseURL: parsed, APIKeys: []string{"k"}, Name: "claude-only", ModelPatterns: []string{"claude-*"}},
 	})
 
 	body := []byte(`{"model":"gpt-4o","messages":[]}`)
@@ -328,8 +328,8 @@ func TestDynamicProxy_ModelRouting_RoutesToMatchingUpstream(t *testing.T) {
 	claudeURL, _ := url.Parse(claudeServer.URL)
 	gptURL, _ := url.Parse(gptServer.URL)
 	dp.SetAllUpstreams([]*ActiveUpstream{
-		{ID: 1, BaseURL: claudeURL, APIKey: "k1", Name: "claude-up", ModelPatterns: []string{"claude-*"}},
-		{ID: 2, BaseURL: gptURL, APIKey: "k2", Name: "gpt-up", ModelPatterns: []string{"gpt-*"}},
+		{ID: 1, BaseURL: claudeURL, APIKeys: []string{"k1"}, Name: "claude-up", ModelPatterns: []string{"claude-*"}},
+		{ID: 2, BaseURL: gptURL, APIKeys: []string{"k2"}, Name: "gpt-up", ModelPatterns: []string{"gpt-*"}},
 	})
 
 	// Request with claude model
@@ -356,7 +356,7 @@ func TestDynamicProxy_ModelRouting_GETSkipsFilter(t *testing.T) {
 	dp := NewDynamicProxy()
 	parsed, _ := url.Parse(upstream.URL)
 	dp.SetAllUpstreams([]*ActiveUpstream{
-		{ID: 1, BaseURL: parsed, APIKey: "k", Name: "up", ModelPatterns: []string{"claude-*"}},
+		{ID: 1, BaseURL: parsed, APIKeys: []string{"k"}, Name: "up", ModelPatterns: []string{"claude-*"}},
 	})
 
 	// GET /v1/models should NOT be filtered by model patterns

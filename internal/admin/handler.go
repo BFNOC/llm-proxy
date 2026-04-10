@@ -137,11 +137,12 @@ func (h *AdminHandler) listUpstreams(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	// Redact API keys in listing
+	// API Keys are now returned unmasked for admin convenience
 	type upstreamResponse struct {
 		ID        int64     `json:"id"`
 		Name      string    `json:"name"`
 		BaseURL   string    `json:"base_url"`
+		APIKeys   []string  `json:"api_keys"`
 		ProxyURL  string    `json:"proxy_url"`
 		Priority  int       `json:"priority"`
 		Enabled   bool      `json:"enabled"`
@@ -150,8 +151,12 @@ func (h *AdminHandler) listUpstreams(w http.ResponseWriter, r *http.Request) {
 	}
 	result := make([]upstreamResponse, len(upstreams))
 	for i, u := range upstreams {
+		keys := u.APIKeys
+		if keys == nil {
+			keys = []string{}
+		}
 		result[i] = upstreamResponse{
-			ID: u.ID, Name: u.Name, BaseURL: u.BaseURL, ProxyURL: u.ProxyURL,
+			ID: u.ID, Name: u.Name, BaseURL: u.BaseURL, APIKeys: keys, ProxyURL: u.ProxyURL,
 			Priority: u.Priority, Enabled: u.Enabled, CreatedAt: u.CreatedAt, UpdatedAt: u.UpdatedAt,
 		}
 	}
@@ -160,18 +165,24 @@ func (h *AdminHandler) listUpstreams(w http.ResponseWriter, r *http.Request) {
 
 func (h *AdminHandler) createUpstream(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name     string `json:"name"`
-		BaseURL  string `json:"base_url"`
-		APIKey   string `json:"api_key"`
-		ProxyURL string `json:"proxy_url"`
-		Priority int    `json:"priority"`
+		Name     string   `json:"name"`
+		BaseURL  string   `json:"base_url"`
+		APIKey   string   `json:"api_key"`    // 向后兼容单 Key
+		APIKeys  []string `json:"api_keys"`   // 新多 Key 字段
+		ProxyURL string   `json:"proxy_url"`
+		Priority int      `json:"priority"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
-	if req.Name == "" || req.BaseURL == "" || req.APIKey == "" {
-		jsonError(w, http.StatusBadRequest, "name, base_url, and api_key are required")
+	// 兼容旧的单 api_key 字段
+	apiKeys := req.APIKeys
+	if len(apiKeys) == 0 && req.APIKey != "" {
+		apiKeys = []string{req.APIKey}
+	}
+	if req.Name == "" || req.BaseURL == "" || len(apiKeys) == 0 {
+		jsonError(w, http.StatusBadRequest, "name, base_url, and at least one api_key/api_keys are required")
 		return
 	}
 
@@ -189,13 +200,13 @@ func (h *AdminHandler) createUpstream(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	upstream, err := h.store.CreateUpstream(req.Name, req.BaseURL, req.APIKey, req.Priority, req.ProxyURL)
+	upstream, err := h.store.CreateUpstream(req.Name, req.BaseURL, apiKeys, req.Priority, req.ProxyURL)
 	if err != nil {
 		slog.Error("admin: store error", "error", err)
 		jsonError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	slog.Info("admin: created upstream", "id", upstream.ID, "name", upstream.Name, "proxy_url", sanitizeProxyForLog(req.ProxyURL))
+	slog.Info("admin: created upstream", "id", upstream.ID, "name", upstream.Name, "key_count", len(apiKeys), "proxy_url", sanitizeProxyForLog(req.ProxyURL))
 	w.WriteHeader(http.StatusCreated)
 	jsonOK(w, map[string]interface{}{"id": upstream.ID, "name": upstream.Name, "base_url": upstream.BaseURL, "priority": upstream.Priority})
 }
@@ -215,12 +226,13 @@ func (h *AdminHandler) updateUpstream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Name     *string `json:"name"`
-		BaseURL  *string `json:"base_url"`
-		APIKey   *string `json:"api_key"`
-		ProxyURL *string `json:"proxy_url"`
-		Priority *int    `json:"priority"`
-		Enabled  *bool   `json:"enabled"`
+		Name     *string  `json:"name"`
+		BaseURL  *string  `json:"base_url"`
+		APIKey   *string  `json:"api_key"`    // 向后兼容单 Key
+		APIKeys  []string `json:"api_keys"`   // 新多 Key 字段
+		ProxyURL *string  `json:"proxy_url"`
+		Priority *int     `json:"priority"`
+		Enabled  *bool    `json:"enabled"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid JSON")
@@ -235,9 +247,12 @@ func (h *AdminHandler) updateUpstream(w http.ResponseWriter, r *http.Request) {
 	if req.BaseURL != nil {
 		baseURL = *req.BaseURL
 	}
-	apiKey := existing.APIKey
-	if req.APIKey != nil && *req.APIKey != "" {
-		apiKey = *req.APIKey
+	// API Keys: 优先用 api_keys 数组，其次兼容 api_key 单值，都不提供则传 nil 表示不修改
+	var apiKeys []string // nil = don't change
+	if len(req.APIKeys) > 0 {
+		apiKeys = req.APIKeys
+	} else if req.APIKey != nil && *req.APIKey != "" {
+		apiKeys = []string{*req.APIKey}
 	}
 	priority := existing.Priority
 	if req.Priority != nil {
@@ -266,7 +281,7 @@ func (h *AdminHandler) updateUpstream(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	upstream, err := h.store.UpdateUpstream(id, name, baseURL, apiKey, priority, enabled, proxyURL)
+	upstream, err := h.store.UpdateUpstream(id, name, baseURL, apiKeys, priority, enabled, proxyURL)
 	if err != nil {
 		slog.Error("admin: store error", "error", err)
 		jsonError(w, http.StatusInternalServerError, "internal error")
@@ -1056,7 +1071,11 @@ func (h *AdminHandler) testUpstreamProxy(w http.ResponseWriter, r *http.Request)
 		})
 		return
 	}
-	req.Header.Set("Authorization", "Bearer "+upstream.APIKey)
+	var firstKey string
+	if len(upstream.APIKeys) > 0 {
+		firstKey = upstream.APIKeys[0]
+	}
+	req.Header.Set("Authorization", "Bearer "+firstKey)
 	applyCFHeaders(req, cfOpts.CFClearance, cfOpts.CFUserAgent)
 
 	start := time.Now()
@@ -1178,7 +1197,11 @@ func (h *AdminHandler) checkUpstreamQuota(w http.ResponseWriter, r *http.Request
 		})
 		return
 	}
-	req.Header.Set("Authorization", "Bearer "+upstream.APIKey)
+	var firstKey string
+	if len(upstream.APIKeys) > 0 {
+		firstKey = upstream.APIKeys[0]
+	}
+	req.Header.Set("Authorization", "Bearer "+firstKey)
 	applyCFHeaders(req, cfOpts.CFClearance, cfOpts.CFUserAgent)
 
 	resp, err := client.Do(req)

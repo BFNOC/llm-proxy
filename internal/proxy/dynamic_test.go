@@ -92,7 +92,7 @@ func TestDynamicProxy_SetAndGetActiveUpstream(t *testing.T) {
 	got := dp.GetActiveUpstream()
 	require.NotNil(t, got)
 	assert.Equal(t, u1, got.BaseURL)
-	assert.Equal(t, "key1", got.APIKey)
+	assert.Equal(t, "key1", got.APIKeys[0])
 
 	// Swap to a different upstream.
 	u2, err := url.Parse("https://api.anthropic.com")
@@ -102,7 +102,7 @@ func TestDynamicProxy_SetAndGetActiveUpstream(t *testing.T) {
 	got = dp.GetActiveUpstream()
 	require.NotNil(t, got)
 	assert.Equal(t, u2, got.BaseURL)
-	assert.Equal(t, "key2", got.APIKey)
+	assert.Equal(t, "key2", got.APIKeys[0])
 }
 
 func TestDynamicProxy_UpstreamError_Returns502(t *testing.T) {

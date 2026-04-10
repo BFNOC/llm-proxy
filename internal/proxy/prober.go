@@ -117,7 +117,7 @@ func (p *UpstreamProber) probeOnce() {
 		healthy = append(healthy, &ActiveUpstream{
 			ID:            u.ID,
 			BaseURL:       parsed,
-			APIKey:        u.APIKey,
+			APIKeys:       u.APIKeys,
 			Name:          u.Name,
 			ProxyURL:      u.ProxyURL,
 			ModelPatterns: allModelPatterns[u.ID],
