@@ -186,7 +186,10 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
                 <div id="new-key-display" style="display:none;">
                     <div class="key-alert">
                         <strong>⚠ 密钥已创建（请立即复制，仅显示一次）：</strong>
-                        <div class="key-display" id="new-key-value"></div>
+                        <div style="display:flex;align-items:center;gap:8px;margin-top:8px;">
+                            <div class="key-display" id="new-key-value" style="flex:1;margin-top:0;"></div>
+                            <button class="btn btn-primary btn-sm" onclick="copyNewKey(this)" style="white-space:nowrap;">📋 复制</button>
+                        </div>
                     </div>
                 </div>
                 <div class="table-container">
@@ -738,6 +741,23 @@ function createKey(e) {
         document.getElementById('new-key-value').textContent = d.key;
         document.getElementById('new-key-display').style.display = 'block';
         e.target.reset(); document.getElementById('dlg-key').close(); loadKeys();
+    });
+}
+
+function copyNewKey(btn) {
+    const key = document.getElementById('new-key-value').textContent;
+    navigator.clipboard.writeText(key).then(() => {
+        const orig = btn.textContent;
+        btn.textContent = '✅ 已复制';
+        setTimeout(() => btn.textContent = orig, 1500);
+    }).catch(() => {
+        const range = document.createRange();
+        range.selectNodeContents(document.getElementById('new-key-value'));
+        const sel = window.getSelection();
+        sel.removeAllRanges(); sel.addRange(range);
+        document.execCommand('copy');
+        btn.textContent = '✅ 已复制';
+        setTimeout(() => btn.textContent = '📋 复制', 1500);
     });
 }
 
