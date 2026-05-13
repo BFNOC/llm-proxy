@@ -118,13 +118,13 @@ type ActiveUpstream struct {
 	fillKeyFailed bool   // fill 模式当前 Key 是否已失败
 }
 
-// NextAPIKey 返回下一个 API Key，调度策略由 KeySchedulingMode 决定。
-func (u *ActiveUpstream) NextAPIKey() string {
+// NextAPIKey 返回下一个 API Key 及其在列表中的索引（0-based），调度策略由 KeySchedulingMode 决定。
+func (u *ActiveUpstream) NextAPIKey() (string, int) {
 	if len(u.APIKeys) == 0 {
-		return ""
+		return "", -1
 	}
 	if len(u.APIKeys) == 1 {
-		return u.APIKeys[0]
+		return u.APIKeys[0], 0
 	}
 	u.keyMu.Lock()
 	defer u.keyMu.Unlock()
@@ -138,20 +138,20 @@ func (u *ActiveUpstream) NextAPIKey() string {
 }
 
 // nextAPIKeyRoundRobin 依次轮询每个 Key。
-func (u *ActiveUpstream) nextAPIKeyRoundRobin() string {
+func (u *ActiveUpstream) nextAPIKeyRoundRobin() (string, int) {
 	idx := u.keyIndex % len(u.APIKeys)
 	u.keyIndex++
-	return u.APIKeys[idx]
+	return u.APIKeys[idx], idx
 }
 
 // nextAPIKeyFill 优先使用当前 Key 直到出错，再切换到下一个。
-func (u *ActiveUpstream) nextAPIKeyFill() string {
+func (u *ActiveUpstream) nextAPIKeyFill() (string, int) {
 	if u.fillKeyFailed || u.fillKeyIndex >= len(u.APIKeys) {
 		// 切换到下一个 Key
 		u.fillKeyIndex = (u.fillKeyIndex + 1) % len(u.APIKeys)
 		u.fillKeyFailed = false
 	}
-	return u.APIKeys[u.fillKeyIndex]
+	return u.APIKeys[u.fillKeyIndex], u.fillKeyIndex
 }
 
 // MarkKeyFailed 在 fill 模式下标记当前 Key 失败，下次调用 NextAPIKey() 时切换。
@@ -357,7 +357,8 @@ func (dp *DynamicProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Rewrite auth headers for this specific upstream (round-robin key).
-		RewriteAuthHeaders(outReq, style, active.NextAPIKey())
+		apiKey, keyIdx := active.NextAPIKey()
+		RewriteAuthHeaders(outReq, style, apiKey)
 
 		// Strip untrusted proxy/identity headers to prevent downstream
 		// clients from spoofing their identity at the upstream.
@@ -412,14 +413,14 @@ func (dp *DynamicProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Forward response to client.
-		dp.forwardResponse(w, resp, active.Name)
+		dp.forwardResponse(w, resp, active.Name, keyIdx)
 		return
 	}
 }
 
 // forwardResponse copies an upstream HTTP response to the downstream client,
 // handling SSE streaming headers and flushing.
-func (dp *DynamicProxy) forwardResponse(w http.ResponseWriter, resp *http.Response, upstreamName string) {
+func (dp *DynamicProxy) forwardResponse(w http.ResponseWriter, resp *http.Response, upstreamName string, keyIdx int) {
 	defer resp.Body.Close()
 
 	// Copy response headers, filtering out hop-by-hop and sensitive headers.
@@ -444,6 +445,7 @@ func (dp *DynamicProxy) forwardResponse(w http.ResponseWriter, resp *http.Respon
 	// WriteHeader and will be read then deleted by the audit middleware
 	// wrapper before the response reaches the client.
 	w.Header().Set("X-Upstream-Name", upstreamName)
+	w.Header().Set("X-API-Key-Index", strconv.Itoa(keyIdx))
 
 	// 对非 2xx 错误响应体做脱敏：缓冲整个 body，执行正则替换后再写回客户端。
 	// 这样可以隐藏上游令牌标识、请求 ID、额度数字等内部信息。

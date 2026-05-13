@@ -38,6 +38,7 @@ type RequestLog struct {
 	ID              int64
 	DownstreamKeyID int64
 	UpstreamName    string
+	UpstreamKeyIdx  int    // 使用的上游 API Key 索引（0-based），-1 表示未知
 	ClientIP        string
 	IPRegion        string
 	ProviderStyle   string

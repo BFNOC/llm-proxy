@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -122,11 +123,12 @@ func (al *AuditLogger) Stop() {
 }
 
 // responseStatusCapture 包装 ResponseWriter，用于捕获状态码和内部头信息
-// （如 X-Upstream-Name），在 WriteHeader 发送给客户端前拦截。
+// （如 X-Upstream-Name, X-API-Key-Index），在 WriteHeader 发送给客户端前拦截。
 type responseStatusCapture struct {
 	http.ResponseWriter
-	statusCode   int
-	upstreamName string // 从 X-Upstream-Name 头捕获
+	statusCode     int
+	upstreamName   string // 从 X-Upstream-Name 头捕获
+	upstreamKeyIdx int    // 从 X-API-Key-Index 头捕获
 }
 
 func (r *responseStatusCapture) WriteHeader(code int) {
@@ -134,6 +136,13 @@ func (r *responseStatusCapture) WriteHeader(code int) {
 	// 在响应发送给客户端前捕获并移除内部头。
 	r.upstreamName = r.Header().Get("X-Upstream-Name")
 	r.Header().Del("X-Upstream-Name")
+	r.upstreamKeyIdx = -1
+	if v := r.Header().Get("X-API-Key-Index"); v != "" {
+		if idx, err := strconv.Atoi(v); err == nil {
+			r.upstreamKeyIdx = idx
+		}
+	}
+	r.Header().Del("X-API-Key-Index")
 	r.ResponseWriter.WriteHeader(code)
 }
 
@@ -177,6 +186,7 @@ func AuditLogMiddleware(logger *AuditLogger) func(http.Handler) http.Handler {
 			logger.Log(store.RequestLog{
 				DownstreamKeyID: keyID,
 				UpstreamName:    upstreamName,
+				UpstreamKeyIdx:  capture.upstreamKeyIdx,
 				ClientIP:        clientIP,
 				ProviderStyle:   string(style),
 				Path:            r.URL.Path,

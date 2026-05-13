@@ -203,6 +203,13 @@ CREATE TABLE IF NOT EXISTS test_models (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_test_models_name_protocol ON test_models (name, protocol);
 `,
 	},
+	{
+		// v15: 请求日志增加上游 API Key 索引字段，记录每次请求使用了哪个 Key。
+		version: 15,
+		up: `
+ALTER TABLE request_logs ADD COLUMN upstream_key_idx INTEGER NOT NULL DEFAULT -1;
+`,
+	},
 }
 
 // RunMigrations applies all pending schema migrations in order.
