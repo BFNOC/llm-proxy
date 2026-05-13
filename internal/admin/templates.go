@@ -319,6 +319,7 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
         <div class="form-group"><label>地址</label><input name="base_url" placeholder="https://api.example.com" required></div>
         <div class="form-group"><label>API 密钥 <span style="font-weight:400;color:var(--text-dim);text-transform:none;letter-spacing:0">（每行一个，支持多个）</span></label><textarea name="api_keys" rows="3" required style="font-family:'SF Mono','JetBrains Mono',monospace;font-size:0.82rem;resize:vertical;letter-spacing:0.02em;" placeholder="sk-key1&#10;sk-key2"></textarea></div>
         <div class="form-group"><label>Key 调度模式</label><select name="key_scheduling_mode"><option value="round-robin">轮询 (Round-Robin)</option><option value="fill">填充 (Fill — 优先用满当前 Key)</option></select></div>
+        <div class="form-group"><label>备注 <span style="font-weight:400;color:var(--text-dim);text-transform:none;letter-spacing:0">（可选，如 Key 来源）</span></label><input name="remark" placeholder="如：网友A分享的 Claude 额度"></div>
         <div class="form-group"><label>代理地址 <span style="font-weight:400;color:var(--text-dim);text-transform:none;letter-spacing:0">（可选）</span></label><input name="proxy_url" placeholder="socks5://127.0.0.1:1080"></div>
         <div class="form-group"><label>优先级 <span style="font-weight:400;color:var(--text-dim);text-transform:none;letter-spacing:0">（0 = 最高）</span></label><input name="priority" type="number" value="0" min="0"></div>
         <div class="dialog-actions">
@@ -337,6 +338,7 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
         <div class="form-group"><label>地址</label><input name="base_url" placeholder="https://api.example.com" required></div>
         <div class="form-group"><label>API 密钥 <span style="font-weight:400;color:var(--text-dim);text-transform:none;letter-spacing:0">（每行一个，留空不修改）</span></label><textarea name="api_keys" rows="3" style="font-family:'SF Mono','JetBrains Mono',monospace;font-size:0.82rem;resize:vertical;letter-spacing:0.02em;" placeholder="留空不修改"></textarea></div>
         <div class="form-group"><label>Key 调度模式</label><select name="key_scheduling_mode"><option value="round-robin">轮询 (Round-Robin)</option><option value="fill">填充 (Fill — 优先用满当前 Key)</option></select></div>
+        <div class="form-group"><label>备注</label><input name="remark" placeholder="如：网友A分享的 Claude 额度"></div>
         <div class="form-group"><label>代理地址 <span style="font-weight:400;color:var(--text-dim);text-transform:none;letter-spacing:0">（留空 = 环境代理）</span></label><input name="proxy_url" placeholder="socks5://127.0.0.1:1080"></div>
         <div class="form-group"><label>优先级</label><input name="priority" type="number" min="0"></div>
         <div class="dialog-actions">
@@ -608,7 +610,8 @@ function loadUpstreams() {
             const schedMode = u.key_scheduling_mode || 'round-robin';
             const schedLabel = schedMode === 'fill' ? '填充' : '轮询';
             const schedColor = schedMode === 'fill' ? 'var(--orange)' : 'var(--accent)';
-            return '<tr><td class="hide-on-mobile">'+u.id+'</td><td><strong>'+esc(u.name)+'</strong></td><td><code class="truncate-url" title="'+esc(u.base_url)+'">'+esc(u.base_url)+'</code></td><td class="hide-on-mobile">'+keyBadge+'</td><td class="hide-on-mobile"><span style="font-size:0.75rem;color:'+schedColor+';font-weight:500;">'+schedLabel+'</span></td><td class="hide-on-mobile">'+(u.proxy_url?'<code class="truncate-url" title="'+esc(u.proxy_url)+'">'+esc(u.proxy_url)+'</code>':'<span class="badge badge-green">环境代理</span>')+'</td><td class="hide-on-mobile">'+u.priority+'</td><td class="hide-on-mobile"><div class="model-tags">'+modelHtml+'</div></td><td>'+
+            const remarkHtml = u.remark ? '<div style="font-size:0.75rem;color:var(--text-dim);margin-top:2px;font-style:italic;" title="'+esc(u.remark)+'">'+esc(u.remark.length>20?u.remark.substring(0,20)+'...':u.remark)+'</div>' : '';
+            return '<tr><td class="hide-on-mobile">'+u.id+'</td><td><strong>'+esc(u.name)+'</strong>'+remarkHtml+'</td><td><code class="truncate-url" title="'+esc(u.base_url)+'">'+esc(u.base_url)+'</code></td><td class="hide-on-mobile">'+keyBadge+'</td><td class="hide-on-mobile"><span style="font-size:0.75rem;color:'+schedColor+';font-weight:500;">'+schedLabel+'</span></td><td class="hide-on-mobile">'+(u.proxy_url?'<code class="truncate-url" title="'+esc(u.proxy_url)+'">'+esc(u.proxy_url)+'</code>':'<span class="badge badge-green">环境代理</span>')+'</td><td class="hide-on-mobile">'+u.priority+'</td><td class="hide-on-mobile"><div class="model-tags">'+modelHtml+'</div></td><td>'+
             (u.enabled?'<span class="badge badge-green">启用</span>':'<span class="badge badge-red">禁用</span>')+
             '</td><td class="actions">'+
             '<button class="btn btn-ghost btn-sm" onclick="testProxy(event,'+u.id+')">测试</button> '+
@@ -633,7 +636,8 @@ function createUpstream(e) {
         name: f.get('name'), base_url: f.get('base_url'),
         api_keys: apiKeys, proxy_url: f.get('proxy_url')||'',
         priority: parseInt(f.get('priority')||'0'),
-        key_scheduling_mode: f.get('key_scheduling_mode')||'round-robin'
+        key_scheduling_mode: f.get('key_scheduling_mode')||'round-robin',
+        remark: f.get('remark')||''
     })}).then(d => {
         if(d.error) alert(d.error);
         else { e.target.reset(); document.getElementById('dlg-upstream').close(); loadUpstreams(); }
@@ -651,6 +655,7 @@ function editUpstream(id) {
     dlg.querySelector('[name=proxy_url]').value = u.proxy_url||'';
     dlg.querySelector('[name=priority]').value = u.priority;
     dlg.querySelector('[name=key_scheduling_mode]').value = u.key_scheduling_mode || 'round-robin';
+    dlg.querySelector('[name=remark]').value = u.remark || '';
     dlg.showModal();
 }
 
@@ -658,7 +663,7 @@ function submitEditUpstream(e) {
     e.preventDefault();
     const f = new FormData(e.target);
     const id = f.get('id');
-    const body = {name: f.get('name'), base_url: f.get('base_url'), proxy_url: f.get('proxy_url')||'', priority: parseInt(f.get('priority')||'0'), key_scheduling_mode: f.get('key_scheduling_mode')||'round-robin'};
+    const body = {name: f.get('name'), base_url: f.get('base_url'), proxy_url: f.get('proxy_url')||'', priority: parseInt(f.get('priority')||'0'), key_scheduling_mode: f.get('key_scheduling_mode')||'round-robin', remark: f.get('remark')||''};
     const keysRaw = f.get('api_keys') || '';
     const apiKeys = keysRaw.split('\n').map(s => s.trim()).filter(s => s.length > 0);
     if (apiKeys.length > 0) body.api_keys = apiKeys;

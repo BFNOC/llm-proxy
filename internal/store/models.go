@@ -11,6 +11,7 @@ type UpstreamProvider struct {
 	Priority           int
 	Enabled            bool   // persisted; disabled upstreams are skipped by the prober
 	KeySchedulingMode  string // "round-robin" (default) or "fill"
+	Remark             string // 管理员备注（Key 来源、用途等）
 	Healthy            bool   // runtime only, not persisted
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
@@ -18,9 +19,10 @@ type UpstreamProvider struct {
 
 // APIKeyInfo 表示单个 API Key 及其启用状态，用于管理面板展示。
 type APIKeyInfo struct {
-	RowID   int64  // upstream_api_keys 表主键
-	Key     string // 已解密的明文 Key
-	Enabled bool
+	RowID              int64  // upstream_api_keys 表主键
+	Key                string // 已解密的明文 Key
+	Enabled            bool
+	ConsecutiveFails   int // 连续失败次数
 }
 
 type DownstreamKey struct {

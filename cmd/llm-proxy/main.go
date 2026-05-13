@@ -243,6 +243,13 @@ func main() {
 	modelFilter := middleware.NewModelFilter(db)
 	// Inject whitelist matcher unconditionally (works even when admin is disabled)
 	dynamicProxy.WhitelistMatcher = modelFilter.MatchModel
+	// 连续失败 Key 自动禁用回调
+	dynamicProxy.KeyFailCallback = func(upstreamID, keyRowID int64) {
+		_ = db.IncrKeyFailures(upstreamID, keyRowID)
+	}
+	dynamicProxy.KeySuccessCallback = func(upstreamID, keyRowID int64) {
+		_ = db.ResetKeyFailures(upstreamID, keyRowID)
+	}
 
 	// Create stats counters (纯内存，用于 Dashboard 实时统计)
 	globalCounter := middleware.NewGlobalRequestCounter()

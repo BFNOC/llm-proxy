@@ -99,6 +99,18 @@ func (p *UpstreamProber) probeOnce() {
 		allModelPatterns = make(map[int64][]string)
 	}
 
+	// 批量加载所有上游的 Key 行 ID
+	allKeyRowIDs, err := p.store.GetAllUpstreamAPIKeyRowIDs()
+	if err != nil {
+		slog.Warn("prober: failed to load api key row ids", "error", err)
+		allKeyRowIDs = make(map[int64][]int64)
+	}
+
+	// 自动禁用连续失败超过阈值的 Key
+	if disabled, err := p.store.AutoDisableFailingKeys(5); err == nil && disabled > 0 {
+		slog.Info("prober: auto-disabled failing keys", "count", disabled)
+	}
+
 	// Probe all enabled upstreams and collect the healthy ones.
 
 	var healthy []*ActiveUpstream
@@ -118,10 +130,12 @@ func (p *UpstreamProber) probeOnce() {
 			ID:                u.ID,
 			BaseURL:           parsed,
 			APIKeys:           u.APIKeys,
+			KeyRowIDs:         allKeyRowIDs[u.ID],
 			Name:              u.Name,
 			ProxyURL:          u.ProxyURL,
 			ModelPatterns:     allModelPatterns[u.ID],
 			KeySchedulingMode: u.KeySchedulingMode,
+			keyFailures:       make(map[int]int64),
 		})
 	}
 

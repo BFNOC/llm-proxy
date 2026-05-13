@@ -217,6 +217,16 @@ ALTER TABLE request_logs ADD COLUMN upstream_key_idx INTEGER NOT NULL DEFAULT -1
 ALTER TABLE request_logs ADD COLUMN model TEXT NOT NULL DEFAULT '';
 `,
 	},
+	{
+		// v17: 上游增加备注字段 + 失效 Key 自动禁用相关字段。
+		// remark: 管理员备注（如 Key 来源、用途）。
+		// consecutive_failures: 连续失败次数，用于自动禁用判定。
+		version: 17,
+		up: `
+ALTER TABLE upstream_providers ADD COLUMN remark TEXT NOT NULL DEFAULT '';
+ALTER TABLE upstream_api_keys ADD COLUMN consecutive_failures INTEGER NOT NULL DEFAULT 0;
+`,
+	},
 }
 
 // RunMigrations applies all pending schema migrations in order.

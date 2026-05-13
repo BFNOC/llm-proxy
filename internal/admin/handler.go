@@ -165,6 +165,7 @@ func (h *AdminHandler) listUpstreams(w http.ResponseWriter, r *http.Request) {
 		Priority           int         `json:"priority"`
 		Enabled            bool        `json:"enabled"`
 		KeySchedulingMode  string      `json:"key_scheduling_mode"`
+		Remark             string      `json:"remark"`
 		CreatedAt          time.Time   `json:"created_at"`
 		UpdatedAt          time.Time   `json:"updated_at"`
 	}
@@ -187,7 +188,8 @@ func (h *AdminHandler) listUpstreams(w http.ResponseWriter, r *http.Request) {
 		result[i] = upstreamResponse{
 			ID: u.ID, Name: u.Name, BaseURL: u.BaseURL, APIKeys: keys, APIKeyDetails: details,
 			ProxyURL: u.ProxyURL, Priority: u.Priority, Enabled: u.Enabled,
-			KeySchedulingMode: u.KeySchedulingMode, CreatedAt: u.CreatedAt, UpdatedAt: u.UpdatedAt,
+			KeySchedulingMode: u.KeySchedulingMode, Remark: u.Remark,
+			CreatedAt: u.CreatedAt, UpdatedAt: u.UpdatedAt,
 		}
 	}
 	jsonOK(w, result)
@@ -202,6 +204,7 @@ func (h *AdminHandler) createUpstream(w http.ResponseWriter, r *http.Request) {
 		ProxyURL          string   `json:"proxy_url"`
 		Priority          int      `json:"priority"`
 		KeySchedulingMode string   `json:"key_scheduling_mode"`
+		Remark            string   `json:"remark"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid JSON")
@@ -241,7 +244,7 @@ func (h *AdminHandler) createUpstream(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	upstream, err := h.store.CreateUpstream(req.Name, req.BaseURL, apiKeys, req.Priority, req.ProxyURL, schedulingMode)
+	upstream, err := h.store.CreateUpstream(req.Name, req.BaseURL, apiKeys, req.Priority, req.ProxyURL, schedulingMode, req.Remark)
 	if err != nil {
 		slog.Error("admin: store error", "error", err)
 		jsonError(w, http.StatusInternalServerError, "internal error")
@@ -275,6 +278,7 @@ func (h *AdminHandler) updateUpstream(w http.ResponseWriter, r *http.Request) {
 		Priority          *int     `json:"priority"`
 		Enabled           *bool    `json:"enabled"`
 		KeySchedulingMode *string  `json:"key_scheduling_mode"`
+		Remark            *string  `json:"remark"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid JSON")
@@ -316,6 +320,10 @@ func (h *AdminHandler) updateUpstream(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	remark := existing.Remark
+	if req.Remark != nil {
+		remark = *req.Remark
+	}
 
 	if baseURL != existing.BaseURL {
 		if err := validateBaseURL(baseURL); err != nil {
@@ -331,7 +339,7 @@ func (h *AdminHandler) updateUpstream(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	upstream, err := h.store.UpdateUpstream(id, name, baseURL, apiKeys, priority, enabled, proxyURL, schedulingMode)
+	upstream, err := h.store.UpdateUpstream(id, name, baseURL, apiKeys, priority, enabled, proxyURL, schedulingMode, remark)
 	if err != nil {
 		slog.Error("admin: store error", "error", err)
 		jsonError(w, http.StatusInternalServerError, "internal error")
