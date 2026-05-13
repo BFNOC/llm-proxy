@@ -275,6 +275,34 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
                 </div>
                 <div id="tools-result" style="margin-top:16px;"></div>
             </div>
+            <div class="card">
+                <div class="card-header">
+                    <h2>测试模型管理</h2>
+                </div>
+                <p style="color:var(--text-dim);font-size:0.85rem;margin-bottom:12px;">管理测试对话框中可选择的模型列表。添加后在测试上游时可快速选择。</p>
+                <div style="display:flex;gap:8px;margin-bottom:16px;">
+                    <input id="tm-search" placeholder="搜索模型..." style="flex:1;font-size:0.85rem;" oninput="renderTestModels()">
+                    <select id="tm-filter-protocol" style="width:140px;font-size:0.85rem;" onchange="renderTestModels()">
+                        <option value="">全部协议</option>
+                        <option value="openai">OpenAI</option>
+                        <option value="anthropic">Anthropic</option>
+                        <option value="responses">Responses</option>
+                    </select>
+                </div>
+                <div style="display:flex;gap:8px;margin-bottom:16px;">
+                    <input id="tm-new-name" placeholder="模型名称" style="flex:1;font-size:0.85rem;">
+                    <select id="tm-new-protocol" style="width:120px;font-size:0.85rem;">
+                        <option value="openai">OpenAI</option>
+                        <option value="anthropic">Anthropic</option>
+                        <option value="responses">Responses</option>
+                    </select>
+                    <button class="btn btn-primary btn-sm" onclick="createTestModel()">添加</button>
+                </div>
+                <div class="table-container">
+                    <table><thead><tr><th>ID</th><th>模型名称</th><th>协议</th><th>操作</th></tr></thead>
+                    <tbody id="test-models-table"></tbody></table>
+                </div>
+            </div>
         </div>
     </div>
 </div>
@@ -432,7 +460,8 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px;">
             <div class="form-group">
                 <label>模型</label>
-                <input id="tu-model" value="gpt-4o-mini" style="font-size:0.85rem;">
+                <input id="tu-model" value="" placeholder="输入或选择模型" list="tu-model-list" style="font-size:0.85rem;">
+                <datalist id="tu-model-list"></datalist>
             </div>
             <div class="form-group">
                 <label>提示词</label>
@@ -531,6 +560,7 @@ function showTab(name, btn) {
     if (name === 'status') { loadStatus(); startStatusTimer(); } else { stopStatusTimer(); }
     if (name === 'models') loadModelWhitelist();
     if (name === 'keys') loadKeys();
+    if (name === 'tools') loadTestModels();
 }
 function startStatusTimer() {
     stopStatusTimer();
@@ -681,8 +711,10 @@ function openTestUpstreamDialog(upstreamId) {
     document.getElementById('tu-upstream-id').value = upstreamId;
     document.getElementById('tu-result').style.display = 'none';
     document.getElementById('tu-protocol').value = 'openai';
-    document.getElementById('tu-model').value = 'gpt-4o-mini';
+    document.getElementById('tu-model').value = '';
     document.getElementById('tu-prompt').value = '你是什么模型？';
+    // 加载测试模型列表并更新 datalist
+    loadTestModels().then(() => updateTuModelDatalist('openai'));
     const sel = document.getElementById('tu-key-select');
     sel.innerHTML = '<option value="">加载中...</option>';
     document.getElementById('dlg-test-upstream').showModal();
@@ -700,14 +732,8 @@ function openTestUpstreamDialog(upstreamId) {
 
 function onTuProtocolChange() {
     const proto = document.getElementById('tu-protocol').value;
-    const modelInput = document.getElementById('tu-model');
-    if (proto === 'anthropic') {
-        modelInput.value = 'claude-sonnet-4-20250514';
-    } else if (proto === 'responses') {
-        modelInput.value = 'gpt-4o';
-    } else {
-        modelInput.value = 'gpt-4o-mini';
-    }
+    document.getElementById('tu-model').value = '';
+    updateTuModelDatalist(proto);
 }
 
 function submitUpstreamTest() {
@@ -1348,6 +1374,74 @@ function batchDeleteModelPatterns() {
         if(d.error) alert(d.error);
         else loadModelWhitelist();
     });
+}
+
+// --- Test Models ---
+let allTestModels = [];
+function loadTestModels() {
+    return api('/test-models').then(data => {
+        allTestModels = data || [];
+        renderTestModels();
+        updateTuModelDatalist();
+    });
+}
+
+function renderTestModels() {
+    const search = (document.getElementById('tm-search').value || '').toLowerCase();
+    const protocolFilter = document.getElementById('tm-filter-protocol').value;
+    const tbody = document.getElementById('test-models-table');
+    let filtered = allTestModels;
+    if (protocolFilter) filtered = filtered.filter(m => m.protocol === protocolFilter);
+    if (search) filtered = filtered.filter(m => m.name.toLowerCase().indexOf(search) !== -1);
+    if (filtered.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="4" class="empty-state">暂无测试模型</td></tr>';
+        return;
+    }
+    const protoLabel = {openai:'OpenAI',anthropic:'Anthropic',responses:'Responses'};
+    tbody.innerHTML = filtered.map(m =>
+        '<tr><td>'+m.id+'</td><td><code>'+esc(m.name)+'</code></td><td><span class="badge badge-purple">'+(protoLabel[m.protocol]||m.protocol)+'</span></td><td class="actions">'+
+        '<button class="btn btn-ghost btn-sm" onclick="editTestModel('+m.id+')">编辑</button> '+
+        '<button class="btn btn-danger btn-sm" onclick="deleteTestModel('+m.id+')">删除</button>'+
+        '</td></tr>'
+    ).join('');
+}
+
+function createTestModel() {
+    const name = document.getElementById('tm-new-name').value.trim();
+    const protocol = document.getElementById('tm-new-protocol').value;
+    if (!name) { alert('请输入模型名称'); return; }
+    api('/test-models', {method:'POST', body: JSON.stringify({name:name, protocol:protocol})}).then(d => {
+        if (d.error) { alert(d.error); return; }
+        document.getElementById('tm-new-name').value = '';
+        loadTestModels();
+    });
+}
+
+function editTestModel(id) {
+    const m = allTestModels.find(x => x.id === id);
+    if (!m) return;
+    const newName = prompt('编辑模型名称:', m.name);
+    if (newName === null || newName.trim() === '') return;
+    const newProtocol = prompt('协议 (openai/anthropic/responses):', m.protocol);
+    if (newProtocol === null || newProtocol.trim() === '') return;
+    api('/test-models/'+id, {method:'PUT', body: JSON.stringify({name:newName.trim(), protocol:newProtocol.trim()})}).then(d => {
+        if (d.error) alert(d.error); else loadTestModels();
+    });
+}
+
+function deleteTestModel(id) {
+    if (!confirm('确认删除此测试模型？')) return;
+    api('/test-models/'+id, {method:'DELETE'}).then(d => {
+        if (d.error) alert(d.error); else loadTestModels();
+    });
+}
+
+function updateTuModelDatalist(protocol) {
+    const dl = document.getElementById('tu-model-list');
+    if (!dl) return;
+    let models = allTestModels;
+    if (protocol) models = models.filter(m => m.protocol === protocol);
+    dl.innerHTML = models.map(m => '<option value="'+esc(m.name)+'">').join('');
 }
 
 // --- Status ---

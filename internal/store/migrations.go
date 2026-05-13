@@ -189,6 +189,20 @@ ALTER TABLE upstream_api_keys ADD COLUMN enabled BOOLEAN NOT NULL DEFAULT 1;
 ALTER TABLE upstream_providers ADD COLUMN key_scheduling_mode TEXT NOT NULL DEFAULT 'round-robin';
 `,
 	},
+	{
+		// v14: 测试模型管理 —— 存储常用的测试模型名称，供测试对话框快速选择。
+		// 不同协议（openai/anthropic/responses）可以有同名模型，按协议区分。
+		version: 14,
+		up: `
+CREATE TABLE IF NOT EXISTS test_models (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT NOT NULL,
+    protocol   TEXT NOT NULL DEFAULT 'openai',
+    created_at DATETIME
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_test_models_name_protocol ON test_models (name, protocol);
+`,
+	},
 }
 
 // RunMigrations applies all pending schema migrations in order.

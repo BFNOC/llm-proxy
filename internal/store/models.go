@@ -77,3 +77,11 @@ type KeyModelOverride struct {
 	CreatedAt       time.Time
 }
 
+// TestModel 表示一个可复用的测试模型配置。
+type TestModel struct {
+	ID        int64
+	Name      string
+	Protocol  string // "openai", "anthropic", "responses"
+	CreatedAt time.Time
+}
+

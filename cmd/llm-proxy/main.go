@@ -59,7 +59,7 @@ func (h *CustomPrettyHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
 func (h *CustomPrettyHandler) WithGroup(_ string) slog.Handler      { return h }
 
 const (
-	version     = "2.3.2"
+	version     = "2.4.0"
 	defaultPort = "9002"
 )
 
