@@ -71,6 +71,18 @@ func RemoveTransport(proxyURL string) {
 	}
 }
 
+// TransportPoolStats 返回连接池的基本统计信息。
+func TransportPoolStats() map[string]interface{} {
+	count := 0
+	transportCache.Range(func(_, _ any) bool {
+		count++
+		return true
+	})
+	return map[string]interface{}{
+		"cached_transports": count,
+	}
+}
+
 // newBaseTransport 返回一个预配置的 *http.Transport，参数与原 newProxyTransport 一致。
 func newBaseTransport() *http.Transport {
 	return &http.Transport{

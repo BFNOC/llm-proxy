@@ -912,14 +912,23 @@ func (h *AdminHandler) getStatus(w http.ResponseWriter, r *http.Request) {
 
 	// Healthy upstreams
 	type upstreamInfo struct {
-		ID   int64  `json:"id"`
-		Name string `json:"name"`
-		URL  string `json:"url"`
+		ID                int64  `json:"id"`
+		Name              string `json:"name"`
+		URL               string `json:"url"`
+		KeyCount          int    `json:"key_count"`
+		KeySchedulingMode string `json:"key_scheduling_mode"`
 	}
 	var healthyList []upstreamInfo
 	if all := h.dynamicProxy.GetAllUpstreams(); len(all) > 0 {
 		for _, u := range all {
-			healthyList = append(healthyList, upstreamInfo{ID: u.ID, Name: u.Name, URL: u.BaseURL.String()})
+			mode := u.KeySchedulingMode
+			if mode == "" {
+				mode = "round-robin"
+			}
+			healthyList = append(healthyList, upstreamInfo{
+				ID: u.ID, Name: u.Name, URL: u.BaseURL.String(),
+				KeyCount: len(u.APIKeys), KeySchedulingMode: mode,
+			})
 		}
 	}
 	// 固定返回空数组，避免前端在 null 和 [] 之间做额外分支。
@@ -958,6 +967,9 @@ func (h *AdminHandler) getStatus(w http.ResponseWriter, r *http.Request) {
 		status["rpm"] = 0
 		status["rps"] = "0.0"
 	}
+
+	// 连接池统计
+	status["transport_pool"] = proxy.TransportPoolStats()
 
 	jsonOK(w, status)
 }

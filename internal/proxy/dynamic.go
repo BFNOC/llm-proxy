@@ -280,6 +280,11 @@ func (dp *DynamicProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var isJSON bool
 		model, isJSON = extractModelFromBody(bodyBytes)
 
+		// 将 model 写入响应头，供审计中间件记录到日志。
+		if model != "" {
+			w.Header().Set("X-Model", model)
+		}
+
 		// 全局白名单请求拦截：校验 model 是否在白名单中。
 		// 仅在白名单非空且 model 有效时执行校验。
 		if isJSON && model != "" && dp.WhitelistMatcher != nil {

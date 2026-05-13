@@ -210,6 +210,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_test_models_name_protocol ON test_models (
 ALTER TABLE request_logs ADD COLUMN upstream_key_idx INTEGER NOT NULL DEFAULT -1;
 `,
 	},
+	{
+		// v16: 请求日志增加模型名称字段，记录每次请求的 model。
+		version: 16,
+		up: `
+ALTER TABLE request_logs ADD COLUMN model TEXT NOT NULL DEFAULT '';
+`,
+	},
 }
 
 // RunMigrations applies all pending schema migrations in order.

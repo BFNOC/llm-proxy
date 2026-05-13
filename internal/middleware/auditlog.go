@@ -129,6 +129,7 @@ type responseStatusCapture struct {
 	statusCode     int
 	upstreamName   string // 从 X-Upstream-Name 头捕获
 	upstreamKeyIdx int    // 从 X-API-Key-Index 头捕获
+	model          string // 从 X-Model 头捕获
 }
 
 func (r *responseStatusCapture) WriteHeader(code int) {
@@ -143,6 +144,8 @@ func (r *responseStatusCapture) WriteHeader(code int) {
 		}
 	}
 	r.Header().Del("X-API-Key-Index")
+	r.model = r.Header().Get("X-Model")
+	r.Header().Del("X-Model")
 	r.ResponseWriter.WriteHeader(code)
 }
 
@@ -187,6 +190,7 @@ func AuditLogMiddleware(logger *AuditLogger) func(http.Handler) http.Handler {
 				DownstreamKeyID: keyID,
 				UpstreamName:    upstreamName,
 				UpstreamKeyIdx:  capture.upstreamKeyIdx,
+				Model:           capture.model,
 				ClientIP:        clientIP,
 				ProviderStyle:   string(style),
 				Path:            r.URL.Path,

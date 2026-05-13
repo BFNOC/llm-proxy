@@ -239,7 +239,7 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
                     <div class="form-group"><label>&nbsp;</label><button type="submit" class="btn btn-primary">查询</button></div>
                 </form>
                 <div class="table-container">
-                <table><thead><tr><th class="hide-on-mobile">ID</th><th>密钥</th><th>上游</th><th class="hide-on-mobile">Key#</th><th class="hide-on-mobile">IP</th><th>地区</th><th class="hide-on-mobile">风格</th><th class="hide-on-mobile">路径</th><th>状态码</th><th class="hide-on-mobile">延迟</th><th>时间</th></tr></thead>
+                <table><thead><tr><th class="hide-on-mobile">ID</th><th>密钥</th><th>上游</th><th class="hide-on-mobile">Key#</th><th class="hide-on-mobile">模型</th><th class="hide-on-mobile">IP</th><th>地区</th><th class="hide-on-mobile">风格</th><th class="hide-on-mobile">路径</th><th>状态码</th><th class="hide-on-mobile">延迟</th><th>时间</th></tr></thead>
                 <tbody id="logs-table"></tbody></table>
                 </div>
             </div>
@@ -252,12 +252,9 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
                     <h2>系统状态</h2>
                     <button class="btn btn-ghost btn-sm" onclick="loadStatus()">刷新</button>
                 </div>
-                <div id="status-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-bottom:20px;"></div>
-                <h3 style="font-size:0.95rem;margin-bottom:12px;">健康上游</h3>
-                <div class="table-container">
-                <table><thead><tr><th class="hide-on-mobile">ID</th><th>名称</th><th>地址</th></tr></thead>
-                <tbody id="status-upstreams"></tbody></table>
-                </div>
+                <div id="status-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-bottom:24px;"></div>
+                <h3 style="font-size:0.95rem;margin-bottom:14px;">上游健康</h3>
+                <div id="status-upstreams" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;"></div>
             </div>
         </div>
 
@@ -1302,13 +1299,14 @@ function loadLogs(e) {
     api('/logs'+q).then(data => {
         const tbody = document.getElementById('logs-table');
         if (!data || data.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="11" class="empty-state">暂无日志</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="12" class="empty-state">暂无日志</td></tr>';
             return;
         }
         tbody.innerHTML = (data||[]).map(l => {
             const keyIdx = l.UpstreamKeyIdx;
             const keyIdxText = keyIdx >= 0 ? '#' + (keyIdx + 1) : '-';
-            return '<tr><td class="hide-on-mobile">'+l.ID+'</td><td>'+l.DownstreamKeyID+'</td><td>'+esc(l.UpstreamName||'-')+'</td><td class="hide-on-mobile"><span class="badge badge-purple" style="font-size:0.7rem">'+keyIdxText+'</span></td><td class="hide-on-mobile">'+esc(l.ClientIP||'-')+'</td><td>'+esc(l.IPRegion||'-')+'</td><td class="hide-on-mobile">'+esc(l.ProviderStyle)+'</td><td class="hide-on-mobile">'+esc(l.Path)+'</td><td><span class="badge '+(l.StatusCode<400?'badge-green':'badge-red')+'">'+l.StatusCode+'</span></td><td class="hide-on-mobile">'+l.LatencyMs+'ms</td><td>'+fmtTime(l.CreatedAt)+'</td></tr>';
+            const modelText = l.Model || '-';
+            return '<tr><td class="hide-on-mobile">'+l.ID+'</td><td>'+l.DownstreamKeyID+'</td><td>'+esc(l.UpstreamName||'-')+'</td><td class="hide-on-mobile"><span class="badge badge-purple" style="font-size:0.7rem">'+keyIdxText+'</span></td><td class="hide-on-mobile"><code style="font-size:0.78rem">'+esc(modelText)+'</code></td><td class="hide-on-mobile">'+esc(l.ClientIP||'-')+'</td><td>'+esc(l.IPRegion||'-')+'</td><td class="hide-on-mobile">'+esc(l.ProviderStyle)+'</td><td class="hide-on-mobile">'+esc(l.Path)+'</td><td><span class="badge '+(l.StatusCode<400?'badge-green':'badge-red')+'">'+l.StatusCode+'</span></td><td class="hide-on-mobile">'+l.LatencyMs+'ms</td><td>'+fmtTime(l.CreatedAt)+'</td></tr>';
         }).join('');
     });
 }
@@ -1483,12 +1481,25 @@ function loadStatus() {
             statCard('RPS', d.rps||'0.0', 'var(--orange)') +
             statCard('审计丢弃', d.audit_dropped||0, d.audit_dropped>0?'var(--red)':'var(--green)');
 
-        const tbody = document.getElementById('status-upstreams');
+        const container = document.getElementById('status-upstreams');
         const ups = d.healthy_upstreams || [];
         if (ups.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="3" class="empty-state">暂无健康上游</td></tr>';
+            container.innerHTML = '<div class="empty-state">暂无健康上游</div>';
         } else {
-            tbody.innerHTML = ups.map(u => '<tr><td class="hide-on-mobile">'+u.id+'</td><td>'+esc(u.name)+'</td><td><code class="truncate-url" title="'+esc(u.url)+'">'+esc(u.url)+'</code></td></tr>').join('');
+            container.innerHTML = ups.map(u => {
+                const mode = u.key_scheduling_mode || 'round-robin';
+                const modeLabel = mode === 'fill' ? '填充' : '轮询';
+                const modeColor = mode === 'fill' ? 'var(--orange)' : 'var(--accent)';
+                return '<div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:16px;">'+
+                    '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">'+
+                    '<strong style="font-size:0.95rem;">'+esc(u.name)+'</strong>'+
+                    '<span class="badge badge-green">健康</span></div>'+
+                    '<div style="font-size:0.82rem;color:var(--text-dim);margin-bottom:6px;"><code style="font-size:0.78rem;" title="'+esc(u.url)+'">'+esc(u.url)+'</code></div>'+
+                    '<div style="display:flex;gap:12px;font-size:0.8rem;">'+
+                    '<span>Keys: <strong>'+u.key_count+'</strong></span>'+
+                    '<span>调度: <span style="color:'+modeColor+';font-weight:500;">'+modeLabel+'</span></span>'+
+                    '</div></div>';
+            }).join('');
         }
     });
 }
