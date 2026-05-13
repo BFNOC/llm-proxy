@@ -115,12 +115,13 @@ func (p *UpstreamProber) probeOnce() {
 		// 把数据库里的 upstream ID、代理地址和模型模式带入运行时快照，
 		// 后续代理过滤才能和 key_upstream_bindings 按同一主键精确匹配。
 		healthy = append(healthy, &ActiveUpstream{
-			ID:            u.ID,
-			BaseURL:       parsed,
-			APIKeys:       u.APIKeys,
-			Name:          u.Name,
-			ProxyURL:      u.ProxyURL,
-			ModelPatterns: allModelPatterns[u.ID],
+			ID:                u.ID,
+			BaseURL:           parsed,
+			APIKeys:           u.APIKeys,
+			Name:              u.Name,
+			ProxyURL:          u.ProxyURL,
+			ModelPatterns:     allModelPatterns[u.ID],
+			KeySchedulingMode: u.KeySchedulingMode,
 		})
 	}
 

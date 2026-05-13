@@ -82,6 +82,10 @@ func (h *AdminHandler) RegisterRoutes(r *mux.Router) {
 	api.HandleFunc("/upstreams/models", h.getAllUpstreamModelPatterns).Methods("GET")
 	api.HandleFunc("/upstreams/{id}/models", h.getUpstreamModelPatterns).Methods("GET")
 	api.HandleFunc("/upstreams/{id}/models", h.setUpstreamModelPatterns).Methods("PUT")
+	// Per-key API key management
+	api.HandleFunc("/upstreams/{id}/apikeys", h.listUpstreamAPIKeys).Methods("GET")
+	api.HandleFunc("/upstreams/{id}/apikeys/{key_id}/enabled", h.setAPIKeyEnabled).Methods("PUT")
+	api.HandleFunc("/upstreams/{id}/apikeys/{key_id}/test", h.testUpstreamAPIKey).Methods("POST")
 
 	// Keys
 	api.HandleFunc("/keys", h.listKeys).Methods("GET")
@@ -139,16 +143,23 @@ func (h *AdminHandler) listUpstreams(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// API Keys are now returned unmasked for admin convenience
+	type apiKeyInfo struct {
+		RowID   int64  `json:"row_id"`
+		Key     string `json:"key"`
+		Enabled bool   `json:"enabled"`
+	}
 	type upstreamResponse struct {
-		ID        int64     `json:"id"`
-		Name      string    `json:"name"`
-		BaseURL   string    `json:"base_url"`
-		APIKeys   []string  `json:"api_keys"`
-		ProxyURL  string    `json:"proxy_url"`
-		Priority  int       `json:"priority"`
-		Enabled   bool      `json:"enabled"`
-		CreatedAt time.Time `json:"created_at"`
-		UpdatedAt time.Time `json:"updated_at"`
+		ID                 int64       `json:"id"`
+		Name               string      `json:"name"`
+		BaseURL            string      `json:"base_url"`
+		APIKeys            []string    `json:"api_keys"`
+		APIKeyDetails      []apiKeyInfo `json:"api_key_details"`
+		ProxyURL           string      `json:"proxy_url"`
+		Priority           int         `json:"priority"`
+		Enabled            bool        `json:"enabled"`
+		KeySchedulingMode  string      `json:"key_scheduling_mode"`
+		CreatedAt          time.Time   `json:"created_at"`
+		UpdatedAt          time.Time   `json:"updated_at"`
 	}
 	result := make([]upstreamResponse, len(upstreams))
 	for i, u := range upstreams {
@@ -156,9 +167,20 @@ func (h *AdminHandler) listUpstreams(w http.ResponseWriter, r *http.Request) {
 		if keys == nil {
 			keys = []string{}
 		}
+		// 加载每个 Key 的详细信息（含启用状态和 row ID）
+		keyDetails, err := h.store.GetUpstreamAllAPIKeys(u.ID)
+		if err != nil {
+			slog.Error("admin: failed to load api key details", "upstream_id", u.ID, "error", err)
+			keyDetails = []store.APIKeyInfo{}
+		}
+		details := make([]apiKeyInfo, len(keyDetails))
+		for j, kd := range keyDetails {
+			details[j] = apiKeyInfo{RowID: kd.RowID, Key: kd.Key, Enabled: kd.Enabled}
+		}
 		result[i] = upstreamResponse{
-			ID: u.ID, Name: u.Name, BaseURL: u.BaseURL, APIKeys: keys, ProxyURL: u.ProxyURL,
-			Priority: u.Priority, Enabled: u.Enabled, CreatedAt: u.CreatedAt, UpdatedAt: u.UpdatedAt,
+			ID: u.ID, Name: u.Name, BaseURL: u.BaseURL, APIKeys: keys, APIKeyDetails: details,
+			ProxyURL: u.ProxyURL, Priority: u.Priority, Enabled: u.Enabled,
+			KeySchedulingMode: u.KeySchedulingMode, CreatedAt: u.CreatedAt, UpdatedAt: u.UpdatedAt,
 		}
 	}
 	jsonOK(w, result)
@@ -166,12 +188,13 @@ func (h *AdminHandler) listUpstreams(w http.ResponseWriter, r *http.Request) {
 
 func (h *AdminHandler) createUpstream(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name     string   `json:"name"`
-		BaseURL  string   `json:"base_url"`
-		APIKey   string   `json:"api_key"`    // 向后兼容单 Key
-		APIKeys  []string `json:"api_keys"`   // 新多 Key 字段
-		ProxyURL string   `json:"proxy_url"`
-		Priority int      `json:"priority"`
+		Name              string   `json:"name"`
+		BaseURL           string   `json:"base_url"`
+		APIKey            string   `json:"api_key"`    // 向后兼容单 Key
+		APIKeys           []string `json:"api_keys"`   // 新多 Key 字段
+		ProxyURL          string   `json:"proxy_url"`
+		Priority          int      `json:"priority"`
+		KeySchedulingMode string   `json:"key_scheduling_mode"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid JSON")
@@ -184,6 +207,16 @@ func (h *AdminHandler) createUpstream(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Name == "" || req.BaseURL == "" || len(apiKeys) == 0 {
 		jsonError(w, http.StatusBadRequest, "name, base_url, and at least one api_key/api_keys are required")
+		return
+	}
+
+	// 校验调度模式
+	schedulingMode := req.KeySchedulingMode
+	if schedulingMode == "" {
+		schedulingMode = "round-robin"
+	}
+	if schedulingMode != "round-robin" && schedulingMode != "fill" {
+		jsonError(w, http.StatusBadRequest, "key_scheduling_mode must be 'round-robin' or 'fill'")
 		return
 	}
 
@@ -201,7 +234,7 @@ func (h *AdminHandler) createUpstream(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	upstream, err := h.store.CreateUpstream(req.Name, req.BaseURL, apiKeys, req.Priority, req.ProxyURL)
+	upstream, err := h.store.CreateUpstream(req.Name, req.BaseURL, apiKeys, req.Priority, req.ProxyURL, schedulingMode)
 	if err != nil {
 		slog.Error("admin: store error", "error", err)
 		jsonError(w, http.StatusInternalServerError, "internal error")
@@ -227,13 +260,14 @@ func (h *AdminHandler) updateUpstream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Name     *string  `json:"name"`
-		BaseURL  *string  `json:"base_url"`
-		APIKey   *string  `json:"api_key"`    // 向后兼容单 Key
-		APIKeys  []string `json:"api_keys"`   // 新多 Key 字段
-		ProxyURL *string  `json:"proxy_url"`
-		Priority *int     `json:"priority"`
-		Enabled  *bool    `json:"enabled"`
+		Name              *string  `json:"name"`
+		BaseURL           *string  `json:"base_url"`
+		APIKey            *string  `json:"api_key"`    // 向后兼容单 Key
+		APIKeys           []string `json:"api_keys"`   // 新多 Key 字段
+		ProxyURL          *string  `json:"proxy_url"`
+		Priority          *int     `json:"priority"`
+		Enabled           *bool    `json:"enabled"`
+		KeySchedulingMode *string  `json:"key_scheduling_mode"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid JSON")
@@ -267,6 +301,14 @@ func (h *AdminHandler) updateUpstream(w http.ResponseWriter, r *http.Request) {
 	if req.ProxyURL != nil {
 		proxyURL = *req.ProxyURL
 	}
+	schedulingMode := existing.KeySchedulingMode
+	if req.KeySchedulingMode != nil {
+		schedulingMode = *req.KeySchedulingMode
+		if schedulingMode != "round-robin" && schedulingMode != "fill" {
+			jsonError(w, http.StatusBadRequest, "key_scheduling_mode must be 'round-robin' or 'fill'")
+			return
+		}
+	}
 
 	if baseURL != existing.BaseURL {
 		if err := validateBaseURL(baseURL); err != nil {
@@ -282,7 +324,7 @@ func (h *AdminHandler) updateUpstream(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	upstream, err := h.store.UpdateUpstream(id, name, baseURL, apiKeys, priority, enabled, proxyURL)
+	upstream, err := h.store.UpdateUpstream(id, name, baseURL, apiKeys, priority, enabled, proxyURL, schedulingMode)
 	if err != nil {
 		slog.Error("admin: store error", "error", err)
 		jsonError(w, http.StatusInternalServerError, "internal error")
@@ -1330,6 +1372,305 @@ func (h *AdminHandler) checkUpstreamQuota(w http.ResponseWriter, r *http.Request
 			"model_limits":         apiResp.Data.ModelLimits,
 		},
 	})
+}
+
+// --- Per-Key API Key Management ---
+
+// listUpstreamAPIKeys 返回指定上游的所有 API Key 及启用状态。
+func (h *AdminHandler) listUpstreamAPIKeys(w http.ResponseWriter, r *http.Request) {
+	id, err := parseID(r)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	keys, err := h.store.GetUpstreamAllAPIKeys(id)
+	if err != nil {
+		slog.Error("admin: store error", "error", err)
+		jsonError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	type keyInfo struct {
+		RowID   int64  `json:"row_id"`
+		Key     string `json:"key"`
+		Enabled bool   `json:"enabled"`
+	}
+	result := make([]keyInfo, len(keys))
+	for i, k := range keys {
+		result[i] = keyInfo{RowID: k.RowID, Key: k.Key, Enabled: k.Enabled}
+	}
+	jsonOK(w, result)
+}
+
+// setAPIKeyEnabled 启用或禁用指定上游的某个 API Key。
+func (h *AdminHandler) setAPIKeyEnabled(w http.ResponseWriter, r *http.Request) {
+	id, err := parseID(r)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	keyIDStr := mux.Vars(r)["key_id"]
+	keyID, err := strconv.ParseInt(keyIDStr, 10, 64)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid key_id")
+		return
+	}
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if err := h.store.SetAPIKeyEnabled(id, keyID, req.Enabled); err != nil {
+		slog.Error("admin: store error", "error", err)
+		jsonError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	// Trigger re-probe so key changes take effect immediately.
+	go h.prober.ProbeNow()
+	slog.Info("admin: updated api key enabled", "upstream_id", id, "key_id", keyID, "enabled", req.Enabled)
+	jsonOK(w, map[string]interface{}{"upstream_id": id, "key_id": keyID, "enabled": req.Enabled})
+}
+
+// testUpstreamAPIKey 测试指定上游的某个 API Key，支持选择协议、模型和提示词。
+func (h *AdminHandler) testUpstreamAPIKey(w http.ResponseWriter, r *http.Request) {
+	id, err := parseID(r)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	keyIDStr := mux.Vars(r)["key_id"]
+	keyID, err := strconv.ParseInt(keyIDStr, 10, 64)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid key_id")
+		return
+	}
+
+	var req struct {
+		Protocol    string `json:"protocol"`     // "openai" or "anthropic"
+		Model       string `json:"model"`        // 测试模型
+		Prompt      string `json:"prompt"`       // 测试提示词
+		CFClearance string `json:"cf_clearance"` // CF 绕过
+		CFUserAgent string `json:"cf_user_agent"` // CF 绕过
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if req.Protocol == "" {
+		req.Protocol = "openai"
+	}
+	if req.Prompt == "" {
+		req.Prompt = "你是什么模型？"
+	}
+	if req.Model == "" {
+		switch req.Protocol {
+		case "anthropic":
+			req.Model = "claude-sonnet-4-20250514"
+		case "responses":
+			req.Model = "gpt-4o"
+		default:
+			req.Model = "gpt-4o-mini"
+		}
+	}
+
+	// 获取上游信息
+	upstream, err := h.store.GetUpstream(id)
+	if err != nil {
+		jsonError(w, http.StatusNotFound, fmt.Sprintf("upstream %d not found", id))
+		return
+	}
+
+	// 找到指定 row ID 的 Key
+	keyInfos, err := h.store.GetUpstreamAllAPIKeys(id)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "failed to load api keys")
+		return
+	}
+	var targetKey string
+	for _, ki := range keyInfos {
+		if ki.RowID == keyID {
+			targetKey = ki.Key
+			break
+		}
+	}
+	if targetKey == "" {
+		jsonError(w, http.StatusNotFound, fmt.Sprintf("api key %d not found", keyID))
+		return
+	}
+
+	// 构造请求体
+	var body []byte
+	var testURL string
+	var headers map[string]string
+
+	switch req.Protocol {
+	case "anthropic":
+		testURL = strings.TrimRight(upstream.BaseURL, "/") + "/v1/messages"
+		body, _ = json.Marshal(map[string]interface{}{
+			"model":      req.Model,
+			"max_tokens": 100,
+			"messages":   []map[string]string{{"role": "user", "content": req.Prompt}},
+		})
+		headers = map[string]string{
+			"x-api-key":         targetKey,
+			"anthropic-version": "2023-06-01",
+		}
+	case "responses":
+		testURL = strings.TrimRight(upstream.BaseURL, "/") + "/v1/responses"
+		body, _ = json.Marshal(map[string]interface{}{
+			"model":  req.Model,
+			"input":  req.Prompt,
+			"stream": false,
+		})
+		headers = map[string]string{
+			"Authorization": "Bearer " + targetKey,
+		}
+	default: // openai
+		testURL = strings.TrimRight(upstream.BaseURL, "/") + "/v1/chat/completions"
+		body, _ = json.Marshal(map[string]interface{}{
+			"model":      req.Model,
+			"max_tokens": 100,
+			"messages":   []map[string]string{{"role": "user", "content": req.Prompt}},
+		})
+		headers = map[string]string{
+			"Authorization": "Bearer " + targetKey,
+		}
+	}
+
+	// 构造带代理的 HTTP client
+	transport, err := proxy.BuildTransport(upstream.ProxyURL)
+	if err != nil {
+		jsonOK(w, map[string]interface{}{
+			"success": false,
+			"error":   fmt.Sprintf("invalid proxy config: %v", err),
+		})
+		return
+	}
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   30 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	httpReq, err := http.NewRequestWithContext(r.Context(), "POST", testURL, strings.NewReader(string(body)))
+	if err != nil {
+		jsonOK(w, map[string]interface{}{
+			"success": false,
+			"error":   fmt.Sprintf("构造请求失败: %v", err),
+		})
+		return
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	for k, v := range headers {
+		httpReq.Header.Set(k, v)
+	}
+	applyCFHeaders(httpReq, req.CFClearance, req.CFUserAgent)
+
+	start := time.Now()
+	resp, err := client.Do(httpReq)
+	latency := time.Since(start)
+
+	if err != nil {
+		jsonOK(w, map[string]interface{}{
+			"success":    false,
+			"error":      err.Error(),
+			"latency_ms": latency.Milliseconds(),
+		})
+		return
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 262144))
+	if err != nil {
+		jsonOK(w, map[string]interface{}{
+			"success":     false,
+			"error":       fmt.Sprintf("读取响应失败: %v", err),
+			"status_code": resp.StatusCode,
+			"latency_ms":  latency.Milliseconds(),
+		})
+		return
+	}
+
+	success := resp.StatusCode >= 200 && resp.StatusCode < 300
+	result := map[string]interface{}{
+		"success":     success,
+		"status_code": resp.StatusCode,
+		"latency_ms":  latency.Milliseconds(),
+		"model":       req.Model,
+		"protocol":    req.Protocol,
+	}
+	if !success {
+		result["error"] = fmt.Sprintf("上游返回 HTTP %d", resp.StatusCode)
+		// 尝试解析错误消息
+		var errResp struct {
+			Error struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if json.Unmarshal(respBody, &errResp) == nil && errResp.Error.Message != "" {
+			result["error_message"] = errResp.Error.Message
+		}
+	} else {
+		// 尝试提取回复内容
+		switch req.Protocol {
+		case "anthropic":
+			var anthropicResp struct {
+				Content []struct {
+					Text string `json:"text"`
+				} `json:"content"`
+				Model string `json:"model"`
+			}
+			if json.Unmarshal(respBody, &anthropicResp) == nil {
+				if len(anthropicResp.Content) > 0 {
+					result["reply"] = anthropicResp.Content[0].Text
+				}
+				result["actual_model"] = anthropicResp.Model
+			}
+		case "responses":
+			var responsesResp struct {
+				Output []struct {
+					Type string `json:"type"`
+					Content []struct {
+						Type string `json:"type"`
+						Text string `json:"text"`
+					} `json:"content"`
+				} `json:"output"`
+				Model string `json:"model"`
+			}
+			if json.Unmarshal(respBody, &responsesResp) == nil {
+				for _, item := range responsesResp.Output {
+					if item.Type == "message" {
+						for _, c := range item.Content {
+							if c.Type == "output_text" && c.Text != "" {
+								result["reply"] = c.Text
+								break
+							}
+						}
+					}
+				}
+				result["actual_model"] = responsesResp.Model
+			}
+		default: // openai
+			var openaiResp struct {
+				Choices []struct {
+					Message struct {
+						Content string `json:"content"`
+					} `json:"message"`
+				} `json:"choices"`
+				Model string `json:"model"`
+			}
+			if json.Unmarshal(respBody, &openaiResp) == nil {
+				if len(openaiResp.Choices) > 0 {
+					result["reply"] = openaiResp.Choices[0].Message.Content
+				}
+				result["actual_model"] = openaiResp.Model
+			}
+		}
+	}
+	jsonOK(w, result)
 }
 
 // --- Upstream Model Patterns ---

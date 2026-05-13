@@ -177,6 +177,18 @@ SELECT id, api_key, updated_at FROM upstream_providers WHERE api_key != '';
 ALTER TABLE downstream_keys ADD COLUMN key_encrypted TEXT NOT NULL DEFAULT '';
 `,
 	},
+	{
+		// v13: 支持单个 API Key 启用/禁用 + Key 调度模式（round-robin / fill）。
+		// upstream_api_keys.enabled: 允许单独禁用某个 Key 而不影响其他 Key。
+		// upstream_providers.key_scheduling_mode: 控制多 Key 调度策略。
+		//   - round-robin（默认）: 依次轮询每个 Key。
+		//   - fill: 优先使用当前 Key 直到出错，再切换到下一个。
+		version: 13,
+		up: `
+ALTER TABLE upstream_api_keys ADD COLUMN enabled BOOLEAN NOT NULL DEFAULT 1;
+ALTER TABLE upstream_providers ADD COLUMN key_scheduling_mode TEXT NOT NULL DEFAULT 'round-robin';
+`,
+	},
 }
 
 // RunMigrations applies all pending schema migrations in order.

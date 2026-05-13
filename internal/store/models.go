@@ -3,16 +3,24 @@ package store
 import "time"
 
 type UpstreamProvider struct {
-	ID        int64
-	Name      string
-	BaseURL   string
-	APIKeys   []string // decrypted at read time; stored encrypted in upstream_api_keys table
-	ProxyURL  string // 可选代理地址，支持 http/https/socks5，空表示继承环境代理
-	Priority  int
-	Enabled   bool   // persisted; disabled upstreams are skipped by the prober
-	Healthy   bool   // runtime only, not persisted
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID                 int64
+	Name               string
+	BaseURL            string
+	APIKeys            []string // decrypted at read time; stored encrypted in upstream_api_keys table
+	ProxyURL           string   // 可选代理地址，支持 http/https/socks5，空表示继承环境代理
+	Priority           int
+	Enabled            bool   // persisted; disabled upstreams are skipped by the prober
+	KeySchedulingMode  string // "round-robin" (default) or "fill"
+	Healthy            bool   // runtime only, not persisted
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+}
+
+// APIKeyInfo 表示单个 API Key 及其启用状态，用于管理面板展示。
+type APIKeyInfo struct {
+	RowID   int64  // upstream_api_keys 表主键
+	Key     string // 已解密的明文 Key
+	Enabled bool
 }
 
 type DownstreamKey struct {

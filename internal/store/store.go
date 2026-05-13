@@ -56,9 +56,12 @@ func (s *Store) Close() error {
 // Each key is encrypted before storage in the upstream_api_keys table.
 // URL validation (scheme, SSRF) is the responsibility of the HTTP handler layer;
 // the store accepts any non-empty URL to remain testable with loopback addresses.
-func (s *Store) CreateUpstream(name, baseURL string, apiKeys []string, priority int, proxyURL string) (*UpstreamProvider, error) {
+func (s *Store) CreateUpstream(name, baseURL string, apiKeys []string, priority int, proxyURL string, keySchedulingMode string) (*UpstreamProvider, error) {
 	if len(apiKeys) == 0 {
 		return nil, fmt.Errorf("at least one api key is required")
+	}
+	if keySchedulingMode == "" {
+		keySchedulingMode = "round-robin"
 	}
 
 	now := time.Now().UTC()
@@ -70,9 +73,9 @@ func (s *Store) CreateUpstream(name, baseURL string, apiKeys []string, priority 
 
 	// 旧 api_key 列保留占位值（NOT NULL 约束无法删除）
 	res, err := tx.Exec(
-		`INSERT INTO upstream_providers (name, base_url, api_key, priority, enabled, proxy_url, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, 1, ?, ?, ?)`,
-		name, baseURL, "_migrated_to_upstream_api_keys", priority, proxyURL, now, now,
+		`INSERT INTO upstream_providers (name, base_url, api_key, priority, enabled, proxy_url, key_scheduling_mode, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)`,
+		name, baseURL, "_migrated_to_upstream_api_keys", priority, proxyURL, keySchedulingMode, now, now,
 	)
 	if err != nil {
 		_ = tx.Rollback()
@@ -110,28 +113,29 @@ func (s *Store) CreateUpstream(name, baseURL string, apiKeys []string, priority 
 	}
 
 	return &UpstreamProvider{
-		ID:        id,
-		Name:      name,
-		BaseURL:   baseURL,
-		APIKeys:   apiKeys,
-		ProxyURL:  proxyURL,
-		Priority:  priority,
-		Enabled:   true,
-		Healthy:   true,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:                id,
+		Name:              name,
+		BaseURL:           baseURL,
+		APIKeys:           apiKeys,
+		ProxyURL:          proxyURL,
+		Priority:          priority,
+		Enabled:           true,
+		KeySchedulingMode: keySchedulingMode,
+		Healthy:           true,
+		CreatedAt:         now,
+		UpdatedAt:         now,
 	}, nil
 }
 
 // GetUpstream retrieves an upstream provider by ID, decrypting all its API keys.
 func (s *Store) GetUpstream(id int64) (*UpstreamProvider, error) {
 	row := s.db.QueryRow(
-		`SELECT id, name, base_url, priority, enabled, proxy_url, created_at, updated_at
+		`SELECT id, name, base_url, priority, enabled, key_scheduling_mode, proxy_url, created_at, updated_at
 		 FROM upstream_providers WHERE id = ?`, id,
 	)
 
 	var up UpstreamProvider
-	if err := row.Scan(&up.ID, &up.Name, &up.BaseURL, &up.Priority, &up.Enabled, &up.ProxyURL, &up.CreatedAt, &up.UpdatedAt); err != nil {
+	if err := row.Scan(&up.ID, &up.Name, &up.BaseURL, &up.Priority, &up.Enabled, &up.KeySchedulingMode, &up.ProxyURL, &up.CreatedAt, &up.UpdatedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("upstream %d not found", id)
 		}
@@ -150,7 +154,7 @@ func (s *Store) GetUpstream(id int64) (*UpstreamProvider, error) {
 // ListUpstreams returns all upstream providers with decrypted API keys.
 func (s *Store) ListUpstreams() ([]UpstreamProvider, error) {
 	rows, err := s.db.Query(
-		`SELECT id, name, base_url, priority, enabled, proxy_url, created_at, updated_at
+		`SELECT id, name, base_url, priority, enabled, key_scheduling_mode, proxy_url, created_at, updated_at
 		 FROM upstream_providers ORDER BY priority ASC, id ASC`,
 	)
 	if err != nil {
@@ -161,7 +165,7 @@ func (s *Store) ListUpstreams() ([]UpstreamProvider, error) {
 	var result []UpstreamProvider
 	for rows.Next() {
 		var up UpstreamProvider
-		if err := rows.Scan(&up.ID, &up.Name, &up.BaseURL, &up.Priority, &up.Enabled, &up.ProxyURL, &up.CreatedAt, &up.UpdatedAt); err != nil {
+		if err := rows.Scan(&up.ID, &up.Name, &up.BaseURL, &up.Priority, &up.Enabled, &up.KeySchedulingMode, &up.ProxyURL, &up.CreatedAt, &up.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan upstream row: %w", err)
 		}
 		up.Healthy = true
@@ -185,7 +189,7 @@ func (s *Store) ListUpstreams() ([]UpstreamProvider, error) {
 
 // UpdateUpstream replaces all mutable fields of an upstream provider.
 // If apiKeys is non-nil, fully replaces the upstream's API keys.
-func (s *Store) UpdateUpstream(id int64, name, baseURL string, apiKeys []string, priority int, enabled bool, proxyURL string) (*UpstreamProvider, error) {
+func (s *Store) UpdateUpstream(id int64, name, baseURL string, apiKeys []string, priority int, enabled bool, proxyURL string, keySchedulingMode string) (*UpstreamProvider, error) {
 	now := time.Now().UTC()
 
 	tx, err := s.db.Begin()
@@ -194,9 +198,9 @@ func (s *Store) UpdateUpstream(id int64, name, baseURL string, apiKeys []string,
 	}
 
 	res, err := tx.Exec(
-		`UPDATE upstream_providers SET name=?, base_url=?, priority=?, enabled=?, proxy_url=?, updated_at=?
+		`UPDATE upstream_providers SET name=?, base_url=?, priority=?, enabled=?, proxy_url=?, key_scheduling_mode=?, updated_at=?
 		 WHERE id=?`,
-		name, baseURL, priority, enabled, proxyURL, now, id,
+		name, baseURL, priority, enabled, proxyURL, keySchedulingMode, now, id,
 	)
 	if err != nil {
 		_ = tx.Rollback()
@@ -262,10 +266,11 @@ func (s *Store) DeleteUpstream(id int64) error {
 	return nil
 }
 
-// getUpstreamAPIKeys 返回单个上游的所有 API Key（已解密）。
+// getUpstreamAPIKeys 返回单个上游的所有已启用 API Key（已解密）。
+// 仅供代理运行时使用；禁用的 Key 不会被加载到内存。
 func (s *Store) getUpstreamAPIKeys(upstreamID int64) ([]string, error) {
 	rows, err := s.db.Query(
-		`SELECT api_key FROM upstream_api_keys WHERE upstream_id = ? ORDER BY id`, upstreamID,
+		`SELECT api_key FROM upstream_api_keys WHERE upstream_id = ? AND enabled = 1 ORDER BY id`, upstreamID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query upstream api keys: %w", err)
@@ -287,9 +292,9 @@ func (s *Store) getUpstreamAPIKeys(upstreamID int64) ([]string, error) {
 	return keys, rows.Err()
 }
 
-// getAllUpstreamAPIKeys 一次性加载所有上游的 API Key（已解密），供 ListUpstreams 批量填充。
+// getAllUpstreamAPIKeys 一次性加载所有上游的已启用 API Key（已解密），供 ListUpstreams 批量填充。
 func (s *Store) getAllUpstreamAPIKeys() (map[int64][]string, error) {
-	rows, err := s.db.Query(`SELECT upstream_id, api_key FROM upstream_api_keys ORDER BY upstream_id, id`)
+	rows, err := s.db.Query(`SELECT upstream_id, api_key FROM upstream_api_keys WHERE enabled = 1 ORDER BY upstream_id, id`)
 	if err != nil {
 		return nil, fmt.Errorf("query all upstream api keys: %w", err)
 	}
@@ -309,6 +314,52 @@ func (s *Store) getAllUpstreamAPIKeys() (map[int64][]string, error) {
 		result[upstreamID] = append(result[upstreamID], plain)
 	}
 	return result, rows.Err()
+}
+
+// GetUpstreamAllAPIKeys 返回单个上游的所有 API Key（含启用状态和 row ID），供管理面板展示。
+func (s *Store) GetUpstreamAllAPIKeys(upstreamID int64) ([]APIKeyInfo, error) {
+	rows, err := s.db.Query(
+		`SELECT id, api_key, enabled FROM upstream_api_keys WHERE upstream_id = ? ORDER BY id`, upstreamID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query upstream api keys: %w", err)
+	}
+	defer rows.Close()
+
+	var result []APIKeyInfo
+	for rows.Next() {
+		var rowID int64
+		var encrypted string
+		var enabled bool
+		if err := rows.Scan(&rowID, &encrypted, &enabled); err != nil {
+			return nil, fmt.Errorf("scan api key: %w", err)
+		}
+		plain, err := Decrypt(encrypted, s.encryptionKey)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt api key for upstream %d: %w", upstreamID, err)
+		}
+		result = append(result, APIKeyInfo{RowID: rowID, Key: plain, Enabled: enabled})
+	}
+	return result, rows.Err()
+}
+
+// SetAPIKeyEnabled 启用或禁用某个上游的指定 API Key（按 row ID）。
+func (s *Store) SetAPIKeyEnabled(upstreamID, keyRowID int64, enabled bool) error {
+	res, err := s.db.Exec(
+		`UPDATE upstream_api_keys SET enabled = ? WHERE id = ? AND upstream_id = ?`,
+		enabled, keyRowID, upstreamID,
+	)
+	if err != nil {
+		return fmt.Errorf("update api key enabled: %w", err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("api key %d not found for upstream %d", keyRowID, upstreamID)
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------

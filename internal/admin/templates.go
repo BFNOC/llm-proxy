@@ -10,99 +10,106 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         :root {
-            --bg: #f5f6fa; --bg-card: #ffffff; --bg-hover: #eef0f6;
-            --border: #dfe1e8; --text: #2d3436; --text-dim: #636e72;
-            --accent: #6c5ce7; --accent-hover: #5b4cdb;
-            --green: #00a878; --red: #d63031; --orange: #e17055;
-            --radius: 12px; --radius-sm: 8px;
+            --bg: #f0f2f5; --bg-card: #ffffff; --bg-hover: #f5f6f8;
+            --border: #e2e5ea; --text: #1a1d23; --text-dim: #6b7280;
+            --accent: #6366f1; --accent-hover: #4f46e5; --accent-light: rgba(99,102,241,0.08);
+            --green: #10b981; --red: #ef4444; --orange: #f59e0b;
+            --radius: 14px; --radius-sm: 10px; --radius-xs: 6px;
+            --shadow-sm: 0 1px 3px rgba(0,0,0,0.06); --shadow-md: 0 4px 16px rgba(0,0,0,0.08);
         }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
-        .container { max-width: 1200px; margin: 0 auto; padding: 24px; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; -webkit-font-smoothing: antialiased; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 28px 24px; }
 
         /* Header */
         .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 32px; }
-        .header h1 { font-size: 1.5rem; font-weight: 700; background: linear-gradient(135deg, var(--accent), #a29bfe); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .header h1 { font-size: 1.6rem; font-weight: 700; background: linear-gradient(135deg, #6366f1, #8b5cf6, #a78bfa); -webkit-background-clip: text; -webkit-text-fill-color: transparent; letter-spacing: -0.02em; }
         .header .logout-btn { background: none; border: 1px solid var(--border); color: var(--text-dim); padding: 8px 16px; border-radius: var(--radius-sm); cursor: pointer; font-size: 0.85rem; transition: all 0.2s; }
         .header .logout-btn:hover { border-color: var(--red); color: var(--red); }
 
         /* Auth */
         #auth-section { display: flex; align-items: center; justify-content: center; min-height: 80vh; }
-        .auth-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 48px; text-align: center; width: 400px; box-shadow: 0 2px 12px rgba(0,0,0,0.06); }
+        .auth-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 48px 40px; text-align: center; width: 400px; box-shadow: var(--shadow-md); }
         .auth-card h2 { font-size: 1.4rem; margin-bottom: 8px; }
         .auth-card p { color: var(--text-dim); margin-bottom: 24px; font-size: 0.9rem; }
-        .auth-card input { width: 100%; padding: 12px 16px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-size: 0.95rem; margin-bottom: 16px; transition: border-color 0.2s; }
-        .auth-card input:focus { outline: none; border-color: var(--accent); }
+        .auth-card input { width: 100%; padding: 12px 16px; background: var(--bg); border: 1.5px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-size: 0.95rem; margin-bottom: 16px; transition: all 0.2s; }
+        .auth-card input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-light); }
 
         /* Buttons */
-        .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 10px 20px; border: 1px solid transparent; border-radius: var(--radius-sm); cursor: pointer; font-size: 0.875rem; font-weight: 500; transition: all 0.2s; font-family: inherit; white-space: nowrap; }
-        .btn-primary { background: var(--accent); color: #fff; }
-        .btn-primary:hover { background: var(--accent-hover); transform: translateY(-1px); }
-        .btn-sm { padding: 6px 12px; font-size: 0.8rem; }
+        .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 10px 20px; border: none; border-radius: var(--radius-sm); cursor: pointer; font-size: 0.875rem; font-weight: 500; transition: all 0.2s; font-family: inherit; white-space: nowrap; }
+        .btn-primary { background: var(--accent); color: #fff; box-shadow: 0 1px 3px rgba(99,102,241,0.3); }
+        .btn-primary:hover { background: var(--accent-hover); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(99,102,241,0.3); }
+        .btn-sm { padding: 6px 12px; font-size: 0.8rem; border-radius: var(--radius-xs); }
         .btn-ghost { background: transparent; color: var(--text-dim); border: 1px solid var(--border); }
-        .btn-ghost:hover { background: var(--bg-hover); color: var(--text); }
+        .btn-ghost:hover { background: var(--bg-hover); color: var(--text); border-color: #c8ccd4; }
         .btn-danger { background: transparent; color: var(--red); border: 1px solid transparent; }
-        .btn-danger:hover { background: rgba(225,112,85,0.1); }
+        .btn-danger:hover { background: rgba(239,68,68,0.08); }
         .btn-success { background: transparent; color: var(--green); border: 1px solid transparent; }
-        .btn-success:hover { background: rgba(0,184,148,0.1); }
+        .btn-success:hover { background: rgba(16,185,129,0.08); }
 
         /* Tabs */
-        .tab-nav { display: flex; gap: 4px; margin-bottom: 24px; background: var(--bg-card); border-radius: var(--radius); padding: 4px; border: 1px solid var(--border); }
+        .tab-nav { display: flex; gap: 2px; margin-bottom: 28px; background: var(--bg-card); border-radius: var(--radius); padding: 5px; border: 1px solid var(--border); box-shadow: var(--shadow-sm); }
         .tab-nav button { flex: 1; padding: 10px 16px; background: transparent; border: none; color: var(--text-dim); cursor: pointer; border-radius: var(--radius-sm); font-size: 0.875rem; font-weight: 500; transition: all 0.2s; font-family: inherit; white-space: nowrap; }
-        .tab-nav button.active { background: var(--accent); color: #fff; }
+        .tab-nav button.active { background: var(--accent); color: #fff; box-shadow: 0 1px 4px rgba(99,102,241,0.25); }
         .tab-nav button:hover:not(.active) { background: var(--bg-hover); color: var(--text); }
-        .tab-content { display: none; animation: fadeIn 0.3s ease; }
+        .tab-content { display: none; animation: fadeIn 0.25s ease; }
         .tab-content.active { display: block; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
 
         /* Cards */
-        .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; margin-bottom: 20px; box-shadow: 0 1px 4px rgba(0,0,0,0.04); }
-        .card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
-        .card-header h2 { font-size: 1.15rem; font-weight: 600; }
+        .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; margin-bottom: 20px; box-shadow: var(--shadow-sm); }
+        .card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }
+        .card-header h2 { font-size: 1.15rem; font-weight: 600; letter-spacing: -0.01em; }
 
         /* Tables */
         .table-container { overflow-x: auto; -webkit-overflow-scrolling: touch; }
         table { width: 100%; border-collapse: collapse; }
-        thead th { text-align: left; padding: 12px 16px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-dim); border-bottom: 1px solid var(--border); white-space: nowrap; }
-        tbody td { padding: 12px 16px; font-size: 0.875rem; border-bottom: 1px solid var(--border); vertical-align: middle; }
+        thead th { text-align: left; padding: 10px 16px; font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim); border-bottom: 1.5px solid var(--border); white-space: nowrap; }
+        tbody td { padding: 14px 16px; font-size: 0.875rem; border-bottom: 1px solid #f0f1f3; vertical-align: middle; }
         tbody tr { transition: background 0.15s; }
         tbody tr:hover { background: var(--bg-hover); }
         tbody tr:last-child td { border-bottom: none; }
 
         /* Badges */
-        .badge { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 0.75rem; font-weight: 600; white-space: nowrap; }
-        .badge-green { background: rgba(0,184,148,0.15); color: var(--green); }
-        .badge-red { background: rgba(225,112,85,0.15); color: var(--red); }
-        .badge-purple { background: rgba(108,92,231,0.15); color: var(--accent); }
+        .badge { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 0.7rem; font-weight: 600; white-space: nowrap; letter-spacing: 0.02em; }
+        .badge-green { background: rgba(16,185,129,0.1); color: #059669; }
+        .badge-red { background: rgba(239,68,68,0.1); color: var(--red); }
+        .badge-purple { background: var(--accent-light); color: var(--accent); }
 
         /* Forms */
         .form-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; align-items: end; }
         .form-grid.narrow { grid-template-columns: 1fr auto; }
-        .form-group { display: flex; flex-direction: column; gap: 4px; }
-        .form-group label { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-dim); }
-        input, select { width: 100%; padding: 10px 14px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-size: 0.875rem; font-family: inherit; transition: border-color 0.2s; }
-        input:focus, select:focus { outline: none; border-color: var(--accent); }
-        code { background: var(--bg); padding: 2px 8px; border-radius: 4px; font-size: 0.85em; word-break: break-all; }
+        .form-group { display: flex; flex-direction: column; gap: 6px; }
+        .form-group label { font-size: 0.75rem; font-weight: 600; color: var(--text); letter-spacing: 0.01em; }
+        input, select, textarea { width: 100%; padding: 10px 14px; background: var(--bg); border: 1.5px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-size: 0.875rem; font-family: inherit; transition: all 0.2s; }
+        input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-light); background: #fff; }
+        textarea { resize: vertical; line-height: 1.6; }
+        input::placeholder, textarea::placeholder { color: #b0b5be; }
+        code { background: var(--bg); padding: 2px 8px; border-radius: var(--radius-xs); font-size: 0.85em; word-break: break-all; }
 
         /* Key display */
         .key-display { font-family: 'SF Mono', 'JetBrains Mono', monospace; background: var(--bg); padding: 16px; border-radius: var(--radius-sm); word-break: break-all; border: 1px solid var(--accent); margin-top: 8px; font-size: 0.9rem; }
-        .key-alert { background: rgba(108,92,231,0.1); border: 1px solid var(--accent); border-radius: var(--radius-sm); padding: 16px; margin-bottom: 16px; }
+        .key-alert { background: var(--accent-light); border: 1px solid rgba(99,102,241,0.2); border-radius: var(--radius-sm); padding: 16px; margin-bottom: 16px; }
         .key-alert strong { color: var(--accent); }
 
         /* Dialog / Modal */
-        dialog { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text); padding: 32px; max-width: 520px; width: 90%; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); margin: 0; }
-        dialog::backdrop { background: rgba(0,0,0,0.3); backdrop-filter: blur(4px); }
-        dialog h3 { font-size: 1.1rem; margin-bottom: 20px; }
-        dialog .form-group { margin-bottom: 12px; }
-        dialog .dialog-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 24px; }
+        dialog { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text); padding: 0; max-width: 520px; width: 92%; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); margin: 0; box-shadow: 0 20px 60px rgba(0,0,0,0.15); overflow: hidden; }
+        dialog::backdrop { background: rgba(0,0,0,0.4); backdrop-filter: blur(8px); }
+        dialog[open] { animation: dialogIn 0.2s ease; }
+        @keyframes dialogIn { from { opacity: 0; transform: translate(-50%, -48%) scale(0.97); } to { opacity: 1; transform: translate(-50%, -50%) scale(1); } }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        dialog > form { padding: 28px 32px 24px; }
+        dialog h3 { font-size: 1.15rem; font-weight: 600; letter-spacing: -0.01em; }
+        dialog .form-group { margin-bottom: 14px; }
+        dialog .form-group label { font-size: 0.8rem; color: var(--text-dim); }
+        dialog .dialog-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 24px; padding-top: 16px; border-top: 1px solid #f0f1f3; }
 
         /* Binding checkboxes */
-        .binding-list { display: flex; flex-direction: column; gap: 8px; max-height: 300px; overflow-y: auto; }
-        .binding-item { display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: var(--bg); border-radius: var(--radius-sm); cursor: pointer; transition: background 0.15s; }
-        .binding-item:hover { background: var(--bg-hover); }
+        .binding-list { display: flex; flex-direction: column; gap: 6px; max-height: 300px; overflow-y: auto; }
+        .binding-item { display: flex; align-items: center; gap: 10px; padding: 12px 14px; background: var(--bg); border-radius: var(--radius-sm); cursor: pointer; transition: all 0.15s; border: 1px solid transparent; }
+        .binding-item:hover { background: var(--bg-hover); border-color: var(--border); }
         .binding-item input[type="checkbox"] { accent-color: var(--accent); width: 16px; height: 16px; }
-        .binding-label { flex: 1; font-size: 0.9rem; }
+        .binding-label { flex: 1; font-size: 0.9rem; font-weight: 500; }
         .binding-url { color: var(--text-dim); font-size: 0.8rem; }
-
 
         /* Empty state */
         .empty-state { text-align: center; padding: 32px; color: var(--text-dim); font-size: 0.9rem; }
@@ -115,7 +122,7 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
 
         /* Model pattern tags */
         .model-tags { display: flex; flex-wrap: wrap; gap: 4px; }
-        .model-tag { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; background: rgba(108,92,231,0.12); color: var(--accent); border-radius: 4px; font-size: 0.75rem; font-family: 'SF Mono', 'JetBrains Mono', monospace; }
+        .model-tag { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; background: var(--accent-light); color: var(--accent); border-radius: var(--radius-xs); font-size: 0.72rem; font-weight: 500; font-family: 'SF Mono', 'JetBrains Mono', monospace; }
         .model-tag-all { color: var(--text-dim); font-size: 0.8rem; font-style: italic; }
 
         /* Responsive */
@@ -126,6 +133,8 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
             .tab-nav { flex-wrap: wrap; }
             .tab-nav button { flex: 1 1 calc(50% - 4px); justify-content: center; }
             .form-grid { grid-template-columns: 1fr; }
+            dialog > form { padding: 20px; }
+            dialog h3 { padding: 16px 20px 0; }
             .dialog-actions { flex-direction: column-reverse; }
             .dialog-actions button { width: 100%; }
             thead th, tbody td { padding: 10px 4px; font-size: 0.8rem; }
@@ -170,7 +179,7 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
                     <button class="btn btn-primary btn-sm" onclick="document.getElementById('dlg-upstream').showModal()">+ 添加上游</button>
                 </div>
                 <div class="table-container">
-                <table><thead><tr><th class="hide-on-mobile">ID</th><th>名称</th><th>地址</th><th class="hide-on-mobile">密钥</th><th class="hide-on-mobile">代理</th><th class="hide-on-mobile">优先级</th><th class="hide-on-mobile">模型模式</th><th>状态</th><th>操作</th></tr></thead>
+                <table><thead><tr><th class="hide-on-mobile">ID</th><th>名称</th><th>地址</th><th class="hide-on-mobile">密钥</th><th class="hide-on-mobile">调度</th><th class="hide-on-mobile">代理</th><th class="hide-on-mobile">优先级</th><th class="hide-on-mobile">模型模式</th><th>状态</th><th>操作</th></tr></thead>
                 <tbody id="upstreams-table"></tbody></table>
                 </div>
             </div>
@@ -274,12 +283,12 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
 <dialog id="dlg-upstream">
     <h3>添加上游</h3>
     <form onsubmit="createUpstream(event)">
-        <div class="form-group"><label>名称</label><input name="name" required></div>
+        <div class="form-group"><label>名称</label><input name="name" placeholder="如 openai-sgp" required></div>
         <div class="form-group"><label>地址</label><input name="base_url" placeholder="https://api.example.com" required></div>
-        <div class="form-group"><label>API 密钥（每行一个，支持多个）</label><textarea name="api_keys" rows="3" required style="font-family:'SF Mono','JetBrains Mono',monospace;font-size:0.85rem;resize:vertical;" placeholder="sk-key1
-sk-key2"></textarea></div>
-        <div class="form-group"><label>代理地址（可选）</label><input name="proxy_url" placeholder="socks5://127.0.0.1:1080"></div>
-        <div class="form-group"><label>优先级 (0=最高)</label><input name="priority" type="number" value="0"></div>
+        <div class="form-group"><label>API 密钥 <span style="font-weight:400;color:var(--text-dim);text-transform:none;letter-spacing:0">（每行一个，支持多个）</span></label><textarea name="api_keys" rows="3" required style="font-family:'SF Mono','JetBrains Mono',monospace;font-size:0.82rem;resize:vertical;letter-spacing:0.02em;" placeholder="sk-key1&#10;sk-key2"></textarea></div>
+        <div class="form-group"><label>Key 调度模式</label><select name="key_scheduling_mode"><option value="round-robin">轮询 (Round-Robin)</option><option value="fill">填充 (Fill — 优先用满当前 Key)</option></select></div>
+        <div class="form-group"><label>代理地址 <span style="font-weight:400;color:var(--text-dim);text-transform:none;letter-spacing:0">（可选）</span></label><input name="proxy_url" placeholder="socks5://127.0.0.1:1080"></div>
+        <div class="form-group"><label>优先级 <span style="font-weight:400;color:var(--text-dim);text-transform:none;letter-spacing:0">（0 = 最高）</span></label><input name="priority" type="number" value="0" min="0"></div>
         <div class="dialog-actions">
             <button type="button" class="btn btn-ghost" onclick="this.closest('dialog').close()">取消</button>
             <button type="submit" class="btn btn-primary">创建</button>
@@ -293,10 +302,11 @@ sk-key2"></textarea></div>
     <form onsubmit="submitEditUpstream(event)">
         <input type="hidden" name="id">
         <div class="form-group"><label>名称</label><input name="name" required></div>
-        <div class="form-group"><label>地址</label><input name="base_url" required></div>
-        <div class="form-group"><label>API 密钥（每行一个，留空不修改）</label><textarea name="api_keys" rows="3" style="font-family:'SF Mono','JetBrains Mono',monospace;font-size:0.85rem;resize:vertical;" placeholder="留空不修改"></textarea></div>
-        <div class="form-group"><label>代理地址（留空=环境代理）</label><input name="proxy_url" placeholder="socks5://127.0.0.1:1080"></div>
-        <div class="form-group"><label>优先级</label><input name="priority" type="number"></div>
+        <div class="form-group"><label>地址</label><input name="base_url" placeholder="https://api.example.com" required></div>
+        <div class="form-group"><label>API 密钥 <span style="font-weight:400;color:var(--text-dim);text-transform:none;letter-spacing:0">（每行一个，留空不修改）</span></label><textarea name="api_keys" rows="3" style="font-family:'SF Mono','JetBrains Mono',monospace;font-size:0.82rem;resize:vertical;letter-spacing:0.02em;" placeholder="留空不修改"></textarea></div>
+        <div class="form-group"><label>Key 调度模式</label><select name="key_scheduling_mode"><option value="round-robin">轮询 (Round-Robin)</option><option value="fill">填充 (Fill — 优先用满当前 Key)</option></select></div>
+        <div class="form-group"><label>代理地址 <span style="font-weight:400;color:var(--text-dim);text-transform:none;letter-spacing:0">（留空 = 环境代理）</span></label><input name="proxy_url" placeholder="socks5://127.0.0.1:1080"></div>
+        <div class="form-group"><label>优先级</label><input name="priority" type="number" min="0"></div>
         <div class="dialog-actions">
             <button type="button" class="btn btn-ghost" onclick="this.closest('dialog').close()">取消</button>
             <button type="submit" class="btn btn-primary">保存</button>
@@ -308,8 +318,8 @@ sk-key2"></textarea></div>
 <dialog id="dlg-key">
     <h3>创建密钥</h3>
     <form onsubmit="createKey(event)">
-        <div class="form-group"><label>密钥名称</label><input name="name" required></div>
-        <div class="form-group"><label>每分钟请求限制 (0=不限)</label><input name="rpm_limit" type="number" value="0"></div>
+        <div class="form-group"><label>密钥名称</label><input name="name" placeholder="如 user-1" required></div>
+        <div class="form-group"><label>每分钟请求限制 <span style="font-weight:400;color:var(--text-dim);text-transform:none;letter-spacing:0">（0 = 不限）</span></label><input name="rpm_limit" type="number" value="0" min="0"></div>
         <div class="dialog-actions">
             <button type="button" class="btn btn-ghost" onclick="this.closest('dialog').close()">取消</button>
             <button type="submit" class="btn btn-primary">创建</button>
@@ -323,7 +333,7 @@ sk-key2"></textarea></div>
     <form onsubmit="submitEditKey(event)">
         <input type="hidden" name="id">
         <div class="form-group"><label>名称</label><input name="name" required></div>
-        <div class="form-group"><label>每分钟请求限制 (0=不限)</label><input name="rpm_limit" type="number"></div>
+        <div class="form-group"><label>每分钟请求限制 <span style="font-weight:400;color:var(--text-dim);text-transform:none;letter-spacing:0">（0 = 不限）</span></label><input name="rpm_limit" type="number" min="0"></div>
         <div class="dialog-actions">
             <button type="button" class="btn btn-ghost" onclick="this.closest('dialog').close()">取消</button>
             <button type="submit" class="btn btn-primary">保存</button>
@@ -334,67 +344,127 @@ sk-key2"></textarea></div>
 <!-- Upstream Binding Dialog -->
 <dialog id="dlg-binding">
     <h3>配置上游绑定</h3>
-    <p style="color:var(--text-dim);font-size:0.85rem;margin-bottom:16px;">选择此密钥允许使用的上游。不选择任何上游表示允许全部。</p>
-    <input type="hidden" id="binding-key-id">
-    <div id="binding-list" class="binding-list"></div>
-    <div class="dialog-actions">
-        <button type="button" class="btn btn-ghost" onclick="this.closest('dialog').close()">取消</button>
-        <button type="button" class="btn btn-primary" onclick="saveBindings()">保存</button>
-    </div>
+    <form>
+        <p style="color:var(--text-dim);font-size:0.85rem;margin-bottom:16px;">选择此密钥允许使用的上游。不选择任何上游表示允许全部。</p>
+        <input type="hidden" id="binding-key-id">
+        <div id="binding-list" class="binding-list"></div>
+        <div class="dialog-actions">
+            <button type="button" class="btn btn-ghost" onclick="this.closest('dialog').close()">取消</button>
+            <button type="button" class="btn btn-primary" onclick="saveBindings()">保存</button>
+        </div>
+    </form>
 </dialog>
 
 <!-- Model Patterns Dialog -->
 <dialog id="dlg-model-patterns">
     <h3>配置模型模式</h3>
-    <p style="color:var(--text-dim);font-size:0.85rem;margin-bottom:16px;">配置此上游支持的模型。支持 <code>*</code> 通配符（如 <code>claude-*</code>）。空则接受所有模型。</p>
-    <input type="hidden" id="mp-upstream-id">
-    <div style="display:flex;gap:8px;margin-bottom:16px;">
-        <input id="mp-new-pattern" placeholder="如: claude-*" style="flex:1" onkeydown="if(event.key==='Enter'){event.preventDefault();addModelPatternTag()}">
-        <button type="button" class="btn btn-primary btn-sm" onclick="addModelPatternTag()">添加</button>
-    </div>
-    <div id="mp-tags" class="model-tags" style="min-height:32px;margin-bottom:16px;"></div>
-    <div class="dialog-actions">
-        <button type="button" class="btn btn-ghost" onclick="this.closest('dialog').close()">取消</button>
-        <button type="button" class="btn btn-primary" onclick="saveModelPatterns()">保存</button>
-    </div>
+    <form>
+        <p style="color:var(--text-dim);font-size:0.85rem;margin-bottom:16px;">配置此上游支持的模型。支持 <code>*</code> 通配符（如 <code>claude-*</code>）。空则接受所有模型。</p>
+        <input type="hidden" id="mp-upstream-id">
+        <div style="display:flex;gap:8px;margin-bottom:16px;">
+            <input id="mp-new-pattern" placeholder="如: claude-*" style="flex:1" onkeydown="if(event.key==='Enter'){event.preventDefault();addModelPatternTag()}">
+            <button type="button" class="btn btn-primary btn-sm" onclick="addModelPatternTag()">添加</button>
+        </div>
+        <div id="mp-tags" class="model-tags" style="min-height:32px;margin-bottom:16px;"></div>
+        <div class="dialog-actions">
+            <button type="button" class="btn btn-ghost" onclick="this.closest('dialog').close()">取消</button>
+            <button type="button" class="btn btn-primary" onclick="saveModelPatterns()">保存</button>
+        </div>
+    </form>
 </dialog>
 
 <!-- Key Model Override Dialog -->
 <dialog id="dlg-model-override" style="max-width:600px;">
     <h3>配置模型路由覆盖</h3>
-    <p style="color:var(--text-dim);font-size:0.85rem;margin-bottom:16px;">为此密钥指定特定模型走指定上游。支持 <code>*</code> 通配符。精确匹配优先于通配。覆盖上游不可用时请求将被拒绝。</p>
-    <input type="hidden" id="mo-key-id">
-    <div style="display:flex;gap:8px;margin-bottom:16px;align-items:end;">
-        <div class="form-group" style="flex:1">
-            <label>模型模式</label>
-            <input id="mo-new-pattern" placeholder="如: claude-opus-4-6">
+    <form>
+        <p style="color:var(--text-dim);font-size:0.85rem;margin-bottom:16px;">为此密钥指定特定模型走指定上游。支持 <code>*</code> 通配符。精确匹配优先于通配。覆盖上游不可用时请求将被拒绝。</p>
+        <input type="hidden" id="mo-key-id">
+        <div style="display:flex;gap:8px;margin-bottom:16px;align-items:end;">
+            <div class="form-group" style="flex:1">
+                <label>模型模式</label>
+                <input id="mo-new-pattern" placeholder="如: claude-opus-4-6">
+            </div>
+            <div class="form-group" style="flex:1">
+                <label>目标上游</label>
+                <select id="mo-new-upstream"></select>
+            </div>
+            <button type="button" class="btn btn-primary btn-sm" style="margin-bottom:2px;" onclick="addOverrideRule()">添加</button>
         </div>
-        <div class="form-group" style="flex:1">
-            <label>目标上游</label>
-            <select id="mo-new-upstream"></select>
+        <div id="mo-rules" style="min-height:32px;margin-bottom:16px;"></div>
+        <div class="dialog-actions">
+            <button type="button" class="btn btn-ghost" onclick="this.closest('dialog').close()">取消</button>
+            <button type="button" class="btn btn-primary" onclick="saveOverrides()">保存</button>
         </div>
-        <button type="button" class="btn btn-primary btn-sm" style="margin-bottom:2px;" onclick="addOverrideRule()">添加</button>
-    </div>
-    <div id="mo-rules" style="min-height:32px;margin-bottom:16px;"></div>
+    </form>
+</dialog>
+
+<!-- Per-Key API Key Management Dialog -->
+<dialog id="dlg-manage-keys" style="max-width:520px;">
+    <h3>管理 API Keys</h3>
+    <input type="hidden" id="mk-upstream-id">
+    <p style="color:var(--text-dim);font-size:0.85rem;margin-bottom:16px;">启用或禁用单个 Key。</p>
+    <div id="mk-keys-list" style="max-height:400px;overflow-y:auto;"></div>
     <div class="dialog-actions">
-        <button type="button" class="btn btn-ghost" onclick="this.closest('dialog').close()">取消</button>
-        <button type="button" class="btn btn-primary" onclick="saveOverrides()">保存</button>
+        <button type="button" class="btn btn-ghost" onclick="document.getElementById('dlg-manage-keys').close()">关闭</button>
+    </div>
+</dialog>
+
+<!-- Upstream Test Dialog -->
+<dialog id="dlg-test-upstream" style="max-width:520px;">
+    <div style="padding:24px 28px 0;">
+        <h3 style="margin-bottom:4px;">测试上游连接</h3>
+        <p style="font-size:0.8rem;color:var(--text-dim);margin-bottom:20px;">选择 Key 和协议，发送测试请求验证连通性</p>
+    </div>
+    <input type="hidden" id="tu-upstream-id">
+    <div style="padding:0 28px;">
+        <div class="form-group" style="margin-bottom:16px;">
+            <label>使用 Key</label>
+            <select id="tu-key-select" style="font-size:0.85rem;"></select>
+        </div>
+        <div class="form-group" style="margin-bottom:16px;">
+            <label>协议</label>
+            <select id="tu-protocol" onchange="onTuProtocolChange()" style="font-size:0.85rem;">
+                <option value="openai">OpenAI (Chat Completions)</option>
+                <option value="anthropic">Anthropic (Messages)</option>
+                <option value="responses">OpenAI (Responses / Codex)</option>
+            </select>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px;">
+            <div class="form-group">
+                <label>模型</label>
+                <input id="tu-model" value="gpt-4o-mini" style="font-size:0.85rem;">
+            </div>
+            <div class="form-group">
+                <label>提示词</label>
+                <input id="tu-prompt" value="你是什么模型？" style="font-size:0.85rem;">
+            </div>
+        </div>
+    </div>
+    <div id="tu-result" style="display:none;margin:0 28px 16px;"></div>
+    <div class="dialog-actions" style="padding:16px 28px;">
+        <button type="button" class="btn btn-ghost" onclick="document.getElementById('dlg-test-upstream').close()">关闭</button>
+        <button type="button" class="btn btn-primary" id="btn-tu-test" onclick="submitUpstreamTest()">
+            <svg style="width:14px;height:14px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            测试
+        </button>
     </div>
 </dialog>
 
 <!-- CF Bypass Config Dialog -->
 <dialog id="dlg-cf" style="max-width:480px;">
     <h3>CF 防御绕过</h3>
-    <p style="color:var(--text-dim);font-size:0.85rem;margin-bottom:16px;">填入从浏览器获取的 <code>cf_clearance</code> Cookie 和 <code>User-Agent</code>，用于绕过 Cloudflare 验证。保存在浏览器 localStorage。</p>
-    <input type="hidden" id="cf-upstream-id">
-    <div class="form-group"><label>cf_clearance</label><input id="cf-clearance" placeholder="cf_clearance cookie 值"></div>
-    <div class="form-group" style="margin-top:12px;"><label>User-Agent</label><input id="cf-ua" placeholder="与获取 cookie 时相同的浏览器 UA"></div>
-    <div class="dialog-actions">
-        <button type="button" class="btn btn-danger btn-sm" onclick="clearCFConfig()">清除</button>
-        <div style="flex:1"></div>
-        <button type="button" class="btn btn-ghost" onclick="this.closest('dialog').close()">取消</button>
-        <button type="button" class="btn btn-primary" onclick="saveCFConfig()">保存</button>
-    </div>
+    <form>
+        <p style="color:var(--text-dim);font-size:0.85rem;margin-bottom:16px;">填入从浏览器获取的 <code>cf_clearance</code> Cookie 和 <code>User-Agent</code>，用于绕过 Cloudflare 验证。保存在浏览器 localStorage。</p>
+        <input type="hidden" id="cf-upstream-id">
+        <div class="form-group"><label>cf_clearance</label><input id="cf-clearance" placeholder="cf_clearance cookie 值"></div>
+        <div class="form-group" style="margin-top:12px;"><label>User-Agent</label><input id="cf-ua" placeholder="与获取 cookie 时相同的浏览器 UA"></div>
+        <div class="dialog-actions">
+            <button type="button" class="btn btn-danger btn-sm" onclick="clearCFConfig()">清除</button>
+            <div style="flex:1"></div>
+            <button type="button" class="btn btn-ghost" onclick="this.closest('dialog').close()">取消</button>
+            <button type="button" class="btn btn-primary" onclick="saveCFConfig()">保存</button>
+        </div>
+    </form>
 </dialog>
 
 <script>
@@ -479,7 +549,7 @@ function loadUpstreams() {
         allModelPatterns = mp || {};
         const tbody = document.getElementById('upstreams-table');
         if (allUpstreams.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="9" class="empty-state">暂无上游服务</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="10" class="empty-state">暂无上游服务</td></tr>';
             return;
         }
         tbody.innerHTML = allUpstreams.map(u => {
@@ -488,9 +558,23 @@ function loadUpstreams() {
             if (patterns.length > 0) {
                 modelHtml = patterns.map(p => '<span class="model-tag">' + esc(p) + '</span>').join('');
             }
-            const keys = u.api_keys || [];
-            const keyCountBadge = '<span class="badge badge-purple">' + keys.length + ' Key' + (keys.length > 1 ? 's' : '') + '</span>';
-            return '<tr><td class="hide-on-mobile">'+u.id+'</td><td>'+esc(u.name)+'</td><td><code class="truncate-url" title="'+esc(u.base_url)+'">'+esc(u.base_url)+'</code></td><td class="hide-on-mobile">'+keyCountBadge+'</td><td class="hide-on-mobile">'+(u.proxy_url?'<code class="truncate-url" title="'+esc(u.proxy_url)+'">'+esc(u.proxy_url)+'</code>':'<span class="badge badge-green">环境代理</span>')+'</td><td class="hide-on-mobile">'+u.priority+'</td><td class="hide-on-mobile"><div class="model-tags">'+modelHtml+'</div></td><td>'+
+            // Key 摘要：显示总数和启用数
+            const keyDetails = u.api_key_details || [];
+            const totalKeys = keyDetails.length || (u.api_keys || []).length;
+            const enabledKeys = keyDetails.filter(k => k.enabled).length;
+            const allEnabled = totalKeys > 0 && enabledKeys === totalKeys;
+            let keyBadge = '';
+            if (totalKeys === 0) {
+                keyBadge = '<span class="badge badge-red">无 Key</span>';
+            } else if (allEnabled) {
+                keyBadge = '<span class="badge badge-purple" style="cursor:pointer" onclick="openManageKeysDialog('+u.id+')" title="点击管理">'+totalKeys+' Key</span>';
+            } else {
+                keyBadge = '<span class="badge badge-purple" style="cursor:pointer;background:rgba(245,158,11,0.1);color:var(--orange)" onclick="openManageKeysDialog('+u.id+')" title="点击管理">'+enabledKeys+'/'+totalKeys+' Key</span>';
+            }
+            const schedMode = u.key_scheduling_mode || 'round-robin';
+            const schedLabel = schedMode === 'fill' ? '填充' : '轮询';
+            const schedColor = schedMode === 'fill' ? 'var(--orange)' : 'var(--accent)';
+            return '<tr><td class="hide-on-mobile">'+u.id+'</td><td><strong>'+esc(u.name)+'</strong></td><td><code class="truncate-url" title="'+esc(u.base_url)+'">'+esc(u.base_url)+'</code></td><td class="hide-on-mobile">'+keyBadge+'</td><td class="hide-on-mobile"><span style="font-size:0.75rem;color:'+schedColor+';font-weight:500;">'+schedLabel+'</span></td><td class="hide-on-mobile">'+(u.proxy_url?'<code class="truncate-url" title="'+esc(u.proxy_url)+'">'+esc(u.proxy_url)+'</code>':'<span class="badge badge-green">环境代理</span>')+'</td><td class="hide-on-mobile">'+u.priority+'</td><td class="hide-on-mobile"><div class="model-tags">'+modelHtml+'</div></td><td>'+
             (u.enabled?'<span class="badge badge-green">启用</span>':'<span class="badge badge-red">禁用</span>')+
             '</td><td class="actions">'+
             '<button class="btn btn-ghost btn-sm" onclick="testProxy(event,'+u.id+')">测试</button> '+
@@ -514,7 +598,8 @@ function createUpstream(e) {
     api('/upstreams', {method:'POST', body: JSON.stringify({
         name: f.get('name'), base_url: f.get('base_url'),
         api_keys: apiKeys, proxy_url: f.get('proxy_url')||'',
-        priority: parseInt(f.get('priority')||'0')
+        priority: parseInt(f.get('priority')||'0'),
+        key_scheduling_mode: f.get('key_scheduling_mode')||'round-robin'
     })}).then(d => {
         if(d.error) alert(d.error);
         else { e.target.reset(); document.getElementById('dlg-upstream').close(); loadUpstreams(); }
@@ -531,6 +616,7 @@ function editUpstream(id) {
     dlg.querySelector('[name=api_keys]').value = (u.api_keys || []).join('\n');
     dlg.querySelector('[name=proxy_url]').value = u.proxy_url||'';
     dlg.querySelector('[name=priority]').value = u.priority;
+    dlg.querySelector('[name=key_scheduling_mode]').value = u.key_scheduling_mode || 'round-robin';
     dlg.showModal();
 }
 
@@ -538,7 +624,7 @@ function submitEditUpstream(e) {
     e.preventDefault();
     const f = new FormData(e.target);
     const id = f.get('id');
-    const body = {name: f.get('name'), base_url: f.get('base_url'), proxy_url: f.get('proxy_url')||'', priority: parseInt(f.get('priority')||'0')};
+    const body = {name: f.get('name'), base_url: f.get('base_url'), proxy_url: f.get('proxy_url')||'', priority: parseInt(f.get('priority')||'0'), key_scheduling_mode: f.get('key_scheduling_mode')||'round-robin'};
     const keysRaw = f.get('api_keys') || '';
     const apiKeys = keysRaw.split('\n').map(s => s.trim()).filter(s => s.length > 0);
     if (apiKeys.length > 0) body.api_keys = apiKeys;
@@ -559,72 +645,128 @@ function toggleUpstream(id, enabled) {
     });
 }
 
-function testProxy(e, id) {
-    const btn = e.target;
-    const row = btn.closest('tr');
-    // 如果已有展开的测试行，则收起
-    const existingRow = document.getElementById('test-row-'+id);
-    if (existingRow) { existingRow.remove(); return; }
-    // 移除其他已展开的测试行
-    document.querySelectorAll('[id^="test-row-"]').forEach(r => r.remove());
-
-    const origText = btn.textContent;
-    btn.textContent = '测试中...';
-    btn.disabled = true;
-    const cfBody = getCFConfig(id);
-    api('/upstreams/'+id+'/test-proxy', {method:'POST', body: JSON.stringify(cfBody||{})}).then(d => {
-        btn.textContent = origText;
-        btn.disabled = false;
-        const tr = document.createElement('tr');
-        tr.id = 'test-row-'+id;
-        const td = document.createElement('td');
-        td.colSpan = 9;
-        td.style.cssText = 'padding:0;border:none;';
-
-        if (d.success) {
-            const models = d.models || [];
-            let html = '<div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:16px;margin:8px 16px;">';
-            html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">';
-            html += '<span style="color:var(--green);font-weight:600;">✅ 连接成功</span>';
-            html += '<button class="btn btn-ghost btn-sm" onclick="this.closest(\'tr\').remove()" style="padding:2px 8px;">✕</button></div>';
-            html += '<div style="color:var(--text);font-size:0.85rem;margin-top:4px;">状态码: <strong>' + d.status_code + '</strong> &nbsp;|&nbsp; 延迟: <strong>' + d.latency_ms + 'ms</strong> &nbsp;|&nbsp; 模型数: <strong>' + models.length + '</strong></div>';
-            if (models.length > 0) {
-                html += '<div style="margin-top:12px;max-height:200px;overflow-y:auto;display:flex;flex-wrap:wrap;gap:6px;">';
-                models.forEach(m => {
-                    html += '<span class="model-tag">' + esc(m) + '</span>';
-                });
-                html += '</div>';
-            } else {
-                html += '<div style="margin-top:8px;color:var(--text-dim);font-size:0.85rem;">未能解析模型列表（上游可能非标准 OpenAI 格式）</div>';
-            }
-            html += '</div>';
-            td.innerHTML = html;
-        } else {
-            let msg = d.error || '未知错误';
-            let html = '<div style="background:rgba(225,112,85,0.08);border:1px solid var(--red);border-radius:var(--radius-sm);padding:16px;margin:8px 16px;">';
-            html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">';
-            html += '<span style="color:var(--red);font-weight:600;">❌ 连接失败</span>';
-            html += '<button class="btn btn-ghost btn-sm" onclick="this.closest(\'tr\').remove()" style="padding:2px 8px;">✕</button></div>';
-            html += '<div style="color:var(--text-dim);font-size:0.85rem;">' + esc(msg) + '</div>';
-            html += '<div style="color:var(--text);font-size:0.85rem;margin-top:8px;">延迟: <strong>' + (d.latency_ms||0) + 'ms</strong></div>';
-            if (msg.indexOf('403') !== -1) {
-                html += '<div style="margin-top:8px;"><button class="btn btn-ghost btn-sm" style="color:var(--orange)" onclick="this.closest(\'tr\').remove();openCFDialog('+id+')">🔧 可能需要配置 CF 绕过</button></div>';
-            }
-            html += '</div>';
-            td.innerHTML = html;
+// --- Per-Key API Key Management ---
+function openManageKeysDialog(upstreamId) {
+    document.getElementById('mk-upstream-id').value = upstreamId;
+    const list = document.getElementById('mk-keys-list');
+    list.innerHTML = '<div style="text-align:center;padding:16px;color:var(--text-dim)">加载中...</div>';
+    document.getElementById('dlg-manage-keys').showModal();
+    api('/upstreams/'+upstreamId+'/apikeys').then(data => {
+        if (!data || data.length === 0) {
+            list.innerHTML = '<div class="empty-state">无 API Key</div>';
+            return;
         }
-        tr.appendChild(td);
-        row.after(tr);
-    }).catch(err => {
-        btn.textContent = origText;
+        list.innerHTML = data.map(kd => {
+            const shortKey = kd.key.length > 20 ? kd.key.substring(0, 10) + '...' + kd.key.substring(kd.key.length - 8) : kd.key;
+            return '<div style="display:flex;align-items:center;gap:10px;padding:12px 14px;background:var(--bg);border-radius:var(--radius-sm);margin-bottom:8px;border:1px solid '+(kd.enabled?'var(--border)':'rgba(239,68,68,0.2)')+';'+(!kd.enabled?'opacity:0.6;':'')+'">'+
+                '<code style="flex:1;font-size:0.82rem;word-break:break-all;" title="'+esc(kd.key)+'">'+esc(shortKey)+'</code>'+
+                '<label style="cursor:pointer;display:flex;align-items:center;gap:6px;font-size:0.8rem;white-space:nowrap;color:'+(kd.enabled?'var(--green)':'var(--text-dim)')+';font-weight:500;" onclick="toggleAPIKey('+upstreamId+','+kd.row_id+','+(!kd.enabled)+')">'+(kd.enabled?'<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--green)"></span> 启用':'<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--text-dim)"></span> 禁用')+'</label>'+
+                '</div>';
+        }).join('');
+    });
+}
+
+function toggleAPIKey(upstreamId, keyRowId, enabled) {
+    api('/upstreams/'+upstreamId+'/apikeys/'+keyRowId+'/enabled', {method:'PUT', body: JSON.stringify({enabled:enabled})}).then(d => {
+        if(d.error) alert(d.error); else { loadUpstreams(); openManageKeysDialog(upstreamId); }
+    });
+}
+
+function testProxy(e, id) {
+    // 打开测试对话框，让用户选择 Key、协议、模型
+    openTestUpstreamDialog(id);
+}
+
+function openTestUpstreamDialog(upstreamId) {
+    document.getElementById('tu-upstream-id').value = upstreamId;
+    document.getElementById('tu-result').style.display = 'none';
+    document.getElementById('tu-protocol').value = 'openai';
+    document.getElementById('tu-model').value = 'gpt-4o-mini';
+    document.getElementById('tu-prompt').value = '你是什么模型？';
+    const sel = document.getElementById('tu-key-select');
+    sel.innerHTML = '<option value="">加载中...</option>';
+    document.getElementById('dlg-test-upstream').showModal();
+    api('/upstreams/'+upstreamId+'/apikeys').then(data => {
+        if (!data || data.length === 0) {
+            sel.innerHTML = '<option value="">无可用 Key</option>';
+            return;
+        }
+        sel.innerHTML = data.map((kd, i) => {
+            const shortKey = kd.key.length > 20 ? kd.key.substring(0, 10) + '...' + kd.key.substring(kd.key.length - 8) : kd.key;
+            return '<option value="'+kd.row_id+'"'+(i===0?' selected':'')+'>('+kd.row_id+') '+esc(shortKey)+(kd.enabled?'':' [已禁用]')+'</option>';
+        }).join('');
+    });
+}
+
+function onTuProtocolChange() {
+    const proto = document.getElementById('tu-protocol').value;
+    const modelInput = document.getElementById('tu-model');
+    if (proto === 'anthropic') {
+        modelInput.value = 'claude-sonnet-4-20250514';
+    } else if (proto === 'responses') {
+        modelInput.value = 'gpt-4o';
+    } else {
+        modelInput.value = 'gpt-4o-mini';
+    }
+}
+
+function submitUpstreamTest() {
+    const upstreamId = document.getElementById('tu-upstream-id').value;
+    const keyRowId = document.getElementById('tu-key-select').value;
+    if (!keyRowId) { alert('请选择一个 Key'); return; }
+    const btn = document.getElementById('btn-tu-test');
+    const resultDiv = document.getElementById('tu-result');
+    btn.innerHTML = '<svg style="width:14px;height:14px;animation:spin 1s linear infinite;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg> 测试中...';
+    btn.disabled = true;
+    resultDiv.style.display = 'none';
+    const cfBody = getCFConfig(parseInt(upstreamId));
+    api('/upstreams/'+upstreamId+'/apikeys/'+keyRowId+'/test', {method:'POST', body: JSON.stringify({
+        protocol: document.getElementById('tu-protocol').value,
+        model: document.getElementById('tu-model').value,
+        prompt: document.getElementById('tu-prompt').value,
+        cf_clearance: cfBody ? cfBody.cf_clearance : '',
+        cf_user_agent: cfBody ? cfBody.cf_user_agent : ''
+    })}).then(d => {
+        btn.innerHTML = '<svg style="width:14px;height:14px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg> 测试';
         btn.disabled = false;
-        let tr = document.createElement('tr');
-        tr.id = 'test-row-'+id;
-        let td = document.createElement('td');
-        td.colSpan = 9;
-        td.innerHTML = '<div style="background:rgba(225,112,85,0.08);border:1px solid var(--red);border-radius:var(--radius-sm);padding:16px;margin:8px 16px;color:var(--red);">请求失败: '+esc(err.message)+'</div>';
-        tr.appendChild(td);
-        row.after(tr);
+        resultDiv.style.display = 'block';
+        if (d.success) {
+            let html = '<div style="border:1px solid rgba(16,185,129,0.25);border-radius:var(--radius-sm);overflow:hidden;">';
+            html += '<div style="background:linear-gradient(135deg,rgba(16,185,129,0.1),rgba(16,185,129,0.05));padding:14px 18px;display:flex;align-items:center;justify-content:space-between;">';
+            html += '<div style="display:flex;align-items:center;gap:8px;"><span style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:var(--green);color:#fff;font-size:12px;">&#10003;</span><span style="font-weight:600;color:var(--green);font-size:0.9rem;">连接成功</span></div>';
+            html += '<span style="font-size:0.78rem;color:var(--text-dim);background:rgba(16,185,129,0.08);padding:2px 10px;border-radius:999px;">'+d.latency_ms+'ms</span></div>';
+            html += '<div style="padding:14px 18px;border-top:1px solid rgba(16,185,129,0.12);font-size:0.82rem;color:var(--text-dim);display:flex;gap:20px;">';
+            html += '<span>模型: <strong style="color:var(--text);font-weight:600;">'+esc(d.actual_model||d.model)+'</strong></span>';
+            html += '<span>协议: <strong style="color:var(--text);font-weight:600;">'+esc(d.protocol)+'</strong></span>';
+            html += '</div>';
+            if (d.reply) {
+                html += '<div style="border-top:1px solid rgba(16,185,129,0.12);padding:14px 18px;">';
+                html += '<div style="font-size:0.72rem;font-weight:600;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;">回复内容</div>';
+                html += '<div style="font-size:0.85rem;line-height:1.7;white-space:pre-wrap;word-break:break-word;max-height:200px;overflow-y:auto;padding:12px 14px;background:var(--bg);border-radius:var(--radius-xs);border:1px solid var(--border);">'+esc(d.reply)+'</div>';
+                html += '</div>';
+            }
+            html += '</div>';
+            resultDiv.innerHTML = html;
+        } else {
+            let html = '<div style="border:1px solid rgba(239,68,68,0.25);border-radius:var(--radius-sm);overflow:hidden;">';
+            html += '<div style="background:linear-gradient(135deg,rgba(239,68,68,0.1),rgba(239,68,68,0.05));padding:14px 18px;display:flex;align-items:center;justify-content:space-between;">';
+            html += '<div style="display:flex;align-items:center;gap:8px;"><span style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:var(--red);color:#fff;font-size:12px;">&#10007;</span><span style="font-weight:600;color:var(--red);font-size:0.9rem;">连接失败</span></div>';
+            html += '<span style="font-size:0.78rem;color:var(--text-dim);background:rgba(239,68,68,0.08);padding:2px 10px;border-radius:999px;">'+(d.latency_ms||0)+'ms</span></div>';
+            html += '<div style="padding:14px 18px;border-top:1px solid rgba(239,68,68,0.12);font-size:0.85rem;">';
+            html += '<div style="color:var(--text-dim);margin-bottom:4px;">HTTP '+(d.status_code||'?')+'</div>';
+            if (d.error_message) {
+                html += '<div style="color:var(--text);">'+esc(d.error_message)+'</div>';
+            } else if (d.error) {
+                html += '<div style="color:var(--text);">'+esc(d.error)+'</div>';
+            }
+            html += '</div></div>';
+            resultDiv.innerHTML = html;
+        }
+    }).catch(err => {
+        btn.innerHTML = '<svg style="width:14px;height:14px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg> 测试';
+        btn.disabled = false;
+        resultDiv.style.display = 'block';
+        resultDiv.innerHTML = '<div style="border:1px solid rgba(239,68,68,0.25);border-radius:var(--radius-sm);padding:14px 18px;color:var(--red);font-size:0.85rem;">请求失败: '+esc(err.message)+'</div>';
     });
 }
 

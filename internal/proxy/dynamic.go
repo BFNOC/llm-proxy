@@ -105,17 +105,20 @@ type ActiveUpstream struct {
 	// ID 对应 upstream_providers 表主键，用于把运行时健康列表和持久化绑定关系做稳定关联。
 	ID            int64
 	BaseURL       *url.URL
-	APIKeys       []string // 支持多个 API Key，通过 NextAPIKey() 轮询选取
+	APIKeys       []string // 支持多个 API Key，通过 NextAPIKey() 选取（仅含已启用的 Key）
 	Name          string
 	ProxyURL      string   // 可选代理地址，空表示继承环境代理
 	ModelPatterns []string // 支持的模型 glob 模式，空表示接受所有模型
+	// KeySchedulingMode 控制多 Key 调度策略："round-robin"（默认）或 "fill"。
+	KeySchedulingMode string
 
-	keyMu    sync.Mutex
-	keyIndex int // 轮询索引，通过 NextAPIKey() 原子递增
+	keyMu         sync.Mutex
+	keyIndex      int    // round-robin 索引
+	fillKeyIndex  int    // fill 模式当前使用的 Key 索引
+	fillKeyFailed bool   // fill 模式当前 Key 是否已失败
 }
 
-// NextAPIKey 以 round-robin 方式返回下一个 API Key。
-// 如果只有一个 Key，始终返回该 Key，无锁开销。
+// NextAPIKey 返回下一个 API Key，调度策略由 KeySchedulingMode 决定。
 func (u *ActiveUpstream) NextAPIKey() string {
 	if len(u.APIKeys) == 0 {
 		return ""
@@ -124,10 +127,38 @@ func (u *ActiveUpstream) NextAPIKey() string {
 		return u.APIKeys[0]
 	}
 	u.keyMu.Lock()
+	defer u.keyMu.Unlock()
+
+	switch u.KeySchedulingMode {
+	case "fill":
+		return u.nextAPIKeyFill()
+	default:
+		return u.nextAPIKeyRoundRobin()
+	}
+}
+
+// nextAPIKeyRoundRobin 依次轮询每个 Key。
+func (u *ActiveUpstream) nextAPIKeyRoundRobin() string {
 	idx := u.keyIndex % len(u.APIKeys)
 	u.keyIndex++
-	u.keyMu.Unlock()
 	return u.APIKeys[idx]
+}
+
+// nextAPIKeyFill 优先使用当前 Key 直到出错，再切换到下一个。
+func (u *ActiveUpstream) nextAPIKeyFill() string {
+	if u.fillKeyFailed || u.fillKeyIndex >= len(u.APIKeys) {
+		// 切换到下一个 Key
+		u.fillKeyIndex = (u.fillKeyIndex + 1) % len(u.APIKeys)
+		u.fillKeyFailed = false
+	}
+	return u.APIKeys[u.fillKeyIndex]
+}
+
+// MarkKeyFailed 在 fill 模式下标记当前 Key 失败，下次调用 NextAPIKey() 时切换。
+func (u *ActiveUpstream) MarkKeyFailed() {
+	u.keyMu.Lock()
+	u.fillKeyFailed = true
+	u.keyMu.Unlock()
 }
 
 // DynamicProxy is a reverse proxy that supports 429-based failover across
@@ -356,6 +387,7 @@ func (dp *DynamicProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		resp, err := upTransport.RoundTrip(outReq)
 		if err != nil {
 			if !isLast {
+				active.MarkKeyFailed()
 				slog.Warn("proxy: upstream transport error, trying next",
 					"upstream", active.Name, "error", err)
 				continue
@@ -372,6 +404,8 @@ func (dp *DynamicProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// On 429 from a non-last upstream, try the next one.
 		if resp.StatusCode == http.StatusTooManyRequests && !isLast {
 			resp.Body.Close()
+			// fill 模式下标记当前 Key 失败，下次调用切换到下一个 Key
+			active.MarkKeyFailed()
 			slog.Info("proxy: upstream returned 429, trying next",
 				"upstream", active.Name)
 			continue
