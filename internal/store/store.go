@@ -649,6 +649,42 @@ func (s *Store) CountLogsSince(since time.Time) (int, error) {
 	return count, nil
 }
 
+// KeyUsageStats 表示单个下游 Key 的使用统计。
+type KeyUsageStats struct {
+	KeyID        int64   `json:"key_id"`
+	Total        int     `json:"total"`
+	Success      int     `json:"success"`
+	Error        int     `json:"error"`
+	AvgLatencyMs float64 `json:"avg_latency_ms"`
+}
+
+// GetKeyUsageStats 按下游 Key 聚合请求日志统计。
+func (s *Store) GetKeyUsageStats() ([]KeyUsageStats, error) {
+	rows, err := s.db.Query(`
+		SELECT downstream_key_id,
+		       COUNT(*) as total,
+		       SUM(CASE WHEN status_code < 400 THEN 1 ELSE 0 END) as success,
+		       SUM(CASE WHEN status_code >= 400 THEN 1 ELSE 0 END) as error,
+		       AVG(latency_ms) as avg_latency
+		FROM request_logs
+		GROUP BY downstream_key_id
+		ORDER BY total DESC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("query key usage stats: %w", err)
+	}
+	defer rows.Close()
+	var result []KeyUsageStats
+	for rows.Next() {
+		var s KeyUsageStats
+		if err := rows.Scan(&s.KeyID, &s.Total, &s.Success, &s.Error, &s.AvgLatencyMs); err != nil {
+			return nil, fmt.Errorf("scan key usage stats: %w", err)
+		}
+		result = append(result, s)
+	}
+	return result, rows.Err()
+}
+
 // CountKeys 返回当前下游 Key 总数。
 // 单独提供聚合查询，让状态接口拿统计时不必扫描完整 Key 列表。
 func (s *Store) CountKeys() (int, error) {

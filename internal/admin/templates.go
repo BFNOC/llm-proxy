@@ -206,6 +206,13 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
                 <tbody id="keys-table"></tbody></table>
                 </div>
             </div>
+            <div class="card" id="key-stats-card" style="display:none;">
+                <div class="card-header">
+                    <h2>密钥使用统计</h2>
+                    <button class="btn btn-ghost btn-sm" onclick="loadKeyUsageStats()">刷新</button>
+                </div>
+                <div id="key-stats-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;"></div>
+            </div>
         </div>
 
         <!-- Models Tab -->
@@ -893,6 +900,33 @@ function loadKeys() {
             '<button class="btn btn-success btn-sm" onclick="toggleKey('+k.id+','+(!k.enabled)+')">切换</button> '+
             '<button class="btn btn-danger btn-sm" onclick="deleteKey('+k.id+')">删除</button>'+
             '</td></tr>';
+        }).join('');
+    });
+    loadKeyUsageStats();
+}
+
+function loadKeyUsageStats() {
+    api('/logs/key-stats').then(data => {
+        const grid = document.getElementById('key-stats-grid');
+        const card = document.getElementById('key-stats-card');
+        if (!data || data.length === 0) {
+            card.style.display = 'none';
+            return;
+        }
+        card.style.display = 'block';
+        grid.innerHTML = data.map(s => {
+            const successRate = s.total > 0 ? (s.success / s.total * 100).toFixed(1) : '0.0';
+            const rateColor = successRate >= 99 ? 'var(--green)' : successRate >= 95 ? 'var(--orange)' : 'var(--red)';
+            return '<div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:14px;">'+
+                '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">'+
+                '<span style="font-weight:600;font-size:0.9rem;">Key #'+s.key_id+'</span>'+
+                '<span class="badge badge-purple" style="font-size:0.7rem;">'+s.total+' 次请求</span></div>'+
+                '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:0.82rem;">'+
+                '<div><span style="color:var(--text-dim);">成功率</span> <strong style="color:'+rateColor+'">'+successRate+'%</strong></div>'+
+                '<div><span style="color:var(--text-dim);">平均延迟</span> <strong>'+Math.round(s.avg_latency_ms)+'ms</strong></div>'+
+                '<div><span style="color:var(--text-dim);">成功</span> <strong style="color:var(--green)">'+s.success+'</strong></div>'+
+                '<div><span style="color:var(--text-dim);">失败</span> <strong style="color:var(--red)">'+s.error+'</strong></div>'+
+                '</div></div>';
         }).join('');
     });
 }

@@ -96,6 +96,7 @@ func (h *AdminHandler) RegisterRoutes(r *mux.Router) {
 
 	// Logs
 	api.HandleFunc("/logs", h.queryLogs).Methods("GET")
+	api.HandleFunc("/logs/key-stats", h.getKeyUsageStats).Methods("GET")
 
 	// Model whitelist
 	api.HandleFunc("/models/whitelist", h.listModelWhitelist).Methods("GET")
@@ -592,6 +593,20 @@ func (h *AdminHandler) queryLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jsonOK(w, logs)
+}
+
+// getKeyUsageStats 按下游 Key 聚合请求统计。
+func (h *AdminHandler) getKeyUsageStats(w http.ResponseWriter, r *http.Request) {
+	stats, err := h.store.GetKeyUsageStats()
+	if err != nil {
+		slog.Error("admin: store error", "error", err)
+		jsonError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if stats == nil {
+		stats = []store.KeyUsageStats{}
+	}
+	jsonOK(w, stats)
 }
 
 // --- Model Whitelist ---
