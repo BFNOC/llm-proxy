@@ -1380,7 +1380,12 @@ function batchDeleteModelPatterns() {
 let allTestModels = [];
 function loadTestModels() {
     return api('/test-models').then(data => {
-        allTestModels = Array.isArray(data) ? data : [];
+        allTestModels = Array.isArray(data) ? data.map(m => ({
+            id: m.id || m.ID,
+            name: m.name || m.Name || '',
+            protocol: m.protocol || m.Protocol || 'openai',
+            created_at: m.created_at || m.CreatedAt
+        })) : [];
         renderTestModels();
         updateTuModelDatalist();
     }).catch(() => { allTestModels = []; renderTestModels(); });
