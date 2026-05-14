@@ -364,13 +364,32 @@ func (s *Store) SetAPIKeyEnabled(upstreamID, keyRowID int64, enabled bool) error
 	return nil
 }
 
-// IncrKeyFailures 增加指定 API Key 的连续失败次数。
-func (s *Store) IncrKeyFailures(upstreamID, keyRowID int64) error {
+// IncrKeyFailures 增加指定 API Key 的连续失败次数，并在达到阈值时立即禁用。
+// 返回新的连续失败次数。
+func (s *Store) IncrKeyFailures(upstreamID, keyRowID int64, threshold int) (int, error) {
 	_, err := s.db.Exec(
 		`UPDATE upstream_api_keys SET consecutive_failures = consecutive_failures + 1 WHERE id = ? AND upstream_id = ?`,
 		keyRowID, upstreamID,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	var count int
+	if err := s.db.QueryRow(
+		`SELECT consecutive_failures FROM upstream_api_keys WHERE id = ? AND upstream_id = ?`,
+		keyRowID, upstreamID,
+	).Scan(&count); err != nil {
+		return 0, err
+	}
+	if threshold > 0 && count >= threshold {
+		if _, err := s.db.Exec(
+			`UPDATE upstream_api_keys SET enabled = 0 WHERE id = ? AND upstream_id = ?`,
+			keyRowID, upstreamID,
+		); err != nil {
+			return count, err
+		}
+	}
+	return count, nil
 }
 
 // ResetKeyFailures 重置指定 API Key 的连续失败次数为 0。
@@ -392,6 +411,28 @@ func (s *Store) AutoDisableFailingKeys(threshold int) (int64, error) {
 		return 0, err
 	}
 	return res.RowsAffected()
+}
+
+// GetSetting 从 settings 表读取配置项，不存在时返回 defaultValue。
+func (s *Store) GetSetting(key, defaultValue string) (string, error) {
+	var value string
+	err := s.db.QueryRow(`SELECT value FROM settings WHERE key = ?`, key).Scan(&value)
+	if err == sql.ErrNoRows {
+		return defaultValue, nil
+	}
+	if err != nil {
+		return defaultValue, err
+	}
+	return value, nil
+}
+
+// SetSetting 写入或更新 settings 表中的配置项。
+func (s *Store) SetSetting(key, value string) error {
+	_, err := s.db.Exec(
+		`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+		key, value,
+	)
+	return err
 }
 
 // GetAllUpstreamAPIKeyRowIDs 一次性加载所有上游的已启用 Key 行 ID，供 prober 构建运行时快照。
@@ -615,8 +656,8 @@ func (s *Store) InsertRequestLogBatch(logs []RequestLog) error {
 	}
 
 	stmt, err := tx.Prepare(
-		`INSERT INTO request_logs (downstream_key_id, upstream_name, upstream_key_idx, model, client_ip, ip_region, provider_style, path, status_code, latency_ms, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO request_logs (downstream_key_id, upstream_name, upstream_key_idx, model, used_proxy, client_ip, ip_region, provider_style, path, status_code, latency_ms, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	)
 	if err != nil {
 		_ = tx.Rollback()
@@ -629,7 +670,7 @@ func (s *Store) InsertRequestLogBatch(logs []RequestLog) error {
 		if createdAt.IsZero() {
 			createdAt = time.Now().UTC()
 		}
-		if _, err = stmt.Exec(log.DownstreamKeyID, log.UpstreamName, log.UpstreamKeyIdx, log.Model, log.ClientIP, log.IPRegion, log.ProviderStyle, log.Path, log.StatusCode, log.LatencyMs, createdAt); err != nil {
+		if _, err = stmt.Exec(log.DownstreamKeyID, log.UpstreamName, log.UpstreamKeyIdx, log.Model, log.UsedProxy, log.ClientIP, log.IPRegion, log.ProviderStyle, log.Path, log.StatusCode, log.LatencyMs, createdAt); err != nil {
 			_ = tx.Rollback()
 			return fmt.Errorf("insert request log: %w", err)
 		}
@@ -653,7 +694,7 @@ func (s *Store) DeleteLogsOlderThan(d time.Duration) error {
 // QueryLogs retrieves request logs for a given key within a time range.
 // Pass keyID=0 to query across all keys. limit<=0 means no limit.
 func (s *Store) QueryLogs(keyID int64, from, to time.Time, limit int) ([]RequestLog, error) {
-	query := `SELECT id, downstream_key_id, upstream_name, upstream_key_idx, model, client_ip, ip_region, provider_style, path, status_code, latency_ms, created_at
+	query := `SELECT id, downstream_key_id, upstream_name, upstream_key_idx, model, used_proxy, client_ip, ip_region, provider_style, path, status_code, latency_ms, created_at
 	          FROM request_logs WHERE created_at >= ? AND created_at <= ?`
 	args := []interface{}{from.UTC(), to.UTC()}
 
@@ -678,7 +719,7 @@ func (s *Store) QueryLogs(keyID int64, from, to time.Time, limit int) ([]Request
 	var result []RequestLog
 	for rows.Next() {
 		var rl RequestLog
-		if err := rows.Scan(&rl.ID, &rl.DownstreamKeyID, &rl.UpstreamName, &rl.UpstreamKeyIdx, &rl.Model, &rl.ClientIP, &rl.IPRegion, &rl.ProviderStyle, &rl.Path, &rl.StatusCode, &rl.LatencyMs, &rl.CreatedAt); err != nil {
+		if err := rows.Scan(&rl.ID, &rl.DownstreamKeyID, &rl.UpstreamName, &rl.UpstreamKeyIdx, &rl.Model, &rl.UsedProxy, &rl.ClientIP, &rl.IPRegion, &rl.ProviderStyle, &rl.Path, &rl.StatusCode, &rl.LatencyMs, &rl.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan request log row: %w", err)
 		}
 		result = append(result, rl)

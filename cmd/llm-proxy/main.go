@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -190,6 +191,15 @@ func main() {
 	// Create upstream prober and start background goroutine
 	probeInterval := time.Duration(yamlConfig.Upstream.ProbeIntervalSeconds) * time.Second
 	probeTimeout := time.Duration(yamlConfig.Upstream.ProbeTimeoutSeconds) * time.Second
+
+	// 从 DB 加载自动禁用阈值（YAML 为默认值），存入 DynamicProxy 的 atomic 字段支持运行时修改
+	thresholdStr, _ := db.GetSetting("auto_disable_threshold", fmt.Sprintf("%d", yamlConfig.Upstream.AutoDisableThreshold))
+	if t, err := strconv.Atoi(thresholdStr); err == nil && t >= 0 {
+		dynamicProxy.AutoDisableThreshold.Store(int64(t))
+	} else {
+		dynamicProxy.AutoDisableThreshold.Store(int64(yamlConfig.Upstream.AutoDisableThreshold))
+	}
+
 	prober := proxy.NewUpstreamProber(db, dynamicProxy, probeInterval, probeTimeout)
 
 	proberCtx, proberCancel := context.WithCancel(context.Background())
@@ -243,9 +253,21 @@ func main() {
 	modelFilter := middleware.NewModelFilter(db)
 	// Inject whitelist matcher unconditionally (works even when admin is disabled)
 	dynamicProxy.WhitelistMatcher = modelFilter.MatchModel
-	// 连续失败 Key 自动禁用回调
+	// 连续失败 Key 自动禁用回调（达到阈值立即禁用，不等 prober）
 	dynamicProxy.KeyFailCallback = func(upstreamID, keyRowID int64) {
-		_ = db.IncrKeyFailures(upstreamID, keyRowID)
+		threshold := int(dynamicProxy.AutoDisableThreshold.Load())
+		if threshold <= 0 {
+			return
+		}
+		count, err := db.IncrKeyFailures(upstreamID, keyRowID, threshold)
+		if err != nil {
+			slog.Error("failed to record key failure", "error", err)
+			return
+		}
+		if count >= threshold {
+			slog.Warn("key auto-disabled due to consecutive failures",
+				"upstream_id", upstreamID, "key_row_id", keyRowID, "failures", count)
+		}
 	}
 	dynamicProxy.KeySuccessCallback = func(upstreamID, keyRowID int64) {
 		_ = db.ResetKeyFailures(upstreamID, keyRowID)

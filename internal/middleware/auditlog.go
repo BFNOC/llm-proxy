@@ -130,6 +130,7 @@ type responseStatusCapture struct {
 	upstreamName   string // 从 X-Upstream-Name 头捕获
 	upstreamKeyIdx int    // 从 X-API-Key-Index 头捕获
 	model          string // 从 X-Model 头捕获
+	usedProxy      string // 从 X-Used-Proxy 头捕获
 }
 
 func (r *responseStatusCapture) WriteHeader(code int) {
@@ -146,6 +147,8 @@ func (r *responseStatusCapture) WriteHeader(code int) {
 	r.Header().Del("X-API-Key-Index")
 	r.model = r.Header().Get("X-Model")
 	r.Header().Del("X-Model")
+	r.usedProxy = r.Header().Get("X-Used-Proxy")
+	r.Header().Del("X-Used-Proxy")
 	r.ResponseWriter.WriteHeader(code)
 }
 
@@ -191,6 +194,7 @@ func AuditLogMiddleware(logger *AuditLogger) func(http.Handler) http.Handler {
 				UpstreamName:    upstreamName,
 				UpstreamKeyIdx:  capture.upstreamKeyIdx,
 				Model:           capture.model,
+				UsedProxy:       capture.usedProxy,
 				ClientIP:        clientIP,
 				ProviderStyle:   string(style),
 				Path:            r.URL.Path,

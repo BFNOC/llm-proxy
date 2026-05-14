@@ -246,7 +246,7 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
                     <div class="form-group"><label>&nbsp;</label><button type="submit" class="btn btn-primary">查询</button></div>
                 </form>
                 <div class="table-container">
-                <table><thead><tr><th class="hide-on-mobile">ID</th><th>密钥</th><th>上游</th><th class="hide-on-mobile">Key#</th><th class="hide-on-mobile">模型</th><th class="hide-on-mobile">IP</th><th>地区</th><th class="hide-on-mobile">风格</th><th class="hide-on-mobile">路径</th><th>状态码</th><th class="hide-on-mobile">延迟</th><th>时间</th></tr></thead>
+                <table><thead><tr><th class="hide-on-mobile">ID</th><th>密钥</th><th>上游</th><th class="hide-on-mobile">Key#</th><th class="hide-on-mobile">模型</th><th class="hide-on-mobile">代理</th><th class="hide-on-mobile">IP</th><th>地区</th><th class="hide-on-mobile">风格</th><th class="hide-on-mobile">路径</th><th>状态码</th><th class="hide-on-mobile">延迟</th><th>时间</th></tr></thead>
                 <tbody id="logs-table"></tbody></table>
                 </div>
             </div>
@@ -267,6 +267,22 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
 
         <!-- Tools Tab -->
         <div id="tab-tools" class="tab-content">
+            <div class="card">
+                <div class="card-header">
+                    <h2>系统设置</h2>
+                </div>
+                <div class="form-grid" style="margin-bottom:0;">
+                    <div class="form-group">
+                        <label>429 自动禁用阈值</label>
+                        <input id="setting-threshold" type="number" min="0" style="width:100px;">
+                        <p style="color:var(--text-dim);font-size:0.78rem;margin-top:4px;">连续 429 达到此次数立即禁用 Key，0 = 不禁用</p>
+                    </div>
+                    <div class="form-group">
+                        <label>&nbsp;</label>
+                        <button class="btn btn-primary btn-sm" onclick="saveSettings()">保存</button>
+                    </div>
+                </div>
+            </div>
             <div class="card">
                 <div class="card-header">
                     <h2>额度 JSON 解析</h2>
@@ -566,7 +582,7 @@ function showTab(name, btn) {
     if (name === 'status') { loadStatus(); startStatusTimer(); } else { stopStatusTimer(); }
     if (name === 'models') loadModelWhitelist();
     if (name === 'keys') loadKeys();
-    if (name === 'tools') loadTestModels();
+    if (name === 'tools') { loadTestModels(); loadSettings(); }
 }
 function startStatusTimer() {
     stopStatusTimer();
@@ -1338,14 +1354,15 @@ function loadLogs(e) {
     api('/logs'+q).then(data => {
         const tbody = document.getElementById('logs-table');
         if (!data || data.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="12" class="empty-state">暂无日志</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="13" class="empty-state">暂无日志</td></tr>';
             return;
         }
         tbody.innerHTML = (data||[]).map(l => {
             const keyIdx = l.UpstreamKeyIdx;
             const keyIdxText = keyIdx >= 0 ? '#' + (keyIdx + 1) : '-';
             const modelText = l.Model || '-';
-            return '<tr><td class="hide-on-mobile">'+l.ID+'</td><td>'+l.DownstreamKeyID+'</td><td>'+esc(l.UpstreamName||'-')+'</td><td class="hide-on-mobile"><span class="badge badge-purple" style="font-size:0.7rem">'+keyIdxText+'</span></td><td class="hide-on-mobile"><code style="font-size:0.78rem">'+esc(modelText)+'</code></td><td class="hide-on-mobile">'+esc(l.ClientIP||'-')+'</td><td>'+esc(l.IPRegion||'-')+'</td><td class="hide-on-mobile">'+esc(l.ProviderStyle)+'</td><td class="hide-on-mobile">'+esc(l.Path)+'</td><td><span class="badge '+(l.StatusCode<400?'badge-green':'badge-red')+'">'+l.StatusCode+'</span></td><td class="hide-on-mobile">'+l.LatencyMs+'ms</td><td>'+fmtTime(l.CreatedAt)+'</td></tr>';
+            const proxyText = l.UsedProxy ? esc(l.UsedProxy) : '<span style="color:var(--text-secondary)">直连</span>';
+            return '<tr><td class="hide-on-mobile">'+l.ID+'</td><td>'+l.DownstreamKeyID+'</td><td>'+esc(l.UpstreamName||'-')+'</td><td class="hide-on-mobile"><span class="badge badge-purple" style="font-size:0.7rem">'+keyIdxText+'</span></td><td class="hide-on-mobile"><code style="font-size:0.78rem">'+esc(modelText)+'</code></td><td class="hide-on-mobile" style="font-size:0.78rem;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(l.UsedProxy||'')+'">'+proxyText+'</td><td class="hide-on-mobile">'+esc(l.ClientIP||'-')+'</td><td>'+esc(l.IPRegion||'-')+'</td><td class="hide-on-mobile">'+esc(l.ProviderStyle)+'</td><td class="hide-on-mobile">'+esc(l.Path)+'</td><td><span class="badge '+(l.StatusCode<400?'badge-green':'badge-red')+'">'+l.StatusCode+'</span></td><td class="hide-on-mobile">'+l.LatencyMs+'ms</td><td>'+fmtTime(l.CreatedAt)+'</td></tr>';
         }).join('');
     });
 }
@@ -1412,6 +1429,22 @@ function batchDeleteModelPatterns() {
     api('/models/whitelist/batch', {method:'DELETE', body: JSON.stringify({ids: ids})}).then(d => {
         if(d.error) alert(d.error);
         else loadModelWhitelist();
+    });
+}
+
+// --- Settings ---
+function loadSettings() {
+    api('/settings').then(data => {
+        if (data) {
+            document.getElementById('setting-threshold').value = data.auto_disable_threshold ?? 2;
+        }
+    });
+}
+function saveSettings() {
+    const val = parseInt(document.getElementById('setting-threshold').value, 10);
+    if (isNaN(val) || val < 0) { alert('阈值必须 >= 0'); return; }
+    api('/settings', {method:'PUT', body: JSON.stringify({auto_disable_threshold: val})}).then(() => {
+        loadSettings();
     });
 }
 

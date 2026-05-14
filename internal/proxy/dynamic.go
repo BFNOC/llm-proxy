@@ -187,6 +187,10 @@ type DynamicProxy struct {
 	allUpstreams    atomic.Value // stores []*ActiveUpstream
 	activeRequests atomic.Int64
 
+	// AutoDisableThreshold 连续 429 达到此值立即禁用 Key，0 表示禁用此功能。
+	// 使用 atomic 读写，支持运行时动态修改。
+	AutoDisableThreshold atomic.Int64
+
 	// WhitelistMatcher checks if a model is in the global whitelist.
 	// Injected from main.go to avoid proxy->middleware circular dependency.
 	// Returns true if model is allowed; nil means no whitelist enforcement.
@@ -435,31 +439,42 @@ func (dp *DynamicProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// On 429 from a non-last upstream, try the next one.
-		if resp.StatusCode == http.StatusTooManyRequests && !isLast {
+		// On 429/401/403 from a non-last upstream, try the next one.
+		if (resp.StatusCode == http.StatusTooManyRequests ||
+			resp.StatusCode == http.StatusUnauthorized ||
+			resp.StatusCode == http.StatusForbidden) && !isLast {
 			resp.Body.Close()
 			// fill 模式下标记当前 Key 失败，下次调用切换到下一个 Key
 			active.MarkKeyFailed()
 			if dp.KeyFailCallback != nil && keyRowID > 0 {
 				dp.KeyFailCallback(active.ID, keyRowID)
 			}
-			slog.Info("proxy: upstream returned 429, trying next",
-				"upstream", active.Name)
+			slog.Info("proxy: upstream returned error, trying next",
+				"upstream", active.Name, "status", resp.StatusCode)
 			continue
 		}
 
 		// Forward response to client.
-		if dp.KeySuccessCallback != nil && keyRowID > 0 {
-			dp.KeySuccessCallback(active.ID, keyRowID)
+		if resp.StatusCode < 400 {
+			if dp.KeySuccessCallback != nil && keyRowID > 0 {
+				dp.KeySuccessCallback(active.ID, keyRowID)
+			}
+		} else if resp.StatusCode == http.StatusTooManyRequests ||
+			resp.StatusCode == http.StatusUnauthorized ||
+			resp.StatusCode == http.StatusForbidden {
+			active.MarkKeyFailed()
+			if dp.KeyFailCallback != nil && keyRowID > 0 {
+				dp.KeyFailCallback(active.ID, keyRowID)
+			}
 		}
-		dp.forwardResponse(w, resp, active.Name, keyIdx)
+		dp.forwardResponse(w, resp, active.Name, keyIdx, active.ProxyURL)
 		return
 	}
 }
 
 // forwardResponse copies an upstream HTTP response to the downstream client,
 // handling SSE streaming headers and flushing.
-func (dp *DynamicProxy) forwardResponse(w http.ResponseWriter, resp *http.Response, upstreamName string, keyIdx int) {
+func (dp *DynamicProxy) forwardResponse(w http.ResponseWriter, resp *http.Response, upstreamName string, keyIdx int, proxyURL string) {
 	defer resp.Body.Close()
 
 	// Copy response headers, filtering out hop-by-hop and sensitive headers.
@@ -485,6 +500,7 @@ func (dp *DynamicProxy) forwardResponse(w http.ResponseWriter, resp *http.Respon
 	// wrapper before the response reaches the client.
 	w.Header().Set("X-Upstream-Name", upstreamName)
 	w.Header().Set("X-API-Key-Index", strconv.Itoa(keyIdx))
+	w.Header().Set("X-Used-Proxy", proxyURL)
 
 	// 对非 2xx 错误响应体做脱敏：缓冲整个 body，执行正则替换后再写回客户端。
 	// 这样可以隐藏上游令牌标识、请求 ID、额度数字等内部信息。

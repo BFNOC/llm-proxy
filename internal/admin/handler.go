@@ -125,6 +125,9 @@ func (h *AdminHandler) RegisterRoutes(r *mux.Router) {
 	api.HandleFunc("/test-models/{id}", h.updateTestModel).Methods("PUT")
 	api.HandleFunc("/test-models/{id}", h.deleteTestModel).Methods("DELETE")
 
+	api.HandleFunc("/settings", h.getSettings).Methods("GET")
+	api.HandleFunc("/settings", h.updateSettings).Methods("PUT")
+
 	// Dashboard (serve embedded HTML)
 	r.PathPrefix("/admin/").HandlerFunc(h.serveDashboard)
 }
@@ -1886,4 +1889,36 @@ func (h *AdminHandler) setUpstreamModelPatterns(w http.ResponseWriter, r *http.R
 	go h.prober.ProbeNow()
 	slog.Info("admin: updated upstream model patterns", "upstream_id", id, "patterns", cleaned)
 	jsonOK(w, map[string]interface{}{"status": "updated", "patterns": cleaned})
+}
+
+func (h *AdminHandler) getSettings(w http.ResponseWriter, r *http.Request) {
+	threshold := h.dynamicProxy.AutoDisableThreshold.Load()
+	jsonOK(w, map[string]interface{}{
+		"auto_disable_threshold": threshold,
+	})
+}
+
+func (h *AdminHandler) updateSettings(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		AutoDisableThreshold *int `json:"auto_disable_threshold"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if body.AutoDisableThreshold != nil {
+		val := *body.AutoDisableThreshold
+		if val < 0 {
+			jsonError(w, http.StatusBadRequest, "threshold must be >= 0")
+			return
+		}
+		if err := h.store.SetSetting("auto_disable_threshold", strconv.Itoa(val)); err != nil {
+			slog.Error("admin: failed to save setting", "error", err)
+			jsonError(w, http.StatusInternalServerError, "failed to save")
+			return
+		}
+		h.dynamicProxy.AutoDisableThreshold.Store(int64(val))
+		slog.Info("admin: updated auto_disable_threshold", "value", val)
+	}
+	jsonOK(w, map[string]interface{}{"status": "updated"})
 }

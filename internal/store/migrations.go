@@ -227,6 +227,23 @@ ALTER TABLE upstream_providers ADD COLUMN remark TEXT NOT NULL DEFAULT '';
 ALTER TABLE upstream_api_keys ADD COLUMN consecutive_failures INTEGER NOT NULL DEFAULT 0;
 `,
 	},
+	{
+		// v18: 请求日志增加代理地址字段，记录该请求是否通过代理连接上游。
+		version: 18,
+		up: `
+ALTER TABLE request_logs ADD COLUMN used_proxy TEXT NOT NULL DEFAULT '';
+	`,
+	},
+	{
+		// v19: 系统设置表，存储可动态修改的配置项（key-value）。
+		version: 19,
+		up: `
+CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+	`,
+	},
 }
 
 // RunMigrations applies all pending schema migrations in order.

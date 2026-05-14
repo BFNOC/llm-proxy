@@ -15,12 +15,13 @@ import (
 // UpstreamProber periodically probes all configured upstreams and updates the
 // DynamicProxy to point at the highest-priority healthy one.
 type UpstreamProber struct {
-	store     *store.Store
-	proxy     *DynamicProxy
-	interval  time.Duration
-	timeout   time.Duration
-	currentID int64
-	mu        sync.Mutex
+	store          *store.Store
+	proxy          *DynamicProxy
+	interval       time.Duration
+	timeout        time.Duration
+	currentID      int64
+	lastHealthyCnt int // 上次探活健康数，仅变化时打日志
+	mu             sync.Mutex
 }
 
 // NewUpstreamProber creates a prober that checks upstreams on the given
@@ -107,7 +108,8 @@ func (p *UpstreamProber) probeOnce() {
 	}
 
 	// 自动禁用连续失败超过阈值的 Key
-	if disabled, err := p.store.AutoDisableFailingKeys(5); err == nil && disabled > 0 {
+	threshold := int(p.proxy.AutoDisableThreshold.Load())
+	if disabled, err := p.store.AutoDisableFailingKeys(threshold); err == nil && disabled > 0 {
 		slog.Info("prober: auto-disabled failing keys", "count", disabled)
 	}
 
@@ -147,8 +149,11 @@ func (p *UpstreamProber) probeOnce() {
 	}
 
 	p.proxy.SetAllUpstreams(healthy)
-	p.currentID = 0 // 多上游模式下不再维护“唯一当前上游”语义，保留该字段仅兼容旧接口
-	slog.Info("prober: updated upstream list", "healthy_count", len(healthy))
+	p.currentID = 0 // 多上游模式下不再维护"唯一当前上游"语义，保留该字段仅兼容旧接口
+	if len(healthy) != p.lastHealthyCnt {
+		slog.Info("prober: updated upstream list", "healthy_count", len(healthy))
+		p.lastHealthyCnt = len(healthy)
+	}
 }
 
 // probeUpstream issues a HEAD request to baseURL/v1/models (optionally through

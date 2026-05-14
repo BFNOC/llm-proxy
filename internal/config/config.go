@@ -32,8 +32,9 @@ type AdminConfig struct {
 }
 
 type UpstreamConfig struct {
-	ProbeIntervalSeconds int `yaml:"probe_interval_seconds"`
-	ProbeTimeoutSeconds  int `yaml:"probe_timeout_seconds"`
+	ProbeIntervalSeconds  int `yaml:"probe_interval_seconds"`
+	ProbeTimeoutSeconds   int `yaml:"probe_timeout_seconds"`
+	AutoDisableThreshold  int `yaml:"auto_disable_threshold"` // 连续 429 次数达到此值立即禁用 Key，0 表示禁用此功能
 }
 
 type AuditConfig struct {
@@ -62,6 +63,9 @@ func (c *YAMLConfig) Validate() error {
 	if c.Upstream.ProbeTimeoutSeconds <= 0 {
 		c.Upstream.ProbeTimeoutSeconds = 5
 	}
+	if c.Upstream.AutoDisableThreshold <= 0 {
+		c.Upstream.AutoDisableThreshold = 2
+	}
 	if c.Audit.BatchSize <= 0 {
 		c.Audit.BatchSize = 100
 	}
@@ -89,6 +93,7 @@ func GetDefaultYAMLConfig() *YAMLConfig {
 		Upstream: UpstreamConfig{
 			ProbeIntervalSeconds: 30,
 			ProbeTimeoutSeconds:  5,
+			AutoDisableThreshold: 2,
 		},
 		Audit: AuditConfig{
 			Enabled:       true,
