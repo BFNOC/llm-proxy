@@ -617,7 +617,7 @@ function loadUpstreams() {
             const allEnabled = totalKeys > 0 && enabledKeys === totalKeys;
             let keyBadge = '';
             if (totalKeys === 0) {
-                keyBadge = '<span class="badge badge-red">无 Key</span>';
+                keyBadge = '<span class="badge badge-green">无鉴权</span>';
             } else if (allEnabled) {
                 keyBadge = '<span class="badge badge-purple" style="cursor:pointer" onclick="openManageKeysDialog('+u.id+')" title="点击管理">'+totalKeys+' Key</span>';
             } else {
@@ -647,7 +647,6 @@ function createUpstream(e) {
     const f = new FormData(e.target);
     const keysRaw = f.get('api_keys') || '';
     const apiKeys = keysRaw.split('\n').map(s => s.trim()).filter(s => s.length > 0);
-    if (apiKeys.length === 0) { alert('请输入至少一个 API 密钥'); return; }
     api('/upstreams', {method:'POST', body: JSON.stringify({
         name: f.get('name'), base_url: f.get('base_url'),
         api_keys: apiKeys, proxy_url: f.get('proxy_url')||'',
@@ -745,7 +744,7 @@ function openTestUpstreamDialog(upstreamId) {
     document.getElementById('dlg-test-upstream').showModal();
     api('/upstreams/'+upstreamId+'/apikeys').then(data => {
         if (!data || data.length === 0) {
-            sel.innerHTML = '<option value="">无可用 Key</option>';
+            sel.innerHTML = '<option value="0">无鉴权（公益站）</option>';
             return;
         }
         sel.innerHTML = data.map((kd, i) => {
@@ -764,7 +763,7 @@ function onTuProtocolChange() {
 function submitUpstreamTest() {
     const upstreamId = document.getElementById('tu-upstream-id').value;
     const keyRowId = document.getElementById('tu-key-select').value;
-    if (!keyRowId) { alert('请选择一个 Key'); return; }
+    if (!keyRowId && keyRowId !== '0') { alert('请选择一个 Key'); return; }
     const btn = document.getElementById('btn-tu-test');
     const resultDiv = document.getElementById('tu-result');
     btn.innerHTML = '<svg style="width:14px;height:14px;animation:spin 1s linear infinite;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg> 测试中...';

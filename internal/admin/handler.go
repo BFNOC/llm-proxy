@@ -1607,22 +1607,24 @@ func (h *AdminHandler) testUpstreamAPIKey(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// 找到指定 row ID 的 Key
-	keyInfos, err := h.store.GetUpstreamAllAPIKeys(id)
-	if err != nil {
-		jsonError(w, http.StatusInternalServerError, "failed to load api keys")
-		return
-	}
+	// 找到指定 row ID 的 Key（keyID=0 表示无鉴权，跳过查找）
 	var targetKey string
-	for _, ki := range keyInfos {
-		if ki.RowID == keyID {
-			targetKey = ki.Key
-			break
+	if keyID != 0 {
+		keyInfos, err := h.store.GetUpstreamAllAPIKeys(id)
+		if err != nil {
+			jsonError(w, http.StatusInternalServerError, "failed to load api keys")
+			return
 		}
-	}
-	if targetKey == "" {
-		jsonError(w, http.StatusNotFound, fmt.Sprintf("api key %d not found", keyID))
-		return
+		for _, ki := range keyInfos {
+			if ki.RowID == keyID {
+				targetKey = ki.Key
+				break
+			}
+		}
+		if targetKey == "" {
+			jsonError(w, http.StatusNotFound, fmt.Sprintf("api key %d not found", keyID))
+			return
+		}
 	}
 
 	// 构造请求体
@@ -1639,8 +1641,10 @@ func (h *AdminHandler) testUpstreamAPIKey(w http.ResponseWriter, r *http.Request
 			"messages":   []map[string]string{{"role": "user", "content": req.Prompt}},
 		})
 		headers = map[string]string{
-			"x-api-key":         targetKey,
 			"anthropic-version": "2023-06-01",
+		}
+		if targetKey != "" {
+			headers["x-api-key"] = targetKey
 		}
 	case "responses":
 		testURL = strings.TrimRight(upstream.BaseURL, "/") + "/v1/responses"
@@ -1649,8 +1653,9 @@ func (h *AdminHandler) testUpstreamAPIKey(w http.ResponseWriter, r *http.Request
 			"input":  req.Prompt,
 			"stream": false,
 		})
-		headers = map[string]string{
-			"Authorization": "Bearer " + targetKey,
+		headers = map[string]string{}
+		if targetKey != "" {
+			headers["Authorization"] = "Bearer " + targetKey
 		}
 	default: // openai
 		testURL = strings.TrimRight(upstream.BaseURL, "/") + "/v1/chat/completions"
@@ -1659,8 +1664,9 @@ func (h *AdminHandler) testUpstreamAPIKey(w http.ResponseWriter, r *http.Request
 			"max_tokens": 100,
 			"messages":   []map[string]string{{"role": "user", "content": req.Prompt}},
 		})
-		headers = map[string]string{
-			"Authorization": "Bearer " + targetKey,
+		headers = map[string]string{}
+		if targetKey != "" {
+			headers["Authorization"] = "Bearer " + targetKey
 		}
 	}
 
