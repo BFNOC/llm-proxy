@@ -333,7 +333,7 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
     <form onsubmit="createUpstream(event)">
         <div class="form-group"><label>名称</label><input name="name" placeholder="如 openai-sgp" required></div>
         <div class="form-group"><label>地址</label><input name="base_url" placeholder="https://api.example.com" required></div>
-        <div class="form-group"><label>API 密钥 <span style="font-weight:400;color:var(--text-dim);text-transform:none;letter-spacing:0">（每行一个，支持多个）</span></label><textarea name="api_keys" rows="3" required style="font-family:'SF Mono','JetBrains Mono',monospace;font-size:0.82rem;resize:vertical;letter-spacing:0.02em;" placeholder="sk-key1&#10;sk-key2"></textarea></div>
+        <div class="form-group"><label>API 密钥 <span style="font-weight:400;color:var(--text-dim);text-transform:none;letter-spacing:0">（每行一个，支持多个，留空则无鉴权接入）</span></label><textarea name="api_keys" rows="3" style="font-family:'SF Mono','JetBrains Mono',monospace;font-size:0.82rem;resize:vertical;letter-spacing:0.02em;" placeholder="sk-key1&#10;sk-key2（留空 = 无鉴权）"></textarea></div>
         <div class="form-group"><label>Key 调度模式</label><select name="key_scheduling_mode"><option value="round-robin">轮询 (Round-Robin)</option><option value="fill">填充 (Fill — 优先用满当前 Key)</option></select></div>
         <div class="form-group"><label>备注 <span style="font-weight:400;color:var(--text-dim);text-transform:none;letter-spacing:0">（可选，如 Key 来源）</span></label><input name="remark" placeholder="如：网友A分享的 Claude 额度"></div>
         <div class="form-group"><label>代理地址 <span style="font-weight:400;color:var(--text-dim);text-transform:none;letter-spacing:0">（可选）</span></label><input name="proxy_url" placeholder="socks5://127.0.0.1:1080"></div>

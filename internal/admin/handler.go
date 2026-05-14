@@ -218,8 +218,8 @@ func (h *AdminHandler) createUpstream(w http.ResponseWriter, r *http.Request) {
 	if len(apiKeys) == 0 && req.APIKey != "" {
 		apiKeys = []string{req.APIKey}
 	}
-	if req.Name == "" || req.BaseURL == "" || len(apiKeys) == 0 {
-		jsonError(w, http.StatusBadRequest, "name, base_url, and at least one api_key/api_keys are required")
+	if req.Name == "" || req.BaseURL == "" {
+		jsonError(w, http.StatusBadRequest, "name and base_url are required")
 		return
 	}
 

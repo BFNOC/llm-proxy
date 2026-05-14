@@ -13,6 +13,11 @@ import "net/http"
 //   - Sets "x-api-key: {upstreamKey}"
 //   - Removes "Authorization"
 func RewriteAuthHeaders(r *http.Request, style ProviderStyle, upstreamKey string) {
+	if upstreamKey == "" {
+		r.Header.Del("Authorization")
+		r.Header.Del("x-api-key")
+		return
+	}
 	switch style {
 	case StyleAnthropic:
 		r.Header.Set("x-api-key", upstreamKey)

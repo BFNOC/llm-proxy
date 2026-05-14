@@ -66,7 +66,7 @@ func TestRewriteAuthHeaders_OpenAI_EmptyUpstreamKey(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	RewriteAuthHeaders(r, StyleOpenAI, "")
 
-	assert.Equal(t, "Bearer ", r.Header.Get("Authorization"))
+	assert.Equal(t, "", r.Header.Get("Authorization"))
 }
 
 func TestRewriteAuthHeaders_Anthropic_EmptyUpstreamKey(t *testing.T) {

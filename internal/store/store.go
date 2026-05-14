@@ -57,9 +57,6 @@ func (s *Store) Close() error {
 // URL validation (scheme, SSRF) is the responsibility of the HTTP handler layer;
 // the store accepts any non-empty URL to remain testable with loopback addresses.
 func (s *Store) CreateUpstream(name, baseURL string, apiKeys []string, priority int, proxyURL string, keySchedulingMode string, remark string) (*UpstreamProvider, error) {
-	if len(apiKeys) == 0 {
-		return nil, fmt.Errorf("at least one api key is required")
-	}
 	if keySchedulingMode == "" {
 		keySchedulingMode = "round-robin"
 	}
