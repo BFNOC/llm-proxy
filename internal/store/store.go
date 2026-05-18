@@ -1025,6 +1025,88 @@ func (s *Store) GetAllUpstreamModelPatterns() (map[int64][]string, error) {
 }
 
 // ---------------------------------------------------------------------------
+// Upstream Declared Models
+// ---------------------------------------------------------------------------
+
+// SetUpstreamDeclaredModels 以全量覆盖方式更新某个上游的声明模型列表。
+// 先删后插放在同一事务中；空切片表示清空（该上游不声明任何模型）。
+func (s *Store) SetUpstreamDeclaredModels(upstreamID int64, models []string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+
+	if _, err = tx.Exec(`DELETE FROM upstream_declared_models WHERE upstream_id = ?`, upstreamID); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("clear existing declared models: %w", err)
+	}
+
+	if len(models) > 0 {
+		now := time.Now().UTC()
+		stmt, err := tx.Prepare(`INSERT INTO upstream_declared_models (upstream_id, model_id, created_at) VALUES (?, ?, ?)`)
+		if err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("prepare declared model insert: %w", err)
+		}
+		defer stmt.Close()
+
+		for _, m := range models {
+			if _, err = stmt.Exec(upstreamID, m, now); err != nil {
+				_ = tx.Rollback()
+				return fmt.Errorf("insert declared model (upstream=%d, model=%s): %w", upstreamID, m, err)
+			}
+		}
+	}
+
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit declared models: %w", err)
+	}
+	return nil
+}
+
+// GetUpstreamDeclaredModels 返回单个上游的声明模型列表。
+func (s *Store) GetUpstreamDeclaredModels(upstreamID int64) ([]string, error) {
+	rows, err := s.db.Query(
+		`SELECT model_id FROM upstream_declared_models WHERE upstream_id = ? ORDER BY model_id`,
+		upstreamID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query upstream declared models: %w", err)
+	}
+	defer rows.Close()
+
+	var models []string
+	for rows.Next() {
+		var m string
+		if err := rows.Scan(&m); err != nil {
+			return nil, fmt.Errorf("scan declared model: %w", err)
+		}
+		models = append(models, m)
+	}
+	return models, rows.Err()
+}
+
+// GetAllUpstreamDeclaredModels 一次性加载所有已启用上游的声明模型，供 /v1/models 聚合。
+func (s *Store) GetAllUpstreamDeclaredModels() (map[int64][]string, error) {
+	rows, err := s.db.Query(`SELECT d.upstream_id, d.model_id FROM upstream_declared_models d JOIN upstream_providers u ON d.upstream_id = u.id WHERE u.enabled = 1 ORDER BY d.upstream_id, d.model_id`)
+	if err != nil {
+		return nil, fmt.Errorf("query all upstream declared models: %w", err)
+	}
+	defer rows.Close()
+
+	result := make(map[int64][]string)
+	for rows.Next() {
+		var upstreamID int64
+		var modelID string
+		if err := rows.Scan(&upstreamID, &modelID); err != nil {
+			return nil, fmt.Errorf("scan declared model row: %w", err)
+		}
+		result[upstreamID] = append(result[upstreamID], modelID)
+	}
+	return result, rows.Err()
+}
+
+// ---------------------------------------------------------------------------
 // Key Model Overrides
 // ---------------------------------------------------------------------------
 

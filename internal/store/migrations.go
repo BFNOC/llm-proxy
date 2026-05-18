@@ -244,6 +244,21 @@ CREATE TABLE IF NOT EXISTS settings (
 );
 	`,
 	},
+	{
+		// v20: 上游声明模型表，用于静态声明上游支持的模型 ID（不依赖上游 /v1/models 接口）。
+		// 当绑定上游配置了声明模型时，/v1/models 响应从本地聚合而非转发上游。
+		version: 20,
+		up: `
+CREATE TABLE IF NOT EXISTS upstream_declared_models (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    upstream_id INTEGER NOT NULL REFERENCES upstream_providers(id) ON DELETE CASCADE,
+    model_id    TEXT NOT NULL,
+    created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(upstream_id, model_id)
+);
+CREATE INDEX IF NOT EXISTS idx_upstream_declared_models_upstream ON upstream_declared_models (upstream_id);
+	`,
+	},
 }
 
 // RunMigrations applies all pending schema migrations in order.

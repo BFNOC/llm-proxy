@@ -16,9 +16,10 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
             --green: #10b981; --red: #ef4444; --orange: #f59e0b;
             --radius: 14px; --radius-sm: 10px; --radius-xs: 6px;
             --shadow-sm: 0 1px 3px rgba(0,0,0,0.06); --shadow-md: 0 4px 16px rgba(0,0,0,0.08);
+            --space-xs: 4px; --space-sm: 8px; --space-md: 16px; --space-lg: 24px; --space-xl: 32px;
         }
         body { font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; -webkit-font-smoothing: antialiased; }
-        .container { max-width: 1200px; margin: 0 auto; padding: 28px 24px; }
+        .container { max-width: 1200px; margin: 0 auto; padding: var(--space-xl) var(--space-lg); }
 
         /* Header */
         .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 32px; }
@@ -47,8 +48,9 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
         .btn-success:hover { background: rgba(16,185,129,0.08); }
 
         /* Tabs */
-        .tab-nav { display: flex; gap: 2px; margin-bottom: 28px; background: var(--bg-card); border-radius: var(--radius); padding: 5px; border: 1px solid var(--border); box-shadow: var(--shadow-sm); }
-        .tab-nav button { flex: 1; padding: 10px 16px; background: transparent; border: none; color: var(--text-dim); cursor: pointer; border-radius: var(--radius-sm); font-size: 0.875rem; font-weight: 500; transition: all 0.2s; font-family: inherit; white-space: nowrap; }
+        .tab-nav { display: flex; gap: 2px; margin-bottom: var(--space-xl); background: var(--bg-card); border-radius: var(--radius); padding: 5px; border: 1px solid var(--border); box-shadow: var(--shadow-sm); overflow-x: auto; scrollbar-width: none; -ms-overflow-style: none; }
+        .tab-nav::-webkit-scrollbar { display: none; }
+        .tab-nav button { flex: 0 0 auto; padding: 10px 16px; background: transparent; border: none; color: var(--text-dim); cursor: pointer; border-radius: var(--radius-sm); font-size: 0.875rem; font-weight: 500; transition: all 0.2s; font-family: inherit; white-space: nowrap; }
         .tab-nav button.active { background: var(--accent); color: #fff; box-shadow: 0 1px 4px rgba(99,102,241,0.25); }
         .tab-nav button:hover:not(.active) { background: var(--bg-hover); color: var(--text); }
         .tab-content { display: none; animation: fadeIn 0.25s ease; }
@@ -63,9 +65,10 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
         /* Tables */
         .table-container { overflow-x: auto; -webkit-overflow-scrolling: touch; }
         table { width: 100%; border-collapse: collapse; }
-        thead th { text-align: left; padding: 10px 16px; font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim); border-bottom: 1.5px solid var(--border); white-space: nowrap; }
+        thead th { text-align: left; padding: 10px 16px; font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim); border-bottom: 1.5px solid var(--border); white-space: nowrap; position: sticky; top: 0; background: var(--bg-card); z-index: 5; }
         tbody td { padding: 14px 16px; font-size: 0.875rem; border-bottom: 1px solid #f0f1f3; vertical-align: middle; }
         tbody tr { transition: background 0.15s; }
+        tbody tr:nth-child(even) { background: rgba(0,0,0,0.015); }
         tbody tr:hover { background: var(--bg-hover); }
         tbody tr:last-child td { border-bottom: none; }
 
@@ -93,9 +96,10 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
 
         /* Dialog / Modal */
         dialog { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text); padding: 0; max-width: 520px; width: 92%; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); margin: 0; box-shadow: 0 20px 60px rgba(0,0,0,0.15); overflow: hidden; }
-        dialog::backdrop { background: rgba(0,0,0,0.4); backdrop-filter: blur(8px); }
-        dialog[open] { animation: dialogIn 0.2s ease; }
-        @keyframes dialogIn { from { opacity: 0; transform: translate(-50%, -48%) scale(0.97); } to { opacity: 1; transform: translate(-50%, -50%) scale(1); } }
+        dialog::backdrop { background: rgba(0,0,0,0.4); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); animation: backdropIn 0.2s ease; }
+        @keyframes backdropIn { from { opacity: 0; } to { opacity: 1; } }
+        dialog[open] { animation: dialogIn 0.25s cubic-bezier(0.16, 1, 0.3, 1); }
+        @keyframes dialogIn { from { opacity: 0; transform: translate(-50%, -46%) scale(0.95); } to { opacity: 1; transform: translate(-50%, -50%) scale(1); } }
         @keyframes spin { to { transform: rotate(360deg); } }
         dialog > form { padding: 28px 32px 24px; }
         dialog h3 { font-size: 1.15rem; font-weight: 600; letter-spacing: -0.01em; }
@@ -115,7 +119,16 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
         .empty-state { text-align: center; padding: 32px; color: var(--text-dim); font-size: 0.9rem; }
 
         /* Action buttons in table */
-        .actions { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+        .actions { display: flex; gap: 4px; align-items: center; justify-content: flex-end; }
+        .action-more { position: relative; }
+        .action-more-btn { background: transparent; border: 1px solid var(--border); color: var(--text-dim); padding: 5px 8px; border-radius: var(--radius-xs); cursor: pointer; font-size: 0.8rem; line-height: 1; transition: all 0.15s; }
+        .action-more-btn:hover { background: var(--bg-hover); color: var(--text); border-color: #c8ccd4; }
+        .action-menu { display: none; position: absolute; right: 0; top: calc(100% + 4px); background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--shadow-md); z-index: 100; min-width: 120px; padding: 4px; }
+        .action-menu.show { display: block; animation: fadeIn 0.15s ease; }
+        .action-menu button { display: block; width: 100%; text-align: left; padding: 8px 12px; background: none; border: none; color: var(--text); font-size: 0.82rem; cursor: pointer; border-radius: var(--radius-xs); transition: background 0.1s; font-family: inherit; }
+        .action-menu button:hover { background: var(--bg-hover); }
+        .action-menu button.menu-danger { color: var(--red); }
+        .action-menu button.menu-danger:hover { background: rgba(239,68,68,0.06); }
 
         /* Truncate URL */
         .truncate-url { display: inline-block; max-width: 150px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: middle; }
@@ -127,19 +140,21 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
 
         /* Responsive */
         @media (max-width: 768px) {
-            body { padding: 8px; font-size: 0.9rem; }
-            .card { padding: 12px; border-radius: var(--radius-sm); }
+            .container { padding: var(--space-md) var(--space-sm); }
+            .card { padding: var(--space-md); border-radius: var(--radius-sm); }
             .hide-on-mobile { display: none !important; }
-            .tab-nav { flex-wrap: wrap; }
-            .tab-nav button { flex: 1 1 calc(50% - 4px); justify-content: center; }
             .form-grid { grid-template-columns: 1fr; }
-            dialog > form { padding: 20px; }
-            dialog h3 { padding: 16px 20px 0; }
+            dialog { width: 96%; max-width: none; }
+            dialog > form { padding: var(--space-md); }
+            dialog h3 { padding: var(--space-md) var(--space-md) 0; }
             .dialog-actions { flex-direction: column-reverse; }
             .dialog-actions button { width: 100%; }
-            thead th, tbody td { padding: 10px 4px; font-size: 0.8rem; }
+            .table-container table { font-size: 0.82rem; }
+            .table-container thead th { padding: var(--space-sm) var(--space-xs); }
+            .table-container tbody td { padding: 10px var(--space-xs); }
             .truncate-url { max-width: 90px; }
-            .actions { gap: 6px; }
+            .actions { gap: var(--space-sm); }
+            .header h1 { font-size: 1.3rem; }
         }
     </style>
 </head>
@@ -423,6 +438,24 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
     </form>
 </dialog>
 
+<!-- Declared Models Dialog -->
+<dialog id="dlg-declared-models">
+    <h3>配置声明模型</h3>
+    <form>
+        <p style="color:var(--text-dim);font-size:0.85rem;margin-bottom:16px;">声明此上游支持的具体模型 ID（用于 <code>/v1/models</code> 聚合返回）。适用于不提供 models 接口的上游（如 MiMo）。</p>
+        <input type="hidden" id="dm-upstream-id">
+        <div style="display:flex;gap:8px;margin-bottom:16px;">
+            <input id="dm-new-model" placeholder="如: mimo-v2.5-pro" style="flex:1" onkeydown="if(event.key==='Enter'){event.preventDefault();addDeclaredModelTag()}">
+            <button type="button" class="btn btn-primary btn-sm" onclick="addDeclaredModelTag()">添加</button>
+        </div>
+        <div id="dm-tags" class="model-tags" style="min-height:32px;margin-bottom:16px;"></div>
+        <div class="dialog-actions">
+            <button type="button" class="btn btn-ghost" onclick="this.closest('dialog').close()">取消</button>
+            <button type="button" class="btn btn-primary" onclick="saveDeclaredModels()">保存</button>
+        </div>
+    </form>
+</dialog>
+
 <!-- Key Model Override Dialog -->
 <dialog id="dlg-model-override" style="max-width:600px;">
     <h3>配置模型路由覆盖</h3>
@@ -533,6 +566,14 @@ function clearToken() {
 }
 
 function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+function toggleActionMenu(e) {
+    e.stopPropagation();
+    const menu = e.currentTarget.nextElementSibling;
+    const wasOpen = menu.classList.contains('show');
+    document.querySelectorAll('.action-menu.show').forEach(m => m.classList.remove('show'));
+    if (!wasOpen) menu.classList.add('show');
+}
+document.addEventListener('click', () => document.querySelectorAll('.action-menu.show').forEach(m => m.classList.remove('show')));
 const api = (path, opts={}) => fetch('/admin/api'+path, {
     ...opts,
     headers: {'Authorization':'Bearer '+TOKEN, 'Content-Type':'application/json', ...(opts.headers||{})}
@@ -630,13 +671,17 @@ function loadUpstreams() {
             return '<tr><td class="hide-on-mobile">'+u.id+'</td><td><strong>'+esc(u.name)+'</strong>'+remarkHtml+'</td><td><code class="truncate-url" title="'+esc(u.base_url)+'">'+esc(u.base_url)+'</code></td><td class="hide-on-mobile">'+keyBadge+'</td><td class="hide-on-mobile"><span style="font-size:0.75rem;color:'+schedColor+';font-weight:500;">'+schedLabel+'</span></td><td class="hide-on-mobile">'+(u.proxy_url?'<code class="truncate-url" title="'+esc(u.proxy_url)+'">'+esc(u.proxy_url)+'</code>':'<span class="badge badge-green">环境代理</span>')+'</td><td class="hide-on-mobile">'+u.priority+'</td><td class="hide-on-mobile"><div class="model-tags">'+modelHtml+'</div></td><td>'+
             (u.enabled?'<span class="badge badge-green">启用</span>':'<span class="badge badge-red">禁用</span>')+
             '</td><td class="actions">'+
-            '<button class="btn btn-ghost btn-sm" onclick="testProxy(event,'+u.id+')">测试</button> '+
-            '<button class="btn btn-ghost btn-sm" onclick="checkQuota(event,'+u.id+')">查额</button> '+
-            '<button class="btn btn-ghost btn-sm" style="'+(getCFConfig(u.id)?'color:var(--green)':'')+';font-size:0.8em" onclick="openCFDialog('+u.id+')">CF</button> '+
-            '<button class="btn btn-ghost btn-sm" onclick="openModelPatternsDialog('+u.id+')">模型</button> '+
-            '<button class="btn btn-ghost btn-sm" onclick="toggleUpstream('+u.id+','+(!u.enabled)+')">切换</button> '+
-            '<button class="btn btn-ghost btn-sm" onclick="editUpstream('+u.id+')">编辑</button> '+
-            '<button class="btn btn-danger btn-sm" onclick="deleteUpstream('+u.id+')">删除</button>'+
+            '<button class="btn btn-ghost btn-sm" onclick="testProxy(event,'+u.id+')">测试</button>'+
+            '<button class="btn btn-ghost btn-sm" onclick="editUpstream('+u.id+')">编辑</button>'+
+            '<div class="action-more"><button class="action-more-btn" onclick="toggleActionMenu(event)">···</button>'+
+            '<div class="action-menu">'+
+            '<button onclick="checkQuota(event,'+u.id+')">查额</button>'+
+            '<button onclick="openCFDialog('+u.id+')" style="'+(getCFConfig(u.id)?'color:var(--green)':'')+'">CF 绕过</button>'+
+            '<button onclick="openModelPatternsDialog('+u.id+')">模型模式</button>'+
+            '<button onclick="openDeclaredModelsDialog('+u.id+')">声明模型</button>'+
+            '<button onclick="toggleUpstream('+u.id+','+(!u.enabled)+')">'+(u.enabled?'禁用':'启用')+'</button>'+
+            '<button class="menu-danger" onclick="deleteUpstream('+u.id+')">删除</button>'+
+            '</div></div>'+
             '</td></tr>';
         }).join('');
     });
@@ -1155,6 +1200,52 @@ function saveModelPatterns() {
     api('/upstreams/'+id+'/models', {method:'PUT', body: JSON.stringify({patterns: mpCurrentPatterns})}).then(d => {
         if(d.error) alert(d.error);
         else { document.getElementById('dlg-model-patterns').close(); loadUpstreams(); }
+    });
+}
+
+// --- Declared Models ---
+let dmCurrentModels = [];
+function openDeclaredModelsDialog(upstreamId) {
+    document.getElementById('dm-upstream-id').value = upstreamId;
+    document.getElementById('dm-new-model').value = '';
+    api('/upstreams/'+upstreamId+'/declared-models').then(d => {
+        dmCurrentModels = (d && d.models) ? d.models.slice() : [];
+        renderDeclaredModelTags();
+    });
+    document.getElementById('dlg-declared-models').showModal();
+}
+
+function renderDeclaredModelTags() {
+    const container = document.getElementById('dm-tags');
+    if (dmCurrentModels.length === 0) {
+        container.innerHTML = '<span class="model-tag-all">无声明模型</span>';
+        return;
+    }
+    container.innerHTML = dmCurrentModels.map((m, i) =>
+        '<span class="model-tag">' + esc(m) + ' <span style="cursor:pointer;margin-left:2px;opacity:0.7" onclick="removeDeclaredModelTag('+i+')">✕</span></span>'
+    ).join('');
+}
+
+function addDeclaredModelTag() {
+    const input = document.getElementById('dm-new-model');
+    const v = input.value.trim();
+    if (!v) return;
+    if (dmCurrentModels.includes(v)) { input.value = ''; return; }
+    dmCurrentModels.push(v);
+    input.value = '';
+    renderDeclaredModelTags();
+}
+
+function removeDeclaredModelTag(idx) {
+    dmCurrentModels.splice(idx, 1);
+    renderDeclaredModelTags();
+}
+
+function saveDeclaredModels() {
+    const id = document.getElementById('dm-upstream-id').value;
+    api('/upstreams/'+id+'/declared-models', {method:'PUT', body: JSON.stringify({models: dmCurrentModels})}).then(d => {
+        if(d.error) alert(d.error);
+        else { document.getElementById('dlg-declared-models').close(); loadUpstreams(); }
     });
 }
 

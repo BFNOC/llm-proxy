@@ -82,6 +82,9 @@ func (h *AdminHandler) RegisterRoutes(r *mux.Router) {
 	api.HandleFunc("/upstreams/models", h.getAllUpstreamModelPatterns).Methods("GET")
 	api.HandleFunc("/upstreams/{id}/models", h.getUpstreamModelPatterns).Methods("GET")
 	api.HandleFunc("/upstreams/{id}/models", h.setUpstreamModelPatterns).Methods("PUT")
+	api.HandleFunc("/upstreams/declared-models", h.getAllUpstreamDeclaredModels).Methods("GET")
+	api.HandleFunc("/upstreams/{id}/declared-models", h.getUpstreamDeclaredModels).Methods("GET")
+	api.HandleFunc("/upstreams/{id}/declared-models", h.setUpstreamDeclaredModels).Methods("PUT")
 	// Per-key API key management
 	api.HandleFunc("/upstreams/{id}/apikeys", h.listUpstreamAPIKeys).Methods("GET")
 	api.HandleFunc("/upstreams/{id}/apikeys/{key_id}/enabled", h.setAPIKeyEnabled).Methods("PUT")
@@ -381,7 +384,11 @@ func (h *AdminHandler) deleteUpstream(w http.ResponseWriter, r *http.Request) {
 	if h.overrideCache != nil {
 		h.overrideCache.Reload()
 	}
+	if h.modelFilter != nil {
+		h.modelFilter.ReloadDeclaredModels()
+	}
 	slog.Info("admin: deleted upstream", "id", id)
+
 	jsonOK(w, map[string]string{"status": "deleted"})
 }
 
@@ -1895,6 +1902,87 @@ func (h *AdminHandler) setUpstreamModelPatterns(w http.ResponseWriter, r *http.R
 	go h.prober.ProbeNow()
 	slog.Info("admin: updated upstream model patterns", "upstream_id", id, "patterns", cleaned)
 	jsonOK(w, map[string]interface{}{"status": "updated", "patterns": cleaned})
+}
+
+// --- Upstream Declared Models ---
+
+func (h *AdminHandler) getAllUpstreamDeclaredModels(w http.ResponseWriter, r *http.Request) {
+	models, err := h.store.GetAllUpstreamDeclaredModels()
+	if err != nil {
+		slog.Error("admin: store error", "error", err)
+		jsonError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	jsonOK(w, models)
+}
+
+func (h *AdminHandler) getUpstreamDeclaredModels(w http.ResponseWriter, r *http.Request) {
+	id, err := parseID(r)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if _, err := h.store.GetUpstream(id); err != nil {
+		jsonError(w, http.StatusNotFound, fmt.Sprintf("upstream %d not found", id))
+		return
+	}
+	models, err := h.store.GetUpstreamDeclaredModels(id)
+	if err != nil {
+		slog.Error("admin: store error", "error", err)
+		jsonError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if models == nil {
+		models = []string{}
+	}
+	jsonOK(w, map[string]interface{}{"models": models})
+}
+
+func (h *AdminHandler) setUpstreamDeclaredModels(w http.ResponseWriter, r *http.Request) {
+	id, err := parseID(r)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if _, err := h.store.GetUpstream(id); err != nil {
+		jsonError(w, http.StatusNotFound, fmt.Sprintf("upstream %d not found", id))
+		return
+	}
+	var req struct {
+		Models *[]string `json:"models"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if req.Models == nil {
+		jsonError(w, http.StatusBadRequest, "missing required field: models")
+		return
+	}
+
+	seen := make(map[string]bool, len(*req.Models))
+	var cleaned []string
+	for _, m := range *req.Models {
+		m = strings.TrimSpace(m)
+		if m == "" {
+			continue
+		}
+		if !seen[m] {
+			seen[m] = true
+			cleaned = append(cleaned, m)
+		}
+	}
+
+	if err := h.store.SetUpstreamDeclaredModels(id, cleaned); err != nil {
+		slog.Error("admin: store error", "error", err)
+		jsonError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if h.modelFilter != nil {
+		h.modelFilter.ReloadDeclaredModels()
+	}
+	slog.Info("admin: updated upstream declared models", "upstream_id", id, "count", len(cleaned))
+	jsonOK(w, map[string]interface{}{"status": "updated", "models": cleaned})
 }
 
 func (h *AdminHandler) getSettings(w http.ResponseWriter, r *http.Request) {
