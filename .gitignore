@@ -32,3 +32,5 @@ logs/
 # SQLite data
 data/
 tmp/
+
+.claude/
