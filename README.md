@@ -1,38 +1,33 @@
 # LLM Proxy
 
-<img height="250" alt="Screenshot 2025-09-08 at 10 10 08 AM" src="https://github.com/user-attachments/assets/5c6ecf7f-14bf-4d67-ba48-f250c80e3205" />
+轻量的自建 LLM 透明反向代理。下游统一访问 `/v1/...`，代理在运行时从 SQLite 管理的上游池里选择可用上游，并处理鉴权、模型路由、Key 调度、故障切换、审计日志和中文管理面板。
 
-一个轻量的 LLM API 透明反向代理，用 Go 编写。通过统一的 `/v1/...` 端点转发请求到动态选择的上游服务商，自动处理认证头重写、健康探活与故障切换。
+当前形态：一个 Go 二进制 + SQLite 数据库，无需 Redis、DynamoDB 或独立前端构建流程。
 
-## 特性
+## 核心能力
 
-- **透明代理**: 统一 `/v1/...` 端点，自动检测 OpenAI / Anthropic 请求风格
-- **动态上游**: 管理多个上游服务商，按优先级自动探活和故障切换
-- **模型路由**: 按模型名自动路由到不同上游（如 `claude-*` → 上游 A，`gpt-*` → 上游 B）
-- **Per-Key 模型路由覆盖**: 为特定密钥指定模型走指定上游，覆盖默认路由（精确匹配优先于通配）
-- **模型白名单**: 全局模型白名单，同时过滤展示和拦截请求（不在白名单中的模型返回 403）
-- **密钥管理**: 生成下游 API Key（`sk-` 前缀），SHA-256 哈希存储，明文仅返回一次
-- **上游绑定**: 每个下游 Key 可绑定特定上游，实现访问隔离
-- **RPM 限流**: 每个密钥独立的滑动窗口请求频率限制
-- **审计日志**: 异步批量写入 SQLite，不阻塞代理请求
-- **管理面板**: 内置中文 Web 管理界面 + JSON REST API
-- **流式支持**: SSE 流式响应透传，零缓冲
-- **安全**: AES-256-GCM 加密存储上游密钥，SSRF 防护，XSS 防护
-- **单文件部署**: SQLite 持久化，无需 Redis / DynamoDB 等外部依赖
+- 统一 `/v1/...` 代理入口，自动识别 OpenAI / Anthropic 风格请求。
+- Web 管理上游、下游 Key、模型路由、白名单、声明模型和运行设置。
+- 每个上游支持多个 API Key，可单独启停、测试、复制，支持 `round-robin` / `fill` 调度。
+- 下游 Key 可绑定指定上游，也可配置 per-key 模型路由覆盖。
+- 支持上游独立代理地址：`http`、`https`、`socks5`。
+- 支持无鉴权上游，适配公益站或本身不需要 API Key 的兼容服务。
+- 上游失败时按候选上游故障切换，连续失败可自动禁用对应上游 Key。
+- `/v1/models` 可合并上游真实模型和本地声明模型，并受模型白名单过滤。
+- SSE 流式响应边读边写，不把流式结果缓冲到请求结束。
+- 异步审计日志记录下游 Key、上游、上游 Key 索引、模型、代理、IP、状态码和延迟。
 
 ## 快速开始
 
 ```bash
-# 编译
 make build
 
-# 运行（需设置环境变量）
 ENCRYPTION_KEY=01234567890123456789012345678901 \
 ADMIN_TOKEN=my-secret-token \
 ./bin/llm-proxy
 ```
 
-或直接开发模式运行：
+开发模式：
 
 ```bash
 ENCRYPTION_KEY=01234567890123456789012345678901 \
@@ -40,243 +35,109 @@ ADMIN_TOKEN=my-secret-token \
 make dev
 ```
 
-启动后访问:
-- 管理面板: http://localhost:9002/admin/
-- 健康检查: http://localhost:9002/healthz
-- 就绪检查: http://localhost:9002/readyz
+启动后访问：
 
-## 使用流程
+- 管理面板：`http://localhost:9002/admin/`
+- 存活检查：`http://localhost:9002/healthz`
+- 就绪检查：`http://localhost:9002/readyz`
 
-### 1. 添加上游服务商
+`/healthz` 只表示进程存活；`/readyz` 会在没有健康上游时返回 `503`。
+
+## 最小使用流程
+
+### 1. 添加上游
 
 ```bash
 curl -X POST http://localhost:9002/admin/api/upstreams \
   -H "Authorization: Bearer my-secret-token" \
   -H "Content-Type: application/json" \
-  -d '{"name":"openai","base_url":"https://api.openai.com","api_key":"sk-xxx","priority":1}'
+  -d '{
+    "name": "openai-main",
+    "base_url": "https://api.openai.com",
+    "api_keys": ["sk-upstream-1", "sk-upstream-2"],
+    "priority": 100,
+    "key_scheduling_mode": "round-robin"
+  }'
 ```
 
-### 2. 创建下游密钥
+### 2. 创建下游 Key
 
 ```bash
 curl -X POST http://localhost:9002/admin/api/keys \
   -H "Authorization: Bearer my-secret-token" \
   -H "Content-Type: application/json" \
   -d '{"name":"user-1","rpm_limit":60}'
-# 返回 {"id":1,"key":"sk-a1b2c3...","name":"user-1","rpm_limit":60}
-# ⚠️ 明文密钥仅显示一次，请立即保存
 ```
 
 ### 3. 发起请求
 
+OpenAI 风格：
+
 ```bash
-# OpenAI 风格
 curl http://localhost:9002/v1/chat/completions \
-  -H "Authorization: Bearer sk-a1b2c3..." \
+  -H "Authorization: Bearer sk-downstream..." \
   -H "Content-Type: application/json" \
   -d '{"model":"gpt-4o","messages":[{"role":"user","content":"你好"}]}'
+```
 
-# Anthropic 风格
+Anthropic 风格：
+
+```bash
 curl http://localhost:9002/v1/messages \
-  -H "x-api-key: sk-a1b2c3..." \
+  -H "x-api-key: sk-downstream..." \
   -H "anthropic-version: 2023-06-01" \
   -H "Content-Type: application/json" \
-  -d '{"model":"claude-sonnet-4-20250514","messages":[{"role":"user","content":"你好"}]}'
+  -d '{"model":"claude-sonnet-4-20250514","max_tokens":128,"messages":[{"role":"user","content":"你好"}]}'
 ```
 
-### 4. 配置模型路由（可选）
+## 常用配置
 
-为上游配置支持的模型模式后，代理会按请求中的 `model` 字段自动路由：
+必要环境变量：
 
-```bash
-# 上游 1 只接受 Claude 系列
-curl -X PUT http://localhost:9002/admin/api/upstreams/1/models \
-  -H "Authorization: Bearer my-secret-token" \
-  -H "Content-Type: application/json" \
-  -d '{"patterns":["claude-*"]}'
+| 变量 | 说明 |
+| ---- | ---- |
+| `ENCRYPTION_KEY` | 32 字节原始字符串，或 64 位十六进制字符串，用于加密保存 Key |
+| `ADMIN_TOKEN` | 管理面板和管理 API 的 Bearer token |
 
-# 上游 2 只接受 GPT 系列
-curl -X PUT http://localhost:9002/admin/api/upstreams/2/models \
-  -H "Authorization: Bearer my-secret-token" \
-  -H "Content-Type: application/json" \
-  -d '{"patterns":["gpt-*","o1-*"]}'
+常用可选环境变量：
 
-# 清空模式（恢复接受所有模型）
-curl -X PUT http://localhost:9002/admin/api/upstreams/1/models \
-  -H "Authorization: Bearer my-secret-token" \
-  -H "Content-Type: application/json" \
-  -d '{"patterns":[]}'
-```
+| 变量 | 说明 |
+| ---- | ---- |
+| `ENVIRONMENT` | 加载 `configs/{ENVIRONMENT}.yml` 覆盖 `configs/base.yml`，默认 `dev` |
+| `PORT` | 覆盖监听端口 |
+| `BIND_ADDR` | 监听地址，默认 `127.0.0.1` |
+| `LOG_LEVEL` | `debug`、`info`、`warn`、`error` |
+| `LOG_FORMAT` | `text` 或 `json` |
+| `GEOIP_DB_PATH` | GeoLite2 City mmdb 路径，默认 `data/GeoLite2-City.mmdb` |
 
-> 支持 glob 通配符（`*`、`?`）。未配置模式的上游接受所有模型。
+基础配置在 `configs/base.yml`，环境覆盖在 `configs/dev.yml`、`configs/staging.yml`、`configs/production.yml`。
 
-### 5. 配置 Per-Key 模型路由覆盖（可选）
+## 文档
 
-为特定密钥指定某些模型走指定上游，覆盖默认的优先级路由：
-
-```bash
-# 密钥 1 的 claude-opus-4-6 强制走上游 2
-curl -X PUT http://localhost:9002/admin/api/keys/1/model-overrides \
-  -H "Authorization: Bearer my-secret-token" \
-  -H "Content-Type: application/json" \
-  -d '{"overrides":[{"model_pattern":"claude-opus-4-6","upstream_id":2}]}'
-
-# 一个模型可映射多个上游（failover）
-curl -X PUT http://localhost:9002/admin/api/keys/1/model-overrides \
-  -H "Authorization: Bearer my-secret-token" \
-  -H "Content-Type: application/json" \
-  -d '{"overrides":[
-    {"model_pattern":"claude-opus-4-6","upstream_id":2},
-    {"model_pattern":"claude-opus-4-6","upstream_id":3},
-    {"model_pattern":"gpt-*","upstream_id":1}
-  ]}'
-
-# 清空覆盖（恢复默认路由）
-curl -X PUT http://localhost:9002/admin/api/keys/1/model-overrides \
-  -H "Authorization: Bearer my-secret-token" \
-  -H "Content-Type: application/json" \
-  -d '{"overrides":[]}'
-```
-
-> 匹配优先级：精确匹配 > 最具体的通配模式（最长 pattern）。覆盖上游不可用时返回 422，不回退默认路由。
-
-## 架构
-
-```
-客户端请求 (Bearer sk-xxx 或 x-api-key: sk-xxx)
-    │
-    ▼
- CORSMiddleware            ← 仅 /v1/ 路由
-    │
- RequestClassifier         ← 检测 OpenAI/Anthropic 风格，提取密钥
-    │
- KeyResolver               ← 原子快照查找密钥哈希，401 无效密钥
-    │
- UpstreamBinding           ← 按 Key 绑定关系过滤可用上游
-    │                         + 加载 per-key 模型路由覆盖（原子缓存）
-    │
- RateLimiter               ← 滑动窗口 RPM 限流，429 超限
-    │
- StreamingMiddleware        ← SSE 响应即时刷新
-    │
- DynamicProxy              ← 缓冲 body → 提取 model
-    │                           → 全局白名单校验（403 拦截）
-    │                           → 按模型模式过滤上游
-    │                           → 应用 per-key 模型路由覆盖（422 不可用）
-    │                           → 认证头重写 → 转发请求 → 429 故障切换
-    │                           │
-    ▼                           ▼ (异步)
- 匹配的上游                  AuditLogger → 批量写入 SQLite
-
-                            UpstreamProber (后台)
-                            → 定期健康检查 + 加载模型模式
-```
-
-## 配置
-
-### 环境变量
-
-| 变量 | 必需 | 说明 |
-|------|------|------|
-| `ENCRYPTION_KEY` | 是 | 32 字节密钥（或 64 位十六进制），用于加密上游 API Key |
-| `ADMIN_TOKEN` | 是* | 管理接口认证令牌（admin 启用时必需） |
-| `ENVIRONMENT` | 否 | 环境名（dev/staging/production），加载对应配置文件 |
-| `PORT` | 否 | 监听端口，覆盖配置文件 |
-| `LOG_LEVEL` | 否 | 日志级别（debug/info/warn/error） |
-| `LOG_FORMAT` | 否 | 日志格式（text/json） |
-
-### YAML 配置
-
-基础配置 `configs/base.yml`：
-
-```yaml
-server:
-  port: 9002
-
-storage:
-  sqlite_path: "./data/llm-proxy.db"
-
-admin:
-  enabled: true
-
-upstream:
-  probe_interval_seconds: 30
-  probe_timeout_seconds: 5
-
-audit:
-  enabled: true
-  batch_size: 100
-  flush_interval_ms: 1000
-  channel_buffer: 10000
-
-logging:
-  level: "info"
-  format: "text"
-```
-
-环境配置文件（`dev.yml` / `staging.yml` / `production.yml`）覆盖基础配置。
-
-## 管理 API
-
-所有接口需要 `Authorization: Bearer {ADMIN_TOKEN}` 认证。
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/admin/api/upstreams` | 列出上游（含 API Key 详情） |
-| POST | `/admin/api/upstreams` | 添加上游 |
-| PUT | `/admin/api/upstreams/{id}` | 编辑上游 |
-| DELETE | `/admin/api/upstreams/{id}` | 删除上游 |
-| GET | `/admin/api/upstreams/{id}/apikeys` | 获取上游 API Key 列表 |
-| POST | `/admin/api/upstreams/{id}/apikeys` | 追加上游 API Key |
-| DELETE | `/admin/api/upstreams/{id}/apikeys/{key_id}` | 删除单个上游 API Key |
-| PUT | `/admin/api/upstreams/{id}/apikeys/{key_id}/enabled` | 启用或禁用单个上游 API Key |
-| POST | `/admin/api/upstreams/{id}/apikeys/{key_id}/test` | 使用指定 API Key 测试上游 |
-| GET | `/admin/api/upstreams/models` | 批量获取所有上游模型模式 |
-| GET | `/admin/api/upstreams/{id}/models` | 获取单个上游模型模式 |
-| PUT | `/admin/api/upstreams/{id}/models` | 设置上游模型模式（全量覆盖） |
-| POST | `/admin/api/upstreams/{id}/test-proxy` | 测试上游代理连通性 |
-| POST | `/admin/api/upstreams/{id}/check-quota` | 查询上游额度 |
-| GET | `/admin/api/keys` | 列出下游密钥 |
-| POST | `/admin/api/keys` | 创建密钥（返回明文仅一次） |
-| PUT | `/admin/api/keys/{id}` | 编辑密钥（名称/RPM/启停） |
-| DELETE | `/admin/api/keys/{id}` | 删除密钥 |
-| GET | `/admin/api/keys/bindings` | 批量获取所有 Key 绑定 |
-| GET | `/admin/api/keys/{id}/upstreams` | 获取 Key 绑定的上游 |
-| PUT | `/admin/api/keys/{id}/upstreams` | 设置 Key 绑定的上游 |
-| GET | `/admin/api/keys/model-overrides` | 批量获取所有 Key 模型路由覆盖 |
-| GET | `/admin/api/keys/{id}/model-overrides` | 获取 Key 模型路由覆盖 |
-| PUT | `/admin/api/keys/{id}/model-overrides` | 设置 Key 模型路由覆盖（全量覆盖） |
-| GET | `/admin/api/logs` | 查询请求日志 |
-| GET | `/admin/api/models/whitelist` | 模型白名单列表 |
-| POST | `/admin/api/models/whitelist` | 添加白名单模式 |
-| DELETE | `/admin/api/models/whitelist/{id}` | 删除白名单模式 |
-| GET | `/admin/api/status` | 系统状态 |
-
-## Docker
-
-```bash
-# 开发模式
-make docker-build
-make docker-run
-
-# 生产模式
-make docker-build-prod
-make docker-compose-prod
-```
+- [API 与管理端文档](docs/API.md)
+- [命令列表](Makefile)
 
 ## 开发
 
 ```bash
-make help          # 查看所有命令
-make test          # 运行测试
-make fmt           # 格式化代码
-make vet           # 静态检查
-make check         # 全部检查
+make test
+make fmt
+make vet
+go test ./...
 ```
 
-## 依赖
+常用源码入口：
 
-- [gorilla/mux](https://github.com/gorilla/mux) - HTTP 路由
-- [modernc.org/sqlite](https://pkg.go.dev/modernc.org/sqlite) - 纯 Go SQLite（无 CGO）
-- [testify](https://github.com/stretchr/testify) - 测试断言
-- [yaml.v3](https://pkg.go.dev/gopkg.in/yaml.v3) - YAML 解析
+- `cmd/llm-proxy/main.go`：启动、配置加载、中间件链和路由注册。
+- `internal/admin`：管理 API 和内嵌 Web 面板。
+- `internal/store`：SQLite schema、迁移和数据访问。
+- `internal/proxy`：动态上游选择、认证头重写、故障切换和 transport 缓存。
+- `internal/middleware`：鉴权、绑定、限流、审计、统计、模型过滤和流式刷新。
+
+## 安全边界
+
+- 上游 Key 和可复制下游 Key 使用 `ENCRYPTION_KEY` 做 AES-256-GCM 加密。
+- 下游鉴权使用 Key 哈希，不用明文 Key 查询。
+- 管理 API 会返回上游明文 Key，必须只暴露在可信网络或反向代理鉴权之后。
+- 上游 `base_url` 会解析 DNS 并拒绝内网、loopback、link-local IP。
+- 代理转发前会移除下游伪造身份相关请求头，并对上游错误响应做脱敏。

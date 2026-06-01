@@ -1,6 +1,8 @@
 package middleware
 
 import (
+	"bufio"
+	"errors"
 	"log/slog"
 	"net"
 	"net/http"
@@ -150,6 +152,24 @@ func (r *responseStatusCapture) WriteHeader(code int) {
 	r.usedProxy = r.Header().Get("X-Used-Proxy")
 	r.Header().Del("X-Used-Proxy")
 	r.ResponseWriter.WriteHeader(code)
+}
+
+// Flush 透传底层 ResponseWriter 的流式刷新能力。
+// 审计中间件包在 StreamingMiddleware 外层，若这里不暴露 http.Flusher，
+// SSE 响应会被后续链路误判为不可刷新，最终按大块缓冲返回。
+func (r *responseStatusCapture) Flush() {
+	if flusher, ok := r.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+// Hijack 透传底层连接劫持能力，保持 ResponseWriter 包装器透明。
+// 当前 LLM 流式接口使用 SSE，不依赖 Hijack；这里用于避免未来代理特殊连接时被审计包装器截断能力。
+func (r *responseStatusCapture) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if hijacker, ok := r.ResponseWriter.(http.Hijacker); ok {
+		return hijacker.Hijack()
+	}
+	return nil, nil, errors.ErrUnsupported
 }
 
 // AuditLogMiddleware 通过 AuditLogger 异步记录请求元数据。
