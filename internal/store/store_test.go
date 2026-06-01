@@ -241,6 +241,45 @@ func TestUpstream_APIKeyNotStoredAsPlaintext(t *testing.T) {
 	assert.True(t, strings.HasPrefix(rawStored, "v1:"), "stored value should have encryption version prefix")
 }
 
+func TestUpstream_AddAndDeleteAPIKey(t *testing.T) {
+	s := newTestStore(t)
+	up, err := s.CreateUpstream("up", "https://example.com", []string{"key-a"}, 0, "", "", "")
+	require.NoError(t, err)
+
+	keys, err := s.AddUpstreamAPIKeys(up.ID, []string{"key-b", "key-c"})
+	require.NoError(t, err)
+	require.Len(t, keys, 3)
+	assert.Equal(t, "key-a", keys[0].Key)
+	assert.Equal(t, "key-b", keys[1].Key)
+	assert.Equal(t, "key-c", keys[2].Key)
+
+	err = s.DeleteUpstreamAPIKey(up.ID, keys[1].RowID)
+	require.NoError(t, err)
+
+	got, err := s.GetUpstreamAllAPIKeys(up.ID)
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	assert.Equal(t, []string{"key-a", "key-c"}, []string{got[0].Key, got[1].Key})
+}
+
+func TestUpstream_DeleteAPIKeyNotFound(t *testing.T) {
+	s := newTestStore(t)
+	up, err := s.CreateUpstream("up", "https://example.com", []string{"key"}, 0, "", "", "")
+	require.NoError(t, err)
+
+	err = s.DeleteUpstreamAPIKey(up.ID, 9999)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}
+
+func TestUpstream_AddAPIKeyNotFound(t *testing.T) {
+	s := newTestStore(t)
+
+	_, err := s.AddUpstreamAPIKeys(9999, []string{"key"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}
+
 // ---------------------------------------------------------------------------
 // Downstream Key CRUD
 // ---------------------------------------------------------------------------
@@ -841,4 +880,3 @@ func TestUpstreamModelPatterns_EmptyByDefault(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, patterns, "no patterns by default")
 }
-

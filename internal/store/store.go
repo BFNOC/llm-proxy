@@ -361,6 +361,85 @@ func (s *Store) SetAPIKeyEnabled(upstreamID, keyRowID int64, enabled bool) error
 	return nil
 }
 
+// AddUpstreamAPIKeys 为指定上游追加 API Key，并返回追加后的完整 Key 列表。
+func (s *Store) AddUpstreamAPIKeys(upstreamID int64, apiKeys []string) ([]APIKeyInfo, error) {
+	if len(apiKeys) == 0 {
+		return s.GetUpstreamAllAPIKeys(upstreamID)
+	}
+
+	now := time.Now().UTC()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("begin transaction: %w", err)
+	}
+
+	var exists int
+	if err := tx.QueryRow(`SELECT 1 FROM upstream_providers WHERE id = ?`, upstreamID).Scan(&exists); err != nil {
+		_ = tx.Rollback()
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("upstream %d not found", upstreamID)
+		}
+		return nil, fmt.Errorf("check upstream exists: %w", err)
+	}
+
+	stmt, err := tx.Prepare(`INSERT INTO upstream_api_keys (upstream_id, api_key, created_at) VALUES (?, ?, ?)`)
+	if err != nil {
+		_ = tx.Rollback()
+		return nil, fmt.Errorf("prepare api key insert: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, key := range apiKeys {
+		encrypted, err := Encrypt(key, s.encryptionKey)
+		if err != nil {
+			_ = tx.Rollback()
+			return nil, fmt.Errorf("encrypt api key: %w", err)
+		}
+		if _, err = stmt.Exec(upstreamID, encrypted, now); err != nil {
+			_ = tx.Rollback()
+			return nil, fmt.Errorf("insert api key: %w", err)
+		}
+	}
+	if _, err = tx.Exec(`UPDATE upstream_providers SET updated_at = ? WHERE id = ?`, now, upstreamID); err != nil {
+		_ = tx.Rollback()
+		return nil, fmt.Errorf("touch upstream: %w", err)
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit api key append: %w", err)
+	}
+	return s.GetUpstreamAllAPIKeys(upstreamID)
+}
+
+// DeleteUpstreamAPIKey 删除指定上游的单个 API Key。
+func (s *Store) DeleteUpstreamAPIKey(upstreamID, keyRowID int64) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	res, err := tx.Exec(`DELETE FROM upstream_api_keys WHERE id = ? AND upstream_id = ?`, keyRowID, upstreamID)
+	if err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("delete api key: %w", err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if affected == 0 {
+		_ = tx.Rollback()
+		return fmt.Errorf("api key %d not found for upstream %d", keyRowID, upstreamID)
+	}
+	if _, err = tx.Exec(`UPDATE upstream_providers SET updated_at = ? WHERE id = ?`, time.Now().UTC(), upstreamID); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("touch upstream: %w", err)
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit api key delete: %w", err)
+	}
+	return nil
+}
+
 // IncrKeyFailures 增加指定 API Key 的连续失败次数，并在达到阈值时立即禁用。
 // 返回新的连续失败次数。
 func (s *Store) IncrKeyFailures(upstreamID, keyRowID int64, threshold int) (int, error) {

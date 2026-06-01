@@ -222,10 +222,15 @@ logging:
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/admin/api/upstreams` | 列出上游（隐藏 API Key） |
+| GET | `/admin/api/upstreams` | 列出上游（含 API Key 详情） |
 | POST | `/admin/api/upstreams` | 添加上游 |
 | PUT | `/admin/api/upstreams/{id}` | 编辑上游 |
 | DELETE | `/admin/api/upstreams/{id}` | 删除上游 |
+| GET | `/admin/api/upstreams/{id}/apikeys` | 获取上游 API Key 列表 |
+| POST | `/admin/api/upstreams/{id}/apikeys` | 追加上游 API Key |
+| DELETE | `/admin/api/upstreams/{id}/apikeys/{key_id}` | 删除单个上游 API Key |
+| PUT | `/admin/api/upstreams/{id}/apikeys/{key_id}/enabled` | 启用或禁用单个上游 API Key |
+| POST | `/admin/api/upstreams/{id}/apikeys/{key_id}/test` | 使用指定 API Key 测试上游 |
 | GET | `/admin/api/upstreams/models` | 批量获取所有上游模型模式 |
 | GET | `/admin/api/upstreams/{id}/models` | 获取单个上游模型模式 |
 | PUT | `/admin/api/upstreams/{id}/models` | 设置上游模型模式（全量覆盖） |

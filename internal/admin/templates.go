@@ -137,6 +137,13 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
         .model-tags { display: flex; flex-wrap: wrap; gap: 4px; }
         .model-tag { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; background: var(--accent-light); color: var(--accent); border-radius: var(--radius-xs); font-size: 0.72rem; font-weight: 500; font-family: 'SF Mono', 'JetBrains Mono', monospace; }
         .model-tag-all { color: var(--text-dim); font-size: 0.8rem; font-style: italic; }
+        .api-key-editor { display: flex; flex-direction: column; gap: 8px; }
+        .api-key-add { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+        .api-key-list { display: flex; flex-direction: column; gap: 6px; max-height: 180px; overflow-y: auto; padding: 8px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+        .api-key-list.is-empty { color: var(--text-dim); font-size: 0.82rem; align-items: center; justify-content: center; min-height: 48px; }
+        .api-key-row { display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-xs); }
+        .api-key-row code { flex: 1; min-width: 0; background: transparent; padding: 0; font-size: 0.78rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .api-key-row button { flex: 0 0 auto; }
 
         /* Responsive */
         @media (max-width: 768px) {
@@ -155,6 +162,7 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
             .truncate-url { max-width: 90px; }
             .actions { gap: var(--space-sm); }
             .header h1 { font-size: 1.3rem; }
+            .api-key-add { grid-template-columns: 1fr; }
         }
     </style>
 </head>
@@ -348,7 +356,16 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
     <form onsubmit="createUpstream(event)">
         <div class="form-group"><label>名称</label><input name="name" placeholder="如 openai-sgp" required></div>
         <div class="form-group"><label>地址</label><input name="base_url" placeholder="https://api.example.com" required></div>
-        <div class="form-group"><label>API 密钥 <span style="font-weight:400;color:var(--text-dim);text-transform:none;letter-spacing:0">（每行一个，支持多个，留空则无鉴权接入）</span></label><textarea name="api_keys" rows="3" style="font-family:'SF Mono','JetBrains Mono',monospace;font-size:0.82rem;resize:vertical;letter-spacing:0.02em;" placeholder="sk-key1&#10;sk-key2（留空 = 无鉴权）"></textarea></div>
+        <div class="form-group">
+            <label>API 密钥 <span style="font-weight:400;color:var(--text-dim);text-transform:none;letter-spacing:0">（可逐个添加，留空则无鉴权接入）</span></label>
+            <div class="api-key-editor" data-key-editor="create">
+                <div class="api-key-add">
+                    <input data-key-input placeholder="粘贴 API Key，回车添加" autocomplete="off" onkeydown="handleAPIKeyInputKeydown(event,'create')">
+                    <button type="button" class="btn btn-ghost btn-sm" onclick="addAPIKeyFromInput('create')">添加</button>
+                </div>
+                <div class="api-key-list is-empty" data-key-list>暂无 API Key</div>
+            </div>
+        </div>
         <div class="form-group"><label>Key 调度模式</label><select name="key_scheduling_mode"><option value="round-robin">轮询 (Round-Robin)</option><option value="fill">填充 (Fill — 优先用满当前 Key)</option></select></div>
         <div class="form-group"><label>备注 <span style="font-weight:400;color:var(--text-dim);text-transform:none;letter-spacing:0">（可选，如 Key 来源）</span></label><input name="remark" placeholder="如：网友A分享的 Claude 额度"></div>
         <div class="form-group"><label>代理地址 <span style="font-weight:400;color:var(--text-dim);text-transform:none;letter-spacing:0">（可选）</span></label><input name="proxy_url" placeholder="socks5://127.0.0.1:1080"></div>
@@ -367,7 +384,16 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
         <input type="hidden" name="id">
         <div class="form-group"><label>名称</label><input name="name" required></div>
         <div class="form-group"><label>地址</label><input name="base_url" placeholder="https://api.example.com" required></div>
-        <div class="form-group"><label>API 密钥 <span style="font-weight:400;color:var(--text-dim);text-transform:none;letter-spacing:0">（每行一个，留空不修改）</span></label><textarea name="api_keys" rows="3" style="font-family:'SF Mono','JetBrains Mono',monospace;font-size:0.82rem;resize:vertical;letter-spacing:0.02em;" placeholder="留空不修改"></textarea></div>
+        <div class="form-group">
+            <label>API 密钥 <span style="font-weight:400;color:var(--text-dim);text-transform:none;letter-spacing:0">（逐个添加或删除）</span></label>
+            <div class="api-key-editor" data-key-editor="edit">
+                <div class="api-key-add">
+                    <input data-key-input placeholder="粘贴 API Key，回车添加" autocomplete="off" onkeydown="handleAPIKeyInputKeydown(event,'edit')">
+                    <button type="button" class="btn btn-ghost btn-sm" onclick="addAPIKeyFromInput('edit')">添加</button>
+                </div>
+                <div class="api-key-list is-empty" data-key-list>暂无 API Key</div>
+            </div>
+        </div>
         <div class="form-group"><label>Key 调度模式</label><select name="key_scheduling_mode"><option value="round-robin">轮询 (Round-Robin)</option><option value="fill">填充 (Fill — 优先用满当前 Key)</option></select></div>
         <div class="form-group"><label>备注</label><input name="remark" placeholder="如：网友A分享的 Claude 额度"></div>
         <div class="form-group"><label>代理地址 <span style="font-weight:400;color:var(--text-dim);text-transform:none;letter-spacing:0">（留空 = 环境代理）</span></label><input name="proxy_url" placeholder="socks5://127.0.0.1:1080"></div>
@@ -551,8 +577,11 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
     </form>
 </dialog>
 
-<script>
-let TOKEN = '';
+	<script>
+	let TOKEN = '';
+	let upstreamKeyEditors = {create: [], edit: []};
+	let upstreamKeyEditorMeta = {create: {}, edit: {}};
+	let manageAPIKeyRows = [];
 // --- Cookie helpers ---
 function saveToken(t) {
     document.cookie = 'admin_token=' + encodeURIComponent(t) + '; max-age=604800; path=/admin; SameSite=Strict; Secure';
@@ -566,6 +595,33 @@ function clearToken() {
 }
 
 function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+function copyTextToClipboard(text, btn) {
+    const orig = btn ? btn.textContent : '';
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = '...';
+    }
+    if (!navigator.clipboard || !navigator.clipboard.writeText) {
+        prompt('复制 Key:', text);
+        if (btn) {
+            btn.textContent = orig;
+            btn.disabled = false;
+        }
+        return Promise.resolve();
+    }
+    return navigator.clipboard.writeText(text).then(() => {
+        if (btn) {
+            btn.textContent = '已复制';
+            setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 1500);
+        }
+    }).catch(() => {
+        prompt('复制 Key:', text);
+        if (btn) {
+            btn.textContent = orig;
+            btn.disabled = false;
+        }
+    });
+}
 function toggleActionMenu(e) {
     e.stopPropagation();
     const menu = e.currentTarget.nextElementSibling;
@@ -689,9 +745,9 @@ function loadUpstreams() {
 
 function createUpstream(e) {
     e.preventDefault();
+    addAPIKeyFromInput('create');
     const f = new FormData(e.target);
-    const keysRaw = f.get('api_keys') || '';
-    const apiKeys = keysRaw.split('\n').map(s => s.trim()).filter(s => s.length > 0);
+    const apiKeys = getAPIKeyEditorKeys('create');
     api('/upstreams', {method:'POST', body: JSON.stringify({
         name: f.get('name'), base_url: f.get('base_url'),
         api_keys: apiKeys, proxy_url: f.get('proxy_url')||'',
@@ -700,18 +756,18 @@ function createUpstream(e) {
         remark: f.get('remark')||''
     })}).then(d => {
         if(d.error) alert(d.error);
-        else { e.target.reset(); document.getElementById('dlg-upstream').close(); loadUpstreams(); }
+        else { e.target.reset(); setAPIKeyEditor('create', []); document.getElementById('dlg-upstream').close(); loadUpstreams(); }
     });
 }
 
 function editUpstream(id) {
     const u = allUpstreams.find(x => x.id === id);
     if (!u) return;
-    const dlg = document.getElementById('dlg-edit-upstream');
+	    const dlg = document.getElementById('dlg-edit-upstream');
     dlg.querySelector('[name=id]').value = id;
     dlg.querySelector('[name=name]').value = u.name;
     dlg.querySelector('[name=base_url]').value = u.base_url;
-    dlg.querySelector('[name=api_keys]').value = (u.api_keys || []).join('\n');
+	    setAPIKeyEditor('edit', u.api_key_details ? u.api_key_details : (u.api_keys || []).map(k => ({key:k})));
     dlg.querySelector('[name=proxy_url]').value = u.proxy_url||'';
     dlg.querySelector('[name=priority]').value = u.priority;
     dlg.querySelector('[name=key_scheduling_mode]').value = u.key_scheduling_mode || 'round-robin';
@@ -719,19 +775,31 @@ function editUpstream(id) {
     dlg.showModal();
 }
 
-function submitEditUpstream(e) {
-    e.preventDefault();
-    const f = new FormData(e.target);
-    const id = f.get('id');
-    const body = {name: f.get('name'), base_url: f.get('base_url'), proxy_url: f.get('proxy_url')||'', priority: parseInt(f.get('priority')||'0'), key_scheduling_mode: f.get('key_scheduling_mode')||'round-robin', remark: f.get('remark')||''};
-    const keysRaw = f.get('api_keys') || '';
-    const apiKeys = keysRaw.split('\n').map(s => s.trim()).filter(s => s.length > 0);
-    if (apiKeys.length > 0) body.api_keys = apiKeys;
-    api('/upstreams/'+id, {method:'PUT', body: JSON.stringify(body)}).then(d => {
-        if(d.error) alert(d.error);
-        else { document.getElementById('dlg-edit-upstream').close(); loadUpstreams(); }
-    });
-}
+	function submitEditUpstream(e) {
+	    e.preventDefault();
+	    addAPIKeyFromInput('edit');
+	    const f = new FormData(e.target);
+	    const id = parseInt(f.get('id'), 10);
+	    const originalRows = upstreamKeyEditorMeta.edit.originalRows || [];
+	    const currentRows = upstreamKeyEditorMeta.edit.rows || [];
+	    const currentRowIds = new Set(currentRows.filter(r => r.row_id).map(r => r.row_id));
+	    const deletedRows = originalRows.filter(r => r.row_id && !currentRowIds.has(r.row_id));
+	    const addedKeys = currentRows.filter(r => !r.row_id).map(r => r.key);
+	    const body = {name: f.get('name'), base_url: f.get('base_url'), proxy_url: f.get('proxy_url')||'', priority: parseInt(f.get('priority')||'0'), key_scheduling_mode: f.get('key_scheduling_mode')||'round-robin', remark: f.get('remark')||''};
+	    api('/upstreams/'+id, {method:'PUT', body: JSON.stringify(body)}).then(d => {
+	        if(d.error) { alert(d.error); return; }
+	        return Promise.all([
+	            ...deletedRows.map(row => api('/upstreams/'+id+'/apikeys/'+row.row_id, {method:'DELETE'})),
+	            ...(addedKeys.length > 0 ? [api('/upstreams/'+id+'/apikeys', {method:'POST', body: JSON.stringify({api_keys: addedKeys})})] : [])
+	        ]);
+	    }).then(results => {
+	        if (!results) return;
+	        const failed = results.find(r => r && r.error);
+	        if (failed) { alert(failed.error); return; }
+	        document.getElementById('dlg-edit-upstream').close();
+	        loadUpstreams();
+	    });
+	}
 
 function deleteUpstream(id) {
     if(!confirm('确定删除上游 '+id+' 吗？')) return;
@@ -744,25 +812,119 @@ function toggleUpstream(id, enabled) {
     });
 }
 
+function normalizeAPIKeyInput(raw) {
+    return (raw || '').split(/\r?\n|,/).map(s => s.trim()).filter(Boolean);
+}
+function shortAPIKey(key) {
+    return key.length > 24 ? key.substring(0, 12) + '...' + key.substring(key.length - 8) : key;
+}
+	function setAPIKeyEditor(mode, keys) {
+	    upstreamKeyEditors[mode] = [];
+	    const rows = [];
+	    (keys || []).forEach(item => {
+	        const rowId = item && typeof item === 'object' ? item.row_id : null;
+	        const rawKey = item && typeof item === 'object' ? item.key : item;
+	        normalizeAPIKeyInput(rawKey).forEach(k => {
+	            if (!upstreamKeyEditors[mode].includes(k)) {
+	                upstreamKeyEditors[mode].push(k);
+	                rows.push({key:k, row_id:rowId});
+	            }
+	        });
+	    });
+	    upstreamKeyEditorMeta[mode] = {rows: rows, originalRows: rows.map(r => ({...r}))};
+	    renderAPIKeyEditor(mode);
+	}
+function getAPIKeyEditorKeys(mode) {
+    return (upstreamKeyEditors[mode] || []).slice();
+}
+function renderAPIKeyEditor(mode) {
+    const editor = document.querySelector('[data-key-editor="'+mode+'"]');
+    if (!editor) return;
+    const list = editor.querySelector('[data-key-list]');
+	    const keys = upstreamKeyEditors[mode] || [];
+	    const rows = (upstreamKeyEditorMeta[mode] && upstreamKeyEditorMeta[mode].rows) || [];
+	    if (keys.length === 0) {
+        list.className = 'api-key-list is-empty';
+        list.innerHTML = '暂无 API Key';
+        return;
+    }
+	    list.className = 'api-key-list';
+	    list.innerHTML = keys.map((key, idx) => (
+	        '<div class="api-key-row">'+
+	        '<code title="'+esc(key)+'">'+esc(shortAPIKey(key))+'</code>'+
+	        (rows[idx] && rows[idx].enabled === false ? '<span class="badge badge-red">禁用</span>' : '')+
+	        '<button type="button" class="btn btn-ghost btn-sm" onclick="copyAPIKeyFromEditor(\''+mode+'\','+idx+',this)">复制</button>'+
+	        '<button type="button" class="btn btn-danger btn-sm" onclick="removeAPIKeyFromEditor(\''+mode+'\','+idx+')">删除</button>'+
+	        '</div>'
+    )).join('');
+}
+function copyAPIKeyFromEditor(mode, index, btn) {
+    const key = (upstreamKeyEditors[mode] || [])[index];
+    if (!key) return;
+    copyTextToClipboard(key, btn);
+}
+function addAPIKeyFromInput(mode) {
+    const editor = document.querySelector('[data-key-editor="'+mode+'"]');
+    if (!editor) return;
+    const input = editor.querySelector('[data-key-input]');
+    const incoming = normalizeAPIKeyInput(input.value);
+    if (incoming.length === 0) return;
+	    upstreamKeyEditors[mode] = upstreamKeyEditors[mode] || [];
+	    upstreamKeyEditorMeta[mode] = upstreamKeyEditorMeta[mode] || {rows: [], originalRows: []};
+	    upstreamKeyEditorMeta[mode].rows = upstreamKeyEditorMeta[mode].rows || [];
+	    incoming.forEach(key => {
+	        if (!upstreamKeyEditors[mode].includes(key)) {
+	            upstreamKeyEditors[mode].push(key);
+	            upstreamKeyEditorMeta[mode].rows.push({key:key, row_id:null});
+	        }
+	    });
+    input.value = '';
+    renderAPIKeyEditor(mode);
+    input.focus();
+}
+	function removeAPIKeyFromEditor(mode, index) {
+	    upstreamKeyEditors[mode].splice(index, 1);
+	    if (upstreamKeyEditorMeta[mode] && upstreamKeyEditorMeta[mode].rows) {
+	        upstreamKeyEditorMeta[mode].rows.splice(index, 1);
+	    }
+	    renderAPIKeyEditor(mode);
+	}
+function handleAPIKeyInputKeydown(event, mode) {
+    if (event.key === 'Enter') {
+        event.preventDefault();
+        addAPIKeyFromInput(mode);
+    }
+}
+
 // --- Per-Key API Key Management ---
 function openManageKeysDialog(upstreamId) {
     document.getElementById('mk-upstream-id').value = upstreamId;
     const list = document.getElementById('mk-keys-list');
     list.innerHTML = '<div style="text-align:center;padding:16px;color:var(--text-dim)">加载中...</div>';
-    document.getElementById('dlg-manage-keys').showModal();
+    const dlg = document.getElementById('dlg-manage-keys');
+    if (!dlg.open) dlg.showModal();
     api('/upstreams/'+upstreamId+'/apikeys').then(data => {
-        if (!data || data.length === 0) {
+        manageAPIKeyRows = data || [];
+        if (manageAPIKeyRows.length === 0) {
             list.innerHTML = '<div class="empty-state">无 API Key</div>';
             return;
         }
-        list.innerHTML = data.map(kd => {
+        list.innerHTML = manageAPIKeyRows.map((kd, idx) => {
             const shortKey = kd.key.length > 20 ? kd.key.substring(0, 10) + '...' + kd.key.substring(kd.key.length - 8) : kd.key;
             return '<div style="display:flex;align-items:center;gap:10px;padding:12px 14px;background:var(--bg);border-radius:var(--radius-sm);margin-bottom:8px;border:1px solid '+(kd.enabled?'var(--border)':'rgba(239,68,68,0.2)')+';'+(!kd.enabled?'opacity:0.6;':'')+'">'+
                 '<code style="flex:1;font-size:0.82rem;word-break:break-all;" title="'+esc(kd.key)+'">'+esc(shortKey)+'</code>'+
-                '<label style="cursor:pointer;display:flex;align-items:center;gap:6px;font-size:0.8rem;white-space:nowrap;color:'+(kd.enabled?'var(--green)':'var(--text-dim)')+';font-weight:500;" onclick="toggleAPIKey('+upstreamId+','+kd.row_id+','+(!kd.enabled)+')">'+(kd.enabled?'<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--green)"></span> 启用':'<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--text-dim)"></span> 禁用')+'</label>'+
+                '<button class="btn btn-ghost btn-sm" onclick="copyManagedAPIKey('+idx+',this)">复制</button>'+
+                '<button class="btn '+(kd.enabled?'btn-ghost':'btn-success')+' btn-sm" onclick="toggleAPIKey('+upstreamId+','+kd.row_id+','+(!kd.enabled)+')">'+(kd.enabled?'禁用':'启用')+'</button>'+
+                '<button class="btn btn-danger btn-sm" onclick="deleteAPIKey('+upstreamId+','+kd.row_id+')">删除</button>'+
                 '</div>';
         }).join('');
     });
+}
+
+function copyManagedAPIKey(index, btn) {
+    const row = manageAPIKeyRows[index];
+    if (!row || !row.key) return;
+    copyTextToClipboard(row.key, btn);
 }
 
 function toggleAPIKey(upstreamId, keyRowId, enabled) {
@@ -771,30 +933,43 @@ function toggleAPIKey(upstreamId, keyRowId, enabled) {
     });
 }
 
-function testProxy(e, id) {
-    // 打开测试对话框，让用户选择 Key、协议、模型
-    openTestUpstreamDialog(id);
+function deleteAPIKey(upstreamId, keyRowId) {
+    if(!confirm('确认删除此 API Key？')) return;
+    api('/upstreams/'+upstreamId+'/apikeys/'+keyRowId, {method:'DELETE'}).then(d => {
+        if(d.error) alert(d.error); else { loadUpstreams(); openManageKeysDialog(upstreamId); }
+    });
 }
 
-function openTestUpstreamDialog(upstreamId) {
+function testProxy(e, id) {
+    // 打开测试对话框，让用户选择 Key、协议、模型
+    openTestUpstreamDialog(id, true);
+}
+
+function openTestUpstreamDialog(upstreamId, resetFields) {
+    const currentProtocol = document.getElementById('tu-protocol').value || 'openai';
+    const currentModel = document.getElementById('tu-model').value || '';
+    const currentPrompt = document.getElementById('tu-prompt').value || '你是什么模型？';
     document.getElementById('tu-upstream-id').value = upstreamId;
     document.getElementById('tu-result').style.display = 'none';
-    document.getElementById('tu-protocol').value = 'openai';
-    document.getElementById('tu-model').value = '';
-    document.getElementById('tu-prompt').value = '你是什么模型？';
+    document.getElementById('tu-protocol').value = resetFields ? 'openai' : currentProtocol;
+    document.getElementById('tu-model').value = resetFields ? '' : currentModel;
+    document.getElementById('tu-prompt').value = resetFields ? '你是什么模型？' : currentPrompt;
+    const protocol = resetFields ? 'openai' : currentProtocol;
     // 加载测试模型列表并更新 datalist
-    loadTestModels().then(() => updateTuModelDatalist('openai'));
+    loadTestModels().then(() => updateTuModelDatalist(protocol));
     const sel = document.getElementById('tu-key-select');
     sel.innerHTML = '<option value="">加载中...</option>';
-    document.getElementById('dlg-test-upstream').showModal();
+    const dlg = document.getElementById('dlg-test-upstream');
+    if (!dlg.open) dlg.showModal();
     api('/upstreams/'+upstreamId+'/apikeys').then(data => {
         if (!data || data.length === 0) {
             sel.innerHTML = '<option value="0">无鉴权（公益站）</option>';
             return;
         }
+        const firstEnabledIndex = data.findIndex(kd => kd.enabled);
         sel.innerHTML = data.map((kd, i) => {
             const shortKey = kd.key.length > 20 ? kd.key.substring(0, 10) + '...' + kd.key.substring(kd.key.length - 8) : kd.key;
-            return '<option value="'+kd.row_id+'"'+(i===0?' selected':'')+'>('+kd.row_id+') '+esc(shortKey)+(kd.enabled?'':' [已禁用]')+'</option>';
+            return '<option value="'+kd.row_id+'"'+(i===(firstEnabledIndex >= 0 ? firstEnabledIndex : 0)?' selected':'')+'>('+kd.row_id+') '+esc(shortKey)+(kd.enabled?'':' [已禁用]')+'</option>';
         }).join('');
     });
 }
@@ -854,6 +1029,13 @@ function submitUpstreamTest() {
             } else if (d.error) {
                 html += '<div style="color:var(--text);">'+esc(d.error)+'</div>';
             }
+            const statusCode = Number(d.status_code || 0);
+            if (keyRowId !== '0' && statusCode >= 400 && statusCode < 500) {
+                html += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid rgba(239,68,68,0.12);">';
+                html += '<button class="btn btn-ghost btn-sm" style="color:var(--orange)" onclick="quickDisableTestKey('+upstreamId+','+keyRowId+')">禁用此 Key</button>';
+                html += '<button class="btn btn-danger btn-sm" onclick="quickDeleteTestKey('+upstreamId+','+keyRowId+')">删除此 Key</button>';
+                html += '</div>';
+            }
             html += '</div></div>';
             resultDiv.innerHTML = html;
         }
@@ -862,6 +1044,22 @@ function submitUpstreamTest() {
         btn.disabled = false;
         resultDiv.style.display = 'block';
         resultDiv.innerHTML = '<div style="border:1px solid rgba(239,68,68,0.25);border-radius:var(--radius-sm);padding:14px 18px;color:var(--red);font-size:0.85rem;">请求失败: '+esc(err.message)+'</div>';
+    });
+}
+
+function quickDisableTestKey(upstreamId, keyRowId) {
+    api('/upstreams/'+upstreamId+'/apikeys/'+keyRowId+'/enabled', {method:'PUT', body: JSON.stringify({enabled:false})}).then(d => {
+        if (d.error) { alert(d.error); return; }
+        loadUpstreams();
+        openTestUpstreamDialog(upstreamId);
+    });
+}
+function quickDeleteTestKey(upstreamId, keyRowId) {
+    if(!confirm('确认删除当前测试失败的 API Key？')) return;
+    api('/upstreams/'+upstreamId+'/apikeys/'+keyRowId, {method:'DELETE'}).then(d => {
+        if (d.error) { alert(d.error); return; }
+        loadUpstreams();
+        openTestUpstreamDialog(upstreamId);
     });
 }
 
@@ -1003,13 +1201,9 @@ function copyKey(e, id) {
     btn.textContent = '...';
     api('/keys/'+id+'/reveal').then(d => {
         if (d.error) { alert(d.error); btn.textContent = orig; btn.disabled = false; return; }
-        navigator.clipboard.writeText(d.key).then(() => {
-            btn.textContent = '✅ 已复制';
-            setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 1500);
-        }).catch(() => {
-            prompt('复制密钥:', d.key);
-            btn.textContent = orig; btn.disabled = false;
-        });
+        btn.textContent = orig;
+        btn.disabled = false;
+        copyTextToClipboard(d.key, btn);
     }).catch(() => { btn.textContent = orig; btn.disabled = false; });
 }
 
@@ -1028,19 +1222,7 @@ function createKey(e) {
 
 function copyNewKey(btn) {
     const key = document.getElementById('new-key-value').textContent;
-    navigator.clipboard.writeText(key).then(() => {
-        const orig = btn.textContent;
-        btn.textContent = '✅ 已复制';
-        setTimeout(() => btn.textContent = orig, 1500);
-    }).catch(() => {
-        const range = document.createRange();
-        range.selectNodeContents(document.getElementById('new-key-value'));
-        const sel = window.getSelection();
-        sel.removeAllRanges(); sel.addRange(range);
-        document.execCommand('copy');
-        btn.textContent = '✅ 已复制';
-        setTimeout(() => btn.textContent = '📋 复制', 1500);
-    });
+    copyTextToClipboard(key, btn);
 }
 
 function editKey(id) {

@@ -87,6 +87,8 @@ func (h *AdminHandler) RegisterRoutes(r *mux.Router) {
 	api.HandleFunc("/upstreams/{id}/declared-models", h.setUpstreamDeclaredModels).Methods("PUT")
 	// Per-key API key management
 	api.HandleFunc("/upstreams/{id}/apikeys", h.listUpstreamAPIKeys).Methods("GET")
+	api.HandleFunc("/upstreams/{id}/apikeys", h.addUpstreamAPIKeys).Methods("POST")
+	api.HandleFunc("/upstreams/{id}/apikeys/{key_id}", h.deleteUpstreamAPIKey).Methods("DELETE")
 	api.HandleFunc("/upstreams/{id}/apikeys/{key_id}/enabled", h.setAPIKeyEnabled).Methods("PUT")
 	api.HandleFunc("/upstreams/{id}/apikeys/{key_id}/test", h.testUpstreamAPIKey).Methods("POST")
 
@@ -162,18 +164,18 @@ func (h *AdminHandler) listUpstreams(w http.ResponseWriter, r *http.Request) {
 		Enabled bool   `json:"enabled"`
 	}
 	type upstreamResponse struct {
-		ID                 int64       `json:"id"`
-		Name               string      `json:"name"`
-		BaseURL            string      `json:"base_url"`
-		APIKeys            []string    `json:"api_keys"`
-		APIKeyDetails      []apiKeyInfo `json:"api_key_details"`
-		ProxyURL           string      `json:"proxy_url"`
-		Priority           int         `json:"priority"`
-		Enabled            bool        `json:"enabled"`
-		KeySchedulingMode  string      `json:"key_scheduling_mode"`
-		Remark             string      `json:"remark"`
-		CreatedAt          time.Time   `json:"created_at"`
-		UpdatedAt          time.Time   `json:"updated_at"`
+		ID                int64        `json:"id"`
+		Name              string       `json:"name"`
+		BaseURL           string       `json:"base_url"`
+		APIKeys           []string     `json:"api_keys"`
+		APIKeyDetails     []apiKeyInfo `json:"api_key_details"`
+		ProxyURL          string       `json:"proxy_url"`
+		Priority          int          `json:"priority"`
+		Enabled           bool         `json:"enabled"`
+		KeySchedulingMode string       `json:"key_scheduling_mode"`
+		Remark            string       `json:"remark"`
+		CreatedAt         time.Time    `json:"created_at"`
+		UpdatedAt         time.Time    `json:"updated_at"`
 	}
 	result := make([]upstreamResponse, len(upstreams))
 	for i, u := range upstreams {
@@ -205,8 +207,8 @@ func (h *AdminHandler) createUpstream(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name              string   `json:"name"`
 		BaseURL           string   `json:"base_url"`
-		APIKey            string   `json:"api_key"`    // 向后兼容单 Key
-		APIKeys           []string `json:"api_keys"`   // 新多 Key 字段
+		APIKey            string   `json:"api_key"`  // 向后兼容单 Key
+		APIKeys           []string `json:"api_keys"` // 新多 Key 字段
 		ProxyURL          string   `json:"proxy_url"`
 		Priority          int      `json:"priority"`
 		KeySchedulingMode string   `json:"key_scheduling_mode"`
@@ -217,9 +219,10 @@ func (h *AdminHandler) createUpstream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 兼容旧的单 api_key 字段
-	apiKeys := req.APIKeys
-	if len(apiKeys) == 0 && req.APIKey != "" {
-		apiKeys = []string{req.APIKey}
+	apiKeys := cleanAPIKeys(req.APIKeys)
+	if req.APIKey != "" {
+		apiKeys = append(apiKeys, normalizeAPIKeyValues(req.APIKey)...)
+		apiKeys = cleanAPIKeys(apiKeys)
 	}
 	if req.Name == "" || req.BaseURL == "" {
 		jsonError(w, http.StatusBadRequest, "name and base_url are required")
@@ -276,15 +279,15 @@ func (h *AdminHandler) updateUpstream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Name              *string  `json:"name"`
-		BaseURL           *string  `json:"base_url"`
-		APIKey            *string  `json:"api_key"`    // 向后兼容单 Key
-		APIKeys           []string `json:"api_keys"`   // 新多 Key 字段
-		ProxyURL          *string  `json:"proxy_url"`
-		Priority          *int     `json:"priority"`
-		Enabled           *bool    `json:"enabled"`
-		KeySchedulingMode *string  `json:"key_scheduling_mode"`
-		Remark            *string  `json:"remark"`
+		Name              *string   `json:"name"`
+		BaseURL           *string   `json:"base_url"`
+		APIKey            *string   `json:"api_key"`  // 向后兼容单 Key
+		APIKeys           *[]string `json:"api_keys"` // 新多 Key 字段
+		ProxyURL          *string   `json:"proxy_url"`
+		Priority          *int      `json:"priority"`
+		Enabled           *bool     `json:"enabled"`
+		KeySchedulingMode *string   `json:"key_scheduling_mode"`
+		Remark            *string   `json:"remark"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid JSON")
@@ -301,10 +304,10 @@ func (h *AdminHandler) updateUpstream(w http.ResponseWriter, r *http.Request) {
 	}
 	// API Keys: 优先用 api_keys 数组，其次兼容 api_key 单值，都不提供则传 nil 表示不修改
 	var apiKeys []string // nil = don't change
-	if len(req.APIKeys) > 0 {
-		apiKeys = req.APIKeys
+	if req.APIKeys != nil {
+		apiKeys = cleanAPIKeys(*req.APIKeys)
 	} else if req.APIKey != nil && *req.APIKey != "" {
-		apiKeys = []string{*req.APIKey}
+		apiKeys = cleanAPIKeys([]string{*req.APIKey})
 	}
 	priority := existing.Priority
 	if req.Priority != nil {
@@ -1113,6 +1116,43 @@ func parseID(r *http.Request) (int64, error) {
 	return strconv.ParseInt(vars["id"], 10, 64)
 }
 
+func parseAPIKeyRowID(r *http.Request) (int64, error) {
+	keyID, err := strconv.ParseInt(mux.Vars(r)["key_id"], 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid key_id")
+	}
+	return keyID, nil
+}
+
+func cleanAPIKeys(keys []string) []string {
+	seen := make(map[string]bool, len(keys))
+	cleaned := make([]string, 0, len(keys))
+	for _, key := range keys {
+		for _, value := range normalizeAPIKeyValues(key) {
+			if seen[value] {
+				continue
+			}
+			seen[value] = true
+			cleaned = append(cleaned, value)
+		}
+	}
+	return cleaned
+}
+
+func normalizeAPIKeyValues(raw string) []string {
+	fields := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == '\n' || r == '\r' || r == ','
+	})
+	values := make([]string, 0, len(fields))
+	for _, field := range fields {
+		field = strings.TrimSpace(field)
+		if field != "" {
+			values = append(values, field)
+		}
+	}
+	return values
+}
+
 func jsonOK(w http.ResponseWriter, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(data)
@@ -1541,10 +1581,9 @@ func (h *AdminHandler) setAPIKeyEnabled(w http.ResponseWriter, r *http.Request) 
 		jsonError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	keyIDStr := mux.Vars(r)["key_id"]
-	keyID, err := strconv.ParseInt(keyIDStr, 10, 64)
+	keyID, err := parseAPIKeyRowID(r)
 	if err != nil {
-		jsonError(w, http.StatusBadRequest, "invalid key_id")
+		jsonError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	var req struct {
@@ -1565,6 +1604,63 @@ func (h *AdminHandler) setAPIKeyEnabled(w http.ResponseWriter, r *http.Request) 
 	jsonOK(w, map[string]interface{}{"upstream_id": id, "key_id": keyID, "enabled": req.Enabled})
 }
 
+// addUpstreamAPIKeys 为上游追加一个或多个 API Key，不影响现有 Key。
+func (h *AdminHandler) addUpstreamAPIKeys(w http.ResponseWriter, r *http.Request) {
+	id, err := parseID(r)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	var req struct {
+		APIKey  string   `json:"api_key"`
+		APIKeys []string `json:"api_keys"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	keys := cleanAPIKeys(req.APIKeys)
+	if req.APIKey != "" {
+		keys = append(keys, normalizeAPIKeyValues(req.APIKey)...)
+	}
+	keys = cleanAPIKeys(keys)
+	if len(keys) == 0 {
+		jsonError(w, http.StatusBadRequest, "api_keys is required")
+		return
+	}
+	added, err := h.store.AddUpstreamAPIKeys(id, keys)
+	if err != nil {
+		slog.Error("admin: store error", "error", err)
+		jsonError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	go h.prober.ProbeNow()
+	slog.Info("admin: added upstream api keys", "upstream_id", id, "count", len(keys))
+	jsonOK(w, map[string]interface{}{"status": "created", "count": len(keys), "api_keys": added})
+}
+
+// deleteUpstreamAPIKey 删除上游中的单个 API Key。
+func (h *AdminHandler) deleteUpstreamAPIKey(w http.ResponseWriter, r *http.Request) {
+	id, err := parseID(r)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	keyID, err := parseAPIKeyRowID(r)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := h.store.DeleteUpstreamAPIKey(id, keyID); err != nil {
+		slog.Error("admin: store error", "error", err)
+		jsonError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	go h.prober.ProbeNow()
+	slog.Info("admin: deleted upstream api key", "upstream_id", id, "key_id", keyID)
+	jsonOK(w, map[string]interface{}{"status": "deleted", "upstream_id": id, "key_id": keyID})
+}
+
 // testUpstreamAPIKey 测试指定上游的某个 API Key，支持选择协议、模型和提示词。
 func (h *AdminHandler) testUpstreamAPIKey(w http.ResponseWriter, r *http.Request) {
 	id, err := parseID(r)
@@ -1572,18 +1668,17 @@ func (h *AdminHandler) testUpstreamAPIKey(w http.ResponseWriter, r *http.Request
 		jsonError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	keyIDStr := mux.Vars(r)["key_id"]
-	keyID, err := strconv.ParseInt(keyIDStr, 10, 64)
+	keyID, err := parseAPIKeyRowID(r)
 	if err != nil {
-		jsonError(w, http.StatusBadRequest, "invalid key_id")
+		jsonError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	var req struct {
-		Protocol    string `json:"protocol"`     // "openai" or "anthropic"
-		Model       string `json:"model"`        // 测试模型
-		Prompt      string `json:"prompt"`       // 测试提示词
-		CFClearance string `json:"cf_clearance"` // CF 绕过
+		Protocol    string `json:"protocol"`      // "openai" or "anthropic"
+		Model       string `json:"model"`         // 测试模型
+		Prompt      string `json:"prompt"`        // 测试提示词
+		CFClearance string `json:"cf_clearance"`  // CF 绕过
 		CFUserAgent string `json:"cf_user_agent"` // CF 绕过
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1771,7 +1866,7 @@ func (h *AdminHandler) testUpstreamAPIKey(w http.ResponseWriter, r *http.Request
 		case "responses":
 			var responsesResp struct {
 				Output []struct {
-					Type string `json:"type"`
+					Type    string `json:"type"`
 					Content []struct {
 						Type string `json:"type"`
 						Text string `json:"text"`
