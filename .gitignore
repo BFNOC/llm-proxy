@@ -1,5 +1,6 @@
 # Compiled binaries
 bin/
+llm-proxy
 
 # Go build artifacts
 *.exe
@@ -28,6 +29,11 @@ Thumbs.db
 
 # Log files
 logs/
+.playwright-mcp/
+
+# Local screenshots
+*.png
+*.PNG
 
 # SQLite data
 data/
