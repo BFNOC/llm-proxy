@@ -173,6 +173,7 @@ func (h *AdminHandler) listUpstreams(w http.ResponseWriter, r *http.Request) {
 		Priority          int          `json:"priority"`
 		Enabled           bool         `json:"enabled"`
 		KeySchedulingMode string       `json:"key_scheduling_mode"`
+		AuthMode          string       `json:"auth_mode"`
 		Remark            string       `json:"remark"`
 		CreatedAt         time.Time    `json:"created_at"`
 		UpdatedAt         time.Time    `json:"updated_at"`
@@ -193,10 +194,14 @@ func (h *AdminHandler) listUpstreams(w http.ResponseWriter, r *http.Request) {
 		for j, kd := range keyDetails {
 			details[j] = apiKeyInfo{RowID: kd.RowID, Key: kd.Key, Enabled: kd.Enabled}
 		}
+		authMode := u.AuthMode
+		if authMode == "" {
+			authMode = "api_key"
+		}
 		result[i] = upstreamResponse{
 			ID: u.ID, Name: u.Name, BaseURL: u.BaseURL, APIKeys: keys, APIKeyDetails: details,
 			ProxyURL: u.ProxyURL, Priority: u.Priority, Enabled: u.Enabled,
-			KeySchedulingMode: u.KeySchedulingMode, Remark: u.Remark,
+			KeySchedulingMode: u.KeySchedulingMode, AuthMode: authMode, Remark: u.Remark,
 			CreatedAt: u.CreatedAt, UpdatedAt: u.UpdatedAt,
 		}
 	}
@@ -212,6 +217,7 @@ func (h *AdminHandler) createUpstream(w http.ResponseWriter, r *http.Request) {
 		ProxyURL          string   `json:"proxy_url"`
 		Priority          int      `json:"priority"`
 		KeySchedulingMode string   `json:"key_scheduling_mode"`
+		AuthMode          string   `json:"auth_mode"`
 		Remark            string   `json:"remark"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -239,6 +245,15 @@ func (h *AdminHandler) createUpstream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	authMode := req.AuthMode
+	if authMode == "" {
+		authMode = "api_key"
+	}
+	if authMode != "api_key" && authMode != "oauth" {
+		jsonError(w, http.StatusBadRequest, "auth_mode must be 'api_key' or 'oauth'")
+		return
+	}
+
 	// SSRF validation
 	if err := validateBaseURL(req.BaseURL); err != nil {
 		jsonError(w, http.StatusBadRequest, err.Error())
@@ -253,7 +268,7 @@ func (h *AdminHandler) createUpstream(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	upstream, err := h.store.CreateUpstream(req.Name, req.BaseURL, apiKeys, req.Priority, req.ProxyURL, schedulingMode, req.Remark)
+	upstream, err := h.store.CreateUpstream(req.Name, req.BaseURL, apiKeys, req.Priority, req.ProxyURL, schedulingMode, authMode, req.Remark)
 	if err != nil {
 		slog.Error("admin: store error", "error", err)
 		jsonError(w, http.StatusInternalServerError, "internal error")
@@ -287,6 +302,7 @@ func (h *AdminHandler) updateUpstream(w http.ResponseWriter, r *http.Request) {
 		Priority          *int      `json:"priority"`
 		Enabled           *bool     `json:"enabled"`
 		KeySchedulingMode *string   `json:"key_scheduling_mode"`
+		AuthMode          *string   `json:"auth_mode"`
 		Remark            *string   `json:"remark"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -329,6 +345,17 @@ func (h *AdminHandler) updateUpstream(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	authMode := existing.AuthMode
+	if authMode == "" {
+		authMode = "api_key"
+	}
+	if req.AuthMode != nil {
+		authMode = *req.AuthMode
+		if authMode != "api_key" && authMode != "oauth" {
+			jsonError(w, http.StatusBadRequest, "auth_mode must be 'api_key' or 'oauth'")
+			return
+		}
+	}
 	remark := existing.Remark
 	if req.Remark != nil {
 		remark = *req.Remark
@@ -348,7 +375,7 @@ func (h *AdminHandler) updateUpstream(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	upstream, err := h.store.UpdateUpstream(id, name, baseURL, apiKeys, priority, enabled, proxyURL, schedulingMode, remark)
+	upstream, err := h.store.UpdateUpstream(id, name, baseURL, apiKeys, priority, enabled, proxyURL, schedulingMode, authMode, remark)
 	if err != nil {
 		slog.Error("admin: store error", "error", err)
 		jsonError(w, http.StatusInternalServerError, "internal error")
@@ -1746,7 +1773,11 @@ func (h *AdminHandler) testUpstreamAPIKey(w http.ResponseWriter, r *http.Request
 			"anthropic-version": "2023-06-01",
 		}
 		if targetKey != "" {
-			headers["x-api-key"] = targetKey
+			if upstream.AuthMode == "oauth" {
+				headers["Authorization"] = "Bearer " + targetKey
+			} else {
+				headers["x-api-key"] = targetKey
+			}
 		}
 	case "responses":
 		testURL = strings.TrimRight(upstream.BaseURL, "/") + "/v1/responses"
@@ -1838,14 +1869,37 @@ func (h *AdminHandler) testUpstreamAPIKey(w http.ResponseWriter, r *http.Request
 	}
 	if !success {
 		result["error"] = fmt.Sprintf("上游返回 HTTP %d", resp.StatusCode)
-		// 尝试解析错误消息
-		var errResp struct {
-			Error struct {
-				Message string `json:"message"`
-			} `json:"error"`
+		// 原始响应体（管理面板直接展示，便于排查 OAuth/鉴权等非标准错误结构）
+		if len(respBody) > 0 {
+			result["raw_body"] = string(respBody)
 		}
-		if json.Unmarshal(respBody, &errResp) == nil && errResp.Error.Message != "" {
-			result["error_message"] = errResp.Error.Message
+		// 尝试解析常见错误字段
+		var errResp struct {
+			Error interface{} `json:"error"`
+			// Anthropic 有时用 type/message 顶层字段
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		}
+		if json.Unmarshal(respBody, &errResp) == nil {
+			switch e := errResp.Error.(type) {
+			case string:
+				if e != "" {
+					result["error_message"] = e
+				}
+			case map[string]interface{}:
+				if msg, ok := e["message"].(string); ok && msg != "" {
+					result["error_message"] = msg
+				} else if t, ok := e["type"].(string); ok && t != "" {
+					result["error_message"] = t
+				}
+			}
+			if result["error_message"] == nil {
+				if errResp.Message != "" {
+					result["error_message"] = errResp.Message
+				} else if errResp.Type != "" {
+					result["error_message"] = errResp.Type
+				}
+			}
 		}
 	} else {
 		// 尝试提取回复内容

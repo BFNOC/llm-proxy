@@ -367,6 +367,7 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
             </div>
         </div>
         <div class="form-group"><label>Key 调度模式</label><select name="key_scheduling_mode"><option value="round-robin">轮询 (Round-Robin)</option><option value="fill">填充 (Fill — 优先用满当前 Key)</option></select></div>
+        <div class="form-group"><label>Anthropic 鉴权模式</label><select name="auth_mode"><option value="api_key">API Key (x-api-key)</option><option value="oauth">OAuth (Authorization: Bearer)</option></select></div>
         <div class="form-group"><label>备注 <span style="font-weight:400;color:var(--text-dim);text-transform:none;letter-spacing:0">（可选，如 Key 来源）</span></label><input name="remark" placeholder="如：网友A分享的 Claude 额度"></div>
         <div class="form-group"><label>代理地址 <span style="font-weight:400;color:var(--text-dim);text-transform:none;letter-spacing:0">（可选）</span></label><input name="proxy_url" placeholder="socks5://127.0.0.1:1080"></div>
         <div class="form-group"><label>优先级 <span style="font-weight:400;color:var(--text-dim);text-transform:none;letter-spacing:0">（0 = 最高）</span></label><input name="priority" type="number" value="0" min="0"></div>
@@ -395,6 +396,7 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
             </div>
         </div>
         <div class="form-group"><label>Key 调度模式</label><select name="key_scheduling_mode"><option value="round-robin">轮询 (Round-Robin)</option><option value="fill">填充 (Fill — 优先用满当前 Key)</option></select></div>
+        <div class="form-group"><label>Anthropic 鉴权模式</label><select name="auth_mode"><option value="api_key">API Key (x-api-key)</option><option value="oauth">OAuth (Authorization: Bearer)</option></select></div>
         <div class="form-group"><label>备注</label><input name="remark" placeholder="如：网友A分享的 Claude 额度"></div>
         <div class="form-group"><label>代理地址 <span style="font-weight:400;color:var(--text-dim);text-transform:none;letter-spacing:0">（留空 = 环境代理）</span></label><input name="proxy_url" placeholder="socks5://127.0.0.1:1080"></div>
         <div class="form-group"><label>优先级</label><input name="priority" type="number" min="0"></div>
@@ -753,6 +755,7 @@ function createUpstream(e) {
         api_keys: apiKeys, proxy_url: f.get('proxy_url')||'',
         priority: parseInt(f.get('priority')||'0'),
         key_scheduling_mode: f.get('key_scheduling_mode')||'round-robin',
+        auth_mode: f.get('auth_mode')||'api_key',
         remark: f.get('remark')||''
     })}).then(d => {
         if(d.error) alert(d.error);
@@ -771,6 +774,7 @@ function editUpstream(id) {
     dlg.querySelector('[name=proxy_url]').value = u.proxy_url||'';
     dlg.querySelector('[name=priority]').value = u.priority;
     dlg.querySelector('[name=key_scheduling_mode]').value = u.key_scheduling_mode || 'round-robin';
+    dlg.querySelector('[name=auth_mode]').value = u.auth_mode || 'api_key';
     dlg.querySelector('[name=remark]').value = u.remark || '';
     dlg.showModal();
 }
@@ -785,7 +789,7 @@ function editUpstream(id) {
 	    const currentRowIds = new Set(currentRows.filter(r => r.row_id).map(r => r.row_id));
 	    const deletedRows = originalRows.filter(r => r.row_id && !currentRowIds.has(r.row_id));
 	    const addedKeys = currentRows.filter(r => !r.row_id).map(r => r.key);
-	    const body = {name: f.get('name'), base_url: f.get('base_url'), proxy_url: f.get('proxy_url')||'', priority: parseInt(f.get('priority')||'0'), key_scheduling_mode: f.get('key_scheduling_mode')||'round-robin', remark: f.get('remark')||''};
+	    const body = {name: f.get('name'), base_url: f.get('base_url'), proxy_url: f.get('proxy_url')||'', priority: parseInt(f.get('priority')||'0'), key_scheduling_mode: f.get('key_scheduling_mode')||'round-robin', auth_mode: f.get('auth_mode')||'api_key', remark: f.get('remark')||''};
 	    api('/upstreams/'+id, {method:'PUT', body: JSON.stringify(body)}).then(d => {
 	        if(d.error) { alert(d.error); return; }
 	        return Promise.all([
@@ -1025,9 +1029,15 @@ function submitUpstreamTest() {
             html += '<div style="padding:14px 18px;border-top:1px solid rgba(239,68,68,0.12);font-size:0.85rem;">';
             html += '<div style="color:var(--text-dim);margin-bottom:4px;">HTTP '+(d.status_code||'?')+'</div>';
             if (d.error_message) {
-                html += '<div style="color:var(--text);">'+esc(d.error_message)+'</div>';
+                html += '<div style="color:var(--text);margin-bottom:8px;">'+esc(d.error_message)+'</div>';
             } else if (d.error) {
-                html += '<div style="color:var(--text);">'+esc(d.error)+'</div>';
+                html += '<div style="color:var(--text);margin-bottom:8px;">'+esc(d.error)+'</div>';
+            }
+            if (d.raw_body) {
+                let rawText = d.raw_body;
+                try { rawText = JSON.stringify(JSON.parse(d.raw_body), null, 2); } catch (_) {}
+                html += '<div style="font-size:0.72rem;font-weight:600;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.05em;margin:8px 0 6px;">上游原始响应</div>';
+                html += '<pre style="margin:0;font-size:0.78rem;line-height:1.5;white-space:pre-wrap;word-break:break-word;max-height:240px;overflow-y:auto;padding:10px 12px;background:var(--bg);border-radius:var(--radius-xs);border:1px solid var(--border);color:var(--text);">'+esc(rawText)+'</pre>';
             }
             const statusCode = Number(d.status_code || 0);
             if (keyRowId !== '0' && statusCode >= 400 && statusCode < 500) {

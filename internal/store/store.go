@@ -56,9 +56,12 @@ func (s *Store) Close() error {
 // Each key is encrypted before storage in the upstream_api_keys table.
 // URL validation (scheme, SSRF) is the responsibility of the HTTP handler layer;
 // the store accepts any non-empty URL to remain testable with loopback addresses.
-func (s *Store) CreateUpstream(name, baseURL string, apiKeys []string, priority int, proxyURL string, keySchedulingMode string, remark string) (*UpstreamProvider, error) {
+func (s *Store) CreateUpstream(name, baseURL string, apiKeys []string, priority int, proxyURL string, keySchedulingMode string, authMode string, remark string) (*UpstreamProvider, error) {
 	if keySchedulingMode == "" {
 		keySchedulingMode = "round-robin"
+	}
+	if authMode == "" {
+		authMode = "api_key"
 	}
 
 	now := time.Now().UTC()
@@ -70,9 +73,9 @@ func (s *Store) CreateUpstream(name, baseURL string, apiKeys []string, priority 
 
 	// 旧 api_key 列保留占位值（NOT NULL 约束无法删除）
 	res, err := tx.Exec(
-		`INSERT INTO upstream_providers (name, base_url, api_key, priority, enabled, proxy_url, key_scheduling_mode, remark, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`,
-		name, baseURL, "_migrated_to_upstream_api_keys", priority, proxyURL, keySchedulingMode, remark, now, now,
+		`INSERT INTO upstream_providers (name, base_url, api_key, priority, enabled, proxy_url, key_scheduling_mode, auth_mode, remark, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)`,
+		name, baseURL, "_migrated_to_upstream_api_keys", priority, proxyURL, keySchedulingMode, authMode, remark, now, now,
 	)
 	if err != nil {
 		_ = tx.Rollback()
@@ -118,6 +121,7 @@ func (s *Store) CreateUpstream(name, baseURL string, apiKeys []string, priority 
 		Priority:          priority,
 		Enabled:           true,
 		KeySchedulingMode: keySchedulingMode,
+		AuthMode:          authMode,
 		Remark:            remark,
 		Healthy:           true,
 		CreatedAt:         now,
@@ -128,12 +132,12 @@ func (s *Store) CreateUpstream(name, baseURL string, apiKeys []string, priority 
 // GetUpstream retrieves an upstream provider by ID, decrypting all its API keys.
 func (s *Store) GetUpstream(id int64) (*UpstreamProvider, error) {
 	row := s.db.QueryRow(
-		`SELECT id, name, base_url, priority, enabled, key_scheduling_mode, remark, proxy_url, created_at, updated_at
+		`SELECT id, name, base_url, priority, enabled, key_scheduling_mode, auth_mode, remark, proxy_url, created_at, updated_at
 		 FROM upstream_providers WHERE id = ?`, id,
 	)
 
 	var up UpstreamProvider
-	if err := row.Scan(&up.ID, &up.Name, &up.BaseURL, &up.Priority, &up.Enabled, &up.KeySchedulingMode, &up.Remark, &up.ProxyURL, &up.CreatedAt, &up.UpdatedAt); err != nil {
+	if err := row.Scan(&up.ID, &up.Name, &up.BaseURL, &up.Priority, &up.Enabled, &up.KeySchedulingMode, &up.AuthMode, &up.Remark, &up.ProxyURL, &up.CreatedAt, &up.UpdatedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("upstream %d not found", id)
 		}
@@ -152,7 +156,7 @@ func (s *Store) GetUpstream(id int64) (*UpstreamProvider, error) {
 // ListUpstreams returns all upstream providers with decrypted API keys.
 func (s *Store) ListUpstreams() ([]UpstreamProvider, error) {
 	rows, err := s.db.Query(
-		`SELECT id, name, base_url, priority, enabled, key_scheduling_mode, remark, proxy_url, created_at, updated_at
+		`SELECT id, name, base_url, priority, enabled, key_scheduling_mode, auth_mode, remark, proxy_url, created_at, updated_at
 		 FROM upstream_providers ORDER BY priority ASC, id ASC`,
 	)
 	if err != nil {
@@ -163,7 +167,7 @@ func (s *Store) ListUpstreams() ([]UpstreamProvider, error) {
 	var result []UpstreamProvider
 	for rows.Next() {
 		var up UpstreamProvider
-		if err := rows.Scan(&up.ID, &up.Name, &up.BaseURL, &up.Priority, &up.Enabled, &up.KeySchedulingMode, &up.Remark, &up.ProxyURL, &up.CreatedAt, &up.UpdatedAt); err != nil {
+		if err := rows.Scan(&up.ID, &up.Name, &up.BaseURL, &up.Priority, &up.Enabled, &up.KeySchedulingMode, &up.AuthMode, &up.Remark, &up.ProxyURL, &up.CreatedAt, &up.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan upstream row: %w", err)
 		}
 		up.Healthy = true
@@ -187,8 +191,11 @@ func (s *Store) ListUpstreams() ([]UpstreamProvider, error) {
 
 // UpdateUpstream replaces all mutable fields of an upstream provider.
 // If apiKeys is non-nil, fully replaces the upstream's API keys.
-func (s *Store) UpdateUpstream(id int64, name, baseURL string, apiKeys []string, priority int, enabled bool, proxyURL string, keySchedulingMode string, remark string) (*UpstreamProvider, error) {
+func (s *Store) UpdateUpstream(id int64, name, baseURL string, apiKeys []string, priority int, enabled bool, proxyURL string, keySchedulingMode string, authMode string, remark string) (*UpstreamProvider, error) {
 	now := time.Now().UTC()
+	if authMode == "" {
+		authMode = "api_key"
+	}
 
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -196,9 +203,9 @@ func (s *Store) UpdateUpstream(id int64, name, baseURL string, apiKeys []string,
 	}
 
 	res, err := tx.Exec(
-		`UPDATE upstream_providers SET name=?, base_url=?, priority=?, enabled=?, proxy_url=?, key_scheduling_mode=?, remark=?, updated_at=?
+		`UPDATE upstream_providers SET name=?, base_url=?, priority=?, enabled=?, proxy_url=?, key_scheduling_mode=?, auth_mode=?, remark=?, updated_at=?
 		 WHERE id=?`,
-		name, baseURL, priority, enabled, proxyURL, keySchedulingMode, remark, now, id,
+		name, baseURL, priority, enabled, proxyURL, keySchedulingMode, authMode, remark, now, id,
 	)
 	if err != nil {
 		_ = tx.Rollback()

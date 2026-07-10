@@ -259,6 +259,13 @@ CREATE TABLE IF NOT EXISTS upstream_declared_models (
 CREATE INDEX IF NOT EXISTS idx_upstream_declared_models_upstream ON upstream_declared_models (upstream_id);
 	`,
 	},
+	{
+		// v21: Anthropic 鉴权模式。api_key = x-api-key（默认）；oauth = Authorization: Bearer（Claude OAuth / sk-ant-oai）
+		version: 21,
+		up: `
+ALTER TABLE upstream_providers ADD COLUMN auth_mode TEXT NOT NULL DEFAULT 'api_key';
+	`,
+	},
 }
 
 // RunMigrations applies all pending schema migrations in order.

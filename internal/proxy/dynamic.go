@@ -112,6 +112,8 @@ type ActiveUpstream struct {
 	ModelPatterns []string // 支持的模型 glob 模式，空表示接受所有模型
 	// KeySchedulingMode 控制多 Key 调度策略："round-robin"（默认）或 "fill"。
 	KeySchedulingMode string
+	// AuthMode 控制 Anthropic 鉴权头：api_key（x-api-key）或 oauth（Authorization: Bearer）。
+	AuthMode string
 
 	keyMu         sync.Mutex
 	keyIndex      int    // round-robin 索引
@@ -392,7 +394,7 @@ func (dp *DynamicProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		// Rewrite auth headers for this specific upstream (round-robin key).
 		apiKey, keyIdx, keyRowID := active.NextAPIKey()
-		RewriteAuthHeaders(outReq, style, apiKey)
+		RewriteAuthHeaders(outReq, style, apiKey, active.AuthMode)
 
 		// Strip untrusted proxy/identity headers to prevent downstream
 		// clients from spoofing their identity at the upstream.

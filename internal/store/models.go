@@ -11,6 +11,7 @@ type UpstreamProvider struct {
 	Priority           int
 	Enabled            bool   // persisted; disabled upstreams are skipped by the prober
 	KeySchedulingMode  string // "round-robin" (default) or "fill"
+	AuthMode           string // "api_key" (default, x-api-key) or "oauth" (Authorization: Bearer)
 	Remark             string // 管理员备注（Key 来源、用途等）
 	Healthy            bool   // runtime only, not persisted
 	CreatedAt          time.Time
