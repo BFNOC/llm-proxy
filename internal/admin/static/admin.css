@@ -336,7 +336,7 @@
         }
         .card-desc {
             color: var(--text-dim); font-size: 0.84rem; margin: -2px 0 14px;
-            max-width: 62ch; line-height: 1.55;
+            line-height: 1.55; max-width: none;
         }
         .toolbar {
             display: flex; gap: 8px; align-items: center; flex-wrap: wrap;

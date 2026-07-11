@@ -84,7 +84,7 @@
                     <h2>上游服务</h2>
                     <button class="btn btn-primary btn-sm" onclick="document.getElementById('dlg-upstream').showModal()">添加上游</button>
                 </div>
-                <p class="card-desc">配置转发目标。OAuth 模式会用 Authorization: Bearer 发送上游 Key。勾选行可批量启用 / 禁用 / 删除。</p>
+                <p class="card-desc">配置转发目标与鉴权（OAuth 使用 Authorization: Bearer）。勾选行可批量启用、禁用、删除。</p>
                 <div class="toolbar" style="flex-wrap:wrap;gap:8px;align-items:center;">
                     <input class="search-input" id="upstream-search" placeholder="搜索名称 / 地址 / 备注" oninput="renderUpstreamsTable()">
                     <select id="upstream-filter-enabled" style="width:120px" onchange="renderUpstreamsTable()">
@@ -224,10 +224,9 @@
                     </div>
                 </div>
                 <p class="card-desc">
-                    <strong>完整抓取</strong>入站 <code>/v1/*</code> Header + Body（含密钥明文）。支持 <strong>Claude Code</strong> 与 <strong>Codex</strong>。仅在可信本机使用。
-                    将客户端 Base URL 设为
-                    <code id="hc-base-url">http://127.0.0.1:端口</code>
-                    （CC: <code>ANTHROPIC_BASE_URL</code>；Codex: <code>OPENAI_BASE_URL</code> 等），发一条消息后刷新。Body 默认最多 2MB。
+                    抓取入站 <code>/v1/*</code> 的 Header + Body（含密钥明文，仅可信本机）。支持 Claude Code / Codex。
+                    Base URL 设为 <code id="hc-base-url">http://127.0.0.1:端口</code>
+                    （CC: <code>ANTHROPIC_BASE_URL</code>，Codex: <code>OPENAI_BASE_URL</code>），发消息后刷新。Body 最多约 2MB。
                 </p>
                 <div id="hc-list" class="empty-state" style="padding:20px;">尚未抓取到请求。先开启抓取，再从 Claude Code 或 Codex 发一条消息。</div>
             </div>
