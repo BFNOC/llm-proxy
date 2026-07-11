@@ -144,7 +144,8 @@ func (h *AdminHandler) RegisterRoutes(r *mux.Router) {
 	api.HandleFunc("/header-capture", h.updateHeaderCapture).Methods("PUT")
 	api.HandleFunc("/header-capture", h.clearHeaderCapture).Methods("DELETE")
 
-	// Dashboard (serve embedded HTML)
+	// Dashboard shell + static CSS/JS (embed). Assets must be registered before the catch-all.
+	r.PathPrefix("/admin/assets/").Handler(assetsHandler())
 	r.PathPrefix("/admin/").HandlerFunc(h.serveDashboard)
 }
 

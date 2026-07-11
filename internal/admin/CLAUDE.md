@@ -8,7 +8,7 @@
 
 提供运维控制台：
 
-1. 单页 HTML 管理面板（`templates.go` 内嵌 `dashboardHTML`，零外部资源）
+1. 单页管理面板（`static/index.html` + `admin.css` + `admin.js`，`go:embed` 进二进制；仍零 npm 依赖）
 2. JSON REST API：上游 / 下游 Key / 绑定 / 模型路由覆盖 / 模型白名单 / 测试模型 / 日志查询 / 系统状态 / 设置
 3. 上游连通性 & Key 测试（OpenAI / Anthropic / Responses 三种协议；可携带 CF 绕过参数）
 4. 上游额度查询（new-api 风格 `/api/usage/token`）
@@ -18,10 +18,13 @@
 
 ## 入口与启动
 
-| 文件 | 行数 | 说明 |
-|------|------|------|
-| `handler.go` | ~1930 | 主 handler；构造函数 + 全部路由 + 业务逻辑 |
-| `templates.go` | （含大段 HTML） | `dashboardHTML []byte` — 单页 HTML，由 `serveDashboard` 直接 Write |
+| 文件 | 说明 |
+|------|------|
+| `handler.go` | 主 handler；构造函数 + 全部路由 + 业务逻辑 |
+| `static.go` | `go:embed static/*`；`dashboardHTML` + `/admin/assets/` 文件服务 |
+| `static/index.html` | 页面结构（登录壳、tabs、对话框） |
+| `static/admin.css` | 样式 |
+| `static/js/*.js` | 前端逻辑按域拆分（vanilla，无构建；经典 script 顺序加载） |
 
 构造与注册：
 
@@ -69,7 +72,8 @@ adminHandler.RegisterRoutes(r)   // r 是 mux.Router
 | GET | `/admin/api/key-rpm` | `getKeyRPM` | 单独端点避免 status 轮询负担 |
 | GET/POST/PUT/DELETE | `/admin/api/test-models` (+ `/{id}`) | `*TestModel` | 测试对话框可复用模型 |
 | GET/PUT | `/admin/api/settings` | `get/updateSettings` | 当前仅 `auto_disable_threshold`（同步写 `settings` 表 + atomic store） |
-| `*` | `/admin/...` | `serveDashboard` | 兜底返回 dashboardHTML |
+| GET | `/admin/assets/*` | `assetsHandler` | 嵌入的 CSS/JS（`Cache-Control: no-cache`） |
+| `*` | `/admin/...` | `serveDashboard` | 兜底返回 `static/index.html` |
 
 ## 关键依赖与配置
 
@@ -94,7 +98,7 @@ adminHandler.RegisterRoutes(r)   // r 是 mux.Router
 | 想做的事 | 修改位置 |
 |---------|---------|
 | 新 admin API | `RegisterRoutes` 注册 + 同步根 CLAUDE.md 与本文件 |
-| 替换 dashboard 前端 | 重写 `templates.go` 中 `dashboardHTML` 即可（保持单文件部署优势） |
+| 替换 dashboard 前端 | 改 `static/index.html` / `admin.css` / `static/js/*`；`go build` 自动 embed，无需 npm |
 | 新增 setting 项 | `getSettings` + `updateSettings` 增加字段 + `store.GetSetting/SetSetting` 持久化 |
 | 支持新上游协议测试 | `testUpstreamAPIKey` 的 `switch req.Protocol` 中加 case |
 | 新增连接池可观测项 | 修改 `proxy.TransportPoolStats()`，在 `getStatus` 自动暴露 |
@@ -110,14 +114,25 @@ adminHandler.RegisterRoutes(r)   // r 是 mux.Router
 ## 常见问题 (FAQ)
 
 - **PUT 上游后绑定/覆盖为何不消失**：上游被删除时 FK CASCADE 触发；handler 在 `deleteUpstream` 后会调 `overrideCache.Reload()` 同步内存
-- **dashboard 加载白屏**：HTML 嵌在二进制内，多半是路由未命中；检查 `RegisterRoutes` 中 `r.PathPrefix("/admin/")` 顺序
+- **dashboard 加载白屏**：检查 `/admin/assets/` 是否注册在 catch-all `/admin/` 之前；浏览器网络面板看 CSS/JS 是否 404
 - **`createUpstream` 返回 400 "private/loopback IP"**：开发环境想用本地 ollama？需要在 `validateBaseURL` 加白名单或用 `127.0.0.1` 之外的可路由地址
 
 ## 相关文件清单
 
 - `internal/admin/handler.go`
-- `internal/admin/templates.go`
+- `internal/admin/static.go`
+- `internal/admin/static/index.html`
+- `internal/admin/static/admin.css`
+- `internal/admin/static/js/core.js`
+- `internal/admin/static/js/upstreams.js`
+- `internal/admin/static/js/upstream-test.js`
+- `internal/admin/static/js/keys.js`
+- `internal/admin/static/js/models.js`
+- `internal/admin/static/js/logs.js`
+- `internal/admin/static/js/tools.js`
+- `internal/admin/static/js/status.js`
 
 ## 变更记录 (Changelog)
 
+- 2026-07-11：前端从 `templates.go` 拆为 embed 静态文件；JS 再按域拆到 `static/js/`
 - 2026-05-15 15:03:30：初始化模块文档
