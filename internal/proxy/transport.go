@@ -139,7 +139,8 @@ func TransportPoolStats() map[string]interface{} {
 	}
 }
 
-// newBaseTransport 返回一个预配置的 *http.Transport，参数与原 newProxyTransport 一致。
+// newBaseTransport 返回一个预配置的 *http.Transport。
+// MaxIdleConnsPerHost 提高默认 2，避免高并发单上游时连接池瓶颈。
 func newBaseTransport() *http.Transport {
 	return &http.Transport{
 		DialContext: (&net.Dialer{
@@ -147,11 +148,13 @@ func newBaseTransport() *http.Transport {
 			KeepAlive: 30 * time.Second,
 		}).DialContext,
 		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          100,
+		MaxIdleConns:          200,
+		MaxIdleConnsPerHost:   64,
+		MaxConnsPerHost:       0, // 0 = unlimited concurrent dials
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
-		ResponseHeaderTimeout: 3 * time.Minute,
+		ResponseHeaderTimeout: 5 * time.Minute, // slow TTFB models / large tools
 		DisableCompression:    true,
 	}
 }

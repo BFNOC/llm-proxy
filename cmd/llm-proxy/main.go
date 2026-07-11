@@ -60,7 +60,7 @@ func (h *CustomPrettyHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
 func (h *CustomPrettyHandler) WithGroup(_ string) slog.Handler      { return h }
 
 const (
-	version     = "2.7.8"
+	version     = "2.7.9"
 	defaultPort = "9002"
 )
 
@@ -292,13 +292,17 @@ func main() {
 	// UpstreamBinding 随后基于 keyID 计算允许访问的上游集合，
 	// DynamicProxy 最后依据该集合做真正的上游选择。
 	// 这样可以保证未授权上游在任何网络 I/O 发生前就被排除。
+	// 中间件装配顺序（后 Wrap 的在更外层）：
+	// CORS → HeaderCapture → Stats → Classifier → KeyResolver → Binding →
+	// PerKeyStats → Audit → RateLimit → Streaming → ModelFilter → Proxy
+	// Audit 必须在 RateLimit 外侧，这样 429 限流也会写入审计日志。
 	proxyChain := http.Handler(dynamicProxy)
 	proxyChain = middleware.ModelFilterMiddleware(modelFilter)(proxyChain)
 	proxyChain = middleware.StreamingMiddleware()(proxyChain)
+	proxyChain = middleware.RateLimitMiddleware(rateLimiter)(proxyChain)
 	if auditLogger != nil {
 		proxyChain = middleware.AuditLogMiddleware(auditLogger)(proxyChain)
 	}
-	proxyChain = middleware.RateLimitMiddleware(rateLimiter)(proxyChain)
 	// per-key 统计放在 KeyResolver 之后，确保只记录已通过鉴权的请求
 	proxyChain = middleware.PerKeyStatsMiddleware(perKeyStats)(proxyChain)
 	// 先做绑定查询再进入后续转发流程，避免存储异常时请求绕过授权边界。
@@ -335,9 +339,16 @@ func main() {
 		bindAddr = v
 	}
 	port := fmt.Sprintf("%d", yamlConfig.Server.Port)
+	// Timeouts: align with long SSE + common LB/Cloudflare 300s idle.
+	// WriteTimeout must stay 0 so streaming responses are not cut mid-flight.
 	server := &http.Server{
-		Addr:    bindAddr + ":" + port,
-		Handler: r,
+		Addr:              bindAddr + ":" + port,
+		Handler:           r,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       60 * time.Second,
+		WriteTimeout:      0,
+		IdleTimeout:       300 * time.Second,
+		MaxHeaderBytes:    1 << 20, // 1 MiB
 	}
 
 	go func() {

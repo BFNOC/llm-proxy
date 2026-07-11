@@ -31,10 +31,13 @@ func isStreamingEndpoint(r *http.Request) bool {
 	path := r.URL.Path
 	return strings.HasSuffix(path, "/chat/completions") ||
 		strings.HasSuffix(path, "/messages") ||
-		strings.HasSuffix(path, "/completions")
+		strings.HasSuffix(path, "/completions") ||
+		strings.HasSuffix(path, "/responses")
 }
 
 // streamingResponseWriter wraps http.ResponseWriter to ensure proper flushing.
+// It implements http.Flusher so downstream code (DynamicProxy) can type-assert
+// Flusher through this middleware layer.
 type streamingResponseWriter struct {
 	http.ResponseWriter
 	flusher http.Flusher
@@ -44,4 +47,9 @@ func (sw *streamingResponseWriter) Write(b []byte) (int, error) {
 	n, err := sw.ResponseWriter.Write(b)
 	sw.flusher.Flush()
 	return n, err
+}
+
+// Flush implements http.Flusher.
+func (sw *streamingResponseWriter) Flush() {
+	sw.flusher.Flush()
 }

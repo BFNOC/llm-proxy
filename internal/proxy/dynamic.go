@@ -180,10 +180,10 @@ func (u *ActiveUpstream) MarkKeyFailed() {
 	u.keyMu.Unlock()
 }
 
-// DynamicProxy is a reverse proxy that supports 429-based failover across
-// multiple upstreams. All healthy upstreams are stored and tried in priority
-// order. If an upstream returns 429, the next one is attempted. Only when all
-// upstreams return 429 is the response forwarded to the client.
+// DynamicProxy is a reverse proxy with multi-upstream failover.
+// Healthy upstreams are tried in priority order. On auth (401/403), rate-limit
+// or quota (429), or gateway errors (502/503/504), the next upstream is tried.
+// Auth/quota/rate-limit failures increment key consecutive_failures; 5xx does not.
 // 每个上游通过 BuildTransport 获取对应代理的 *http.Transport，相同代理复用连接池。
 type DynamicProxy struct {
 	allUpstreams    atomic.Value // stores []*ActiveUpstream
@@ -213,8 +213,32 @@ func NewDynamicProxy() *DynamicProxy {
 }
 
 // SetAllUpstreams atomically replaces the full list of upstreams (sorted by
-// priority, highest-priority first).
+// priority, highest-priority first). Key scheduling cursors (RR/fill index)
+// are preserved across prober rebuilds when the same upstream ID remains.
 func (dp *DynamicProxy) SetAllUpstreams(upstreams []*ActiveUpstream) {
+	prev := dp.GetAllUpstreams()
+	if len(prev) > 0 && len(upstreams) > 0 {
+		byID := make(map[int64]*ActiveUpstream, len(prev))
+		for _, u := range prev {
+			if u != nil {
+				byID[u.ID] = u
+			}
+		}
+		for _, u := range upstreams {
+			if u == nil {
+				continue
+			}
+			old, ok := byID[u.ID]
+			if !ok || old == nil {
+				continue
+			}
+			old.keyMu.Lock()
+			u.keyIndex = old.keyIndex
+			u.fillKeyIndex = old.fillKeyIndex
+			u.fillKeyFailed = old.fillKeyFailed
+			old.keyMu.Unlock()
+		}
+	}
 	dp.allUpstreams.Store(upstreams)
 }
 
@@ -401,10 +425,11 @@ func (dp *DynamicProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		for _, h := range untrustedRequestHeaders {
 			outReq.Header.Del(h)
 		}
+		// RFC 7230 hop-by-hop headers (including Connection token list).
+		stripRequestHopByHop(outReq.Header)
 
-		// Remove Accept-Encoding so Go's transport handles decompression
-		// transparently. This ensures response body is always plain text
-		// for middleware processing (e.g. model filtering).
+		// Remove Accept-Encoding so upstreams typically send plain text
+		// (DisableCompression is also set on Transport). Needed for model filter.
 		outReq.Header.Del("Accept-Encoding")
 
 		// 按上游代理配置获取对应 transport。
@@ -448,18 +473,22 @@ func (dp *DynamicProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// On 429/401/403 from a non-last upstream, try the next one.
-		if (resp.StatusCode == http.StatusTooManyRequests ||
-			resp.StatusCode == http.StatusUnauthorized ||
-			resp.StatusCode == http.StatusForbidden) && !isLast {
+		// Failover: auth / rate-limit / quota / gateway errors on non-last upstream.
+		if shouldFailoverStatus(resp.StatusCode) && !isLast {
+			var peek []byte
+			if resp.StatusCode == http.StatusTooManyRequests {
+				// Peek a small body for quota vs transient RL; preserve Closer.
+				peek = peekResponseBody(resp, 8<<10)
+			}
+			kind := classifyUpstreamFailure(resp.StatusCode, resp.Header, peek)
 			resp.Body.Close()
 			// fill 模式下标记当前 Key 失败，下次调用切换到下一个 Key
 			active.MarkKeyFailed()
-			if dp.KeyFailCallback != nil && keyRowID > 0 {
+			if shouldCountKeyFailure(kind) && dp.KeyFailCallback != nil && keyRowID > 0 {
 				dp.KeyFailCallback(active.ID, keyRowID)
 			}
 			slog.Info("proxy: upstream returned error, trying next",
-				"upstream", active.Name, "status", resp.StatusCode)
+				"upstream", active.Name, "status", resp.StatusCode, "failure_kind", string(kind))
 			continue
 		}
 
@@ -468,13 +497,19 @@ func (dp *DynamicProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if dp.KeySuccessCallback != nil && keyRowID > 0 {
 				dp.KeySuccessCallback(active.ID, keyRowID)
 			}
-		} else if resp.StatusCode == http.StatusTooManyRequests ||
-			resp.StatusCode == http.StatusUnauthorized ||
-			resp.StatusCode == http.StatusForbidden {
+		} else if shouldFailoverStatus(resp.StatusCode) {
+			// Last upstream (or non-failover code path): still track key health.
+			var peek []byte
+			if resp.StatusCode == http.StatusTooManyRequests {
+				peek = peekResponseBody(resp, 8<<10)
+			}
+			kind := classifyUpstreamFailure(resp.StatusCode, resp.Header, peek)
 			active.MarkKeyFailed()
-			if dp.KeyFailCallback != nil && keyRowID > 0 {
+			if shouldCountKeyFailure(kind) && dp.KeyFailCallback != nil && keyRowID > 0 {
 				dp.KeyFailCallback(active.ID, keyRowID)
 			}
+			slog.Info("proxy: upstream error on final candidate",
+				"upstream", active.Name, "status", resp.StatusCode, "failure_kind", string(kind))
 		}
 		dp.forwardResponse(w, resp, active.Name, keyIdx, active.ProxyURL)
 		return

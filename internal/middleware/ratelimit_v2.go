@@ -33,12 +33,49 @@ func (sw *slidingWindow) add(now time.Time) {
 type PerKeyRPMLimiter struct {
 	mu      sync.Mutex
 	windows map[int64]*slidingWindow
+	stopGC  chan struct{}
+	gcOnce  sync.Once
 }
 
 func NewPerKeyRPMLimiter() *PerKeyRPMLimiter {
-	return &PerKeyRPMLimiter{
+	l := &PerKeyRPMLimiter{
 		windows: make(map[int64]*slidingWindow),
+		stopGC:  make(chan struct{}),
 	}
+	go l.gcLoop()
+	return l
+}
+
+func (l *PerKeyRPMLimiter) gcLoop() {
+	ticker := time.NewTicker(2 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			l.GC()
+		case <-l.stopGC:
+			return
+		}
+	}
+}
+
+// GC drops idle windows with no timestamps in the last minute.
+func (l *PerKeyRPMLimiter) GC() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := time.Now()
+	for id, sw := range l.windows {
+		if sw.countInWindow(now) == 0 {
+			delete(l.windows, id)
+		}
+	}
+}
+
+// StopGC stops the background GC goroutine (for tests/shutdown).
+func (l *PerKeyRPMLimiter) StopGC() {
+	l.gcOnce.Do(func() {
+		close(l.stopGC)
+	})
 }
 
 // Check returns (allowed, retryAfterSeconds).

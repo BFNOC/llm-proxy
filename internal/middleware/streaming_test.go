@@ -214,3 +214,41 @@ func (m *MockFlushableRecorder) Flush() {
 	m.flushCalled = true
 	m.flushCallCount++
 }
+
+func TestStreamingResponseWriter_ImplementsFlusher(t *testing.T) {
+	rec := httptest.NewRecorder()
+	sw := &streamingResponseWriter{ResponseWriter: rec, flusher: rec}
+	var flusher http.Flusher = sw
+	flusher.Flush()
+	_, ok := any(sw).(http.Flusher)
+	if !ok {
+		t.Fatal("streamingResponseWriter must implement http.Flusher")
+	}
+}
+
+func TestIsStreamingEndpoint_IncludesResponses(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	if !isStreamingEndpoint(req) {
+		t.Error("expected /v1/responses to be streaming endpoint")
+	}
+	req = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	if isStreamingEndpoint(req) {
+		t.Error("expected /v1/models not to be streaming endpoint")
+	}
+}
+
+func TestStreamingMiddleware_WrapsFlusher(t *testing.T) {
+	var sawFlusher bool
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, sawFlusher = w.(http.Flusher)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("data: ok\n\n"))
+	})
+	h := StreamingMiddleware()(inner)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	h.ServeHTTP(rec, req)
+	if !sawFlusher {
+		t.Fatal("handler should see http.Flusher through middleware")
+	}
+}
