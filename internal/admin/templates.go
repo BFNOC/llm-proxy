@@ -1973,6 +1973,35 @@ function updateTuSpoofHint(proto) {
     }
 }
 
+/** Collapsed-by-default fingerprint dump for test results (success & failure). */
+function renderTuFingerprintBlock(d, borderColor) {
+    if (!d || !(d.auth_mode || d.request_headers || d.test_session_id || d.test_device_id || d.test_installation_id)) {
+        return '';
+    }
+    const payload = {
+        auth_mode: d.auth_mode,
+        client_spoof: d.client_spoof,
+        spoof_client: d.spoof_client,
+        test_session_id: d.test_session_id,
+        test_device_id: d.test_device_id,
+        test_installation_id: d.test_installation_id,
+        test_turn_id: d.test_turn_id,
+        test_url: d.test_url,
+        headers: d.request_headers || {}
+    };
+    // Drop empty keys for a cleaner dump.
+    Object.keys(payload).forEach(k => {
+        if (payload[k] == null || payload[k] === '' || (typeof payload[k] === 'object' && !Object.keys(payload[k]).length && k === 'headers' && !d.request_headers)) {
+            if (payload[k] == null || payload[k] === '') delete payload[k];
+        }
+    });
+    let html = '<details style="margin:8px 0;border-top:1px solid '+(borderColor||'var(--border)')+';padding-top:10px;">';
+    html += '<summary style="cursor:pointer;font-size:0.8rem;color:var(--text-dim);user-select:none;font-weight:600;">请求指纹（默认折叠，点击展开）</summary>';
+    html += '<pre style="margin:8px 0 0;font-size:0.75rem;line-height:1.5;white-space:pre-wrap;word-break:break-word;padding:10px 12px;background:var(--bg);border-radius:var(--radius-xs);border:1px solid var(--border);color:var(--text-dim);max-height:280px;overflow:auto;">'+esc(JSON.stringify(payload, null, 2))+'</pre>';
+    html += '</details>';
+    return html;
+}
+
 function submitUpstreamTest() {
     const upstreamId = document.getElementById('tu-upstream-id').value;
     const cfg = getTuFormConfig();
@@ -2013,6 +2042,7 @@ function submitUpstreamTest() {
                 html += '<div style="font-size:0.85rem;line-height:1.7;white-space:pre-wrap;word-break:break-word;padding:12px 14px;background:var(--bg);border-radius:var(--radius-xs);border:1px solid var(--border);">'+esc(d.reply)+'</div>';
                 html += '</div>';
             }
+            html += renderTuFingerprintBlock(d, 'rgba(16,185,129,0.12)');
             html += '</div>';
             resultDiv.innerHTML = html;
         } else {
@@ -2027,15 +2057,17 @@ function submitUpstreamTest() {
             } else if (d.error) {
                 html += '<div style="color:var(--text);margin-bottom:8px;">'+esc(d.error)+'</div>';
             }
-            if (d.auth_mode || d.request_headers) {
-                html += '<div style="font-size:0.72rem;font-weight:600;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.05em;margin:8px 0 6px;">本地面板发出的请求指纹</div>';
-                html += '<pre style="margin:0 0 8px;font-size:0.75rem;line-height:1.5;white-space:pre-wrap;word-break:break-word;padding:10px 12px;background:var(--bg);border-radius:var(--radius-xs);border:1px solid var(--border);color:var(--text-dim);">'+esc(JSON.stringify({auth_mode:d.auth_mode, headers:d.request_headers}, null, 2))+'</pre>';
+            if (d.hint) {
+                html += '<div style="color:var(--text-dim);font-size:0.8rem;margin-bottom:8px;line-height:1.5;">'+esc(d.hint)+'</div>';
             }
+            html += renderTuFingerprintBlock(d, 'rgba(239,68,68,0.12)');
             if (d.raw_body) {
                 let rawText = d.raw_body;
                 try { rawText = JSON.stringify(JSON.parse(d.raw_body), null, 2); } catch (_) {}
-                html += '<div style="font-size:0.72rem;font-weight:600;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.05em;margin:8px 0 6px;">上游原始响应</div>';
-                html += '<pre style="margin:0;font-size:0.78rem;line-height:1.5;white-space:pre-wrap;word-break:break-word;padding:10px 12px;background:var(--bg);border-radius:var(--radius-xs);border:1px solid var(--border);color:var(--text);">'+esc(rawText)+'</pre>';
+                html += '<details style="margin:8px 0;">';
+                html += '<summary style="cursor:pointer;font-size:0.8rem;color:var(--text-dim);user-select:none;">上游原始响应</summary>';
+                html += '<pre style="margin:8px 0 0;font-size:0.78rem;line-height:1.5;white-space:pre-wrap;word-break:break-word;padding:10px 12px;background:var(--bg);border-radius:var(--radius-xs);border:1px solid var(--border);color:var(--text);max-height:320px;overflow:auto;">'+esc(rawText)+'</pre>';
+                html += '</details>';
             }
             const statusCode = Number(d.status_code || 0);
             if (keyRowId !== '0' && statusCode >= 400 && statusCode < 500) {
