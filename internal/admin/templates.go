@@ -776,15 +776,10 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
             <div class="card">
                 <div class="card-header">
                     <h2>上游服务</h2>
-                    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-                        <button class="btn btn-success btn-sm" id="btn-batch-enable-upstreams" style="display:none" onclick="batchSetUpstreamsEnabled(true)">批量启用</button>
-                        <button class="btn btn-ghost btn-sm" id="btn-batch-disable-upstreams" style="display:none" onclick="batchSetUpstreamsEnabled(false)">批量禁用</button>
-                        <button class="btn btn-danger btn-sm" id="btn-batch-delete-upstreams" style="display:none" onclick="batchDeleteUpstreams()">批量删除</button>
-                        <button class="btn btn-primary btn-sm" onclick="document.getElementById('dlg-upstream').showModal()">添加上游</button>
-                    </div>
+                    <button class="btn btn-primary btn-sm" onclick="document.getElementById('dlg-upstream').showModal()">添加上游</button>
                 </div>
                 <p class="card-desc">配置转发目标。OAuth 模式会用 Authorization: Bearer 发送上游 Key。勾选行可批量启用 / 禁用 / 删除。</p>
-                <div class="toolbar">
+                <div class="toolbar" style="flex-wrap:wrap;gap:8px;align-items:center;">
                     <input class="search-input" id="upstream-search" placeholder="搜索名称 / 地址 / 备注" oninput="renderUpstreamsTable()">
                     <select id="upstream-filter-enabled" style="width:120px" onchange="renderUpstreamsTable()">
                         <option value="">全部状态</option>
@@ -792,6 +787,11 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
                         <option value="0">仅禁用</option>
                     </select>
                     <span id="upstream-count" class="count-chip">0</span>
+                    <span style="flex:1;min-width:8px"></span>
+                    <span id="upstream-selected-count" class="count-chip" style="min-width:4.5em;text-align:center;visibility:hidden">已选 0</span>
+                    <button type="button" class="btn btn-success btn-sm" id="btn-batch-enable-upstreams" disabled onclick="batchSetUpstreamsEnabled(true)">批量启用</button>
+                    <button type="button" class="btn btn-ghost btn-sm" id="btn-batch-disable-upstreams" disabled onclick="batchSetUpstreamsEnabled(false)">批量禁用</button>
+                    <button type="button" class="btn btn-danger btn-sm" id="btn-batch-delete-upstreams" disabled onclick="batchDeleteUpstreams()">批量删除</button>
                 </div>
                 <div class="table-container">
                 <table><thead><tr><th style="width:32px"><input type="checkbox" id="upstream-select-all" onchange="toggleAllUpstreamCheckboxes(this.checked)" title="全选当前列表"></th><th class="hide-on-mobile">ID</th><th>名称</th><th>地址</th><th class="hide-on-mobile">密钥</th><th class="hide-on-mobile">鉴权</th><th class="hide-on-mobile">调度</th><th class="hide-on-mobile">代理</th><th class="hide-on-mobile">优先级</th><th class="hide-on-mobile">模型模式</th><th>状态</th><th>操作</th></tr></thead>
@@ -1474,17 +1474,27 @@ function toggleAllUpstreamCheckboxes(checked) {
     updateUpstreamBatchBtns();
 }
 function updateUpstreamBatchBtns() {
+    // Keep batch controls always in-layout (disabled when empty) so checkbox clicks
+    // do not toggle display:none and reflow the table downward.
     const n = document.querySelectorAll('.upstream-cb:checked').length;
-    const show = n > 0;
+    const has = n > 0;
     const en = document.getElementById('btn-batch-enable-upstreams');
     const dis = document.getElementById('btn-batch-disable-upstreams');
     const del = document.getElementById('btn-batch-delete-upstreams');
-    if (en) { en.style.display = show ? 'inline-flex' : 'none'; en.textContent = '批量启用 (' + n + ')'; }
-    if (dis) { dis.style.display = show ? 'inline-flex' : 'none'; dis.textContent = '批量禁用 (' + n + ')'; }
-    if (del) { del.style.display = show ? 'inline-flex' : 'none'; del.textContent = '批量删除 (' + n + ')'; }
+    if (en) en.disabled = !has;
+    if (dis) dis.disabled = !has;
+    if (del) del.disabled = !has;
+    const chip = document.getElementById('upstream-selected-count');
+    if (chip) {
+        chip.textContent = '已选 ' + n;
+        chip.style.visibility = has ? 'visible' : 'hidden';
+    }
     const selAll = document.getElementById('upstream-select-all');
     const total = document.querySelectorAll('.upstream-cb').length;
-    if (selAll) selAll.checked = total > 0 && n === total;
+    if (selAll) {
+        selAll.indeterminate = has && n < total;
+        selAll.checked = total > 0 && n === total;
+    }
 }
 function renderUpstreamsTable() {
     const tbody = document.getElementById('upstreams-table');
