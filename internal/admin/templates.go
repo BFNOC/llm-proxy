@@ -402,16 +402,34 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
             font-size: 0.74rem; font-weight: 700; color: var(--ink-soft);
             letter-spacing: 0.03em; text-transform: uppercase;
         }
-        input, select, textarea {
+        /* Text fields only — NEVER apply width:100%/padding to checkbox/radio,
+           or table multi-select columns reflow on every click/focus. */
+        input:not([type="checkbox"]):not([type="radio"]), select, textarea {
             width: 100%; padding: 9px 12px;
             background: var(--paper); border: 1.5px solid var(--line);
             border-radius: var(--radius); color: var(--text);
             font-size: 0.875rem; font-family: inherit;
             transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
         }
-        input:focus, select:focus, textarea:focus {
+        input:not([type="checkbox"]):not([type="radio"]):focus,
+        select:focus, textarea:focus {
             outline: none; border-color: var(--accent); box-shadow: var(--focus);
             background: var(--surface);
+        }
+        input[type="checkbox"], input[type="radio"] {
+            width: 16px; height: 16px; min-width: 16px; max-width: 16px;
+            margin: 0; padding: 0; border: none; border-radius: 0;
+            background: transparent; box-shadow: none; accent-color: var(--accent);
+            flex-shrink: 0; vertical-align: middle; cursor: pointer;
+        }
+        input[type="checkbox"]:focus, input[type="radio"]:focus {
+            outline: 2px solid var(--accent); outline-offset: 2px;
+            box-shadow: none; border-color: transparent; background: transparent;
+        }
+        th.col-check, td.col-check {
+            width: 40px; min-width: 40px; max-width: 40px;
+            text-align: center; padding-left: 10px; padding-right: 6px;
+            box-sizing: border-box;
         }
         textarea { resize: vertical; line-height: 1.6; font-family: var(--font-mono); font-size: 0.82rem; }
         input::placeholder, textarea::placeholder { color: var(--text-faint); }
@@ -794,7 +812,7 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
                     <button type="button" class="btn btn-danger btn-sm" id="btn-batch-delete-upstreams" disabled onclick="batchDeleteUpstreams()">批量删除</button>
                 </div>
                 <div class="table-container">
-                <table><thead><tr><th style="width:32px"><input type="checkbox" id="upstream-select-all" onchange="toggleAllUpstreamCheckboxes(this.checked)" title="全选当前列表"></th><th class="hide-on-mobile">ID</th><th>名称</th><th>地址</th><th class="hide-on-mobile">密钥</th><th class="hide-on-mobile">鉴权</th><th class="hide-on-mobile">调度</th><th class="hide-on-mobile">代理</th><th class="hide-on-mobile">优先级</th><th class="hide-on-mobile">模型模式</th><th>状态</th><th>操作</th></tr></thead>
+                <table><thead><tr><th class="col-check"><input type="checkbox" id="upstream-select-all" onchange="toggleAllUpstreamCheckboxes(this.checked)" title="全选当前列表"></th><th class="hide-on-mobile">ID</th><th>名称</th><th>地址</th><th class="hide-on-mobile">密钥</th><th class="hide-on-mobile">鉴权</th><th class="hide-on-mobile">调度</th><th class="hide-on-mobile">代理</th><th class="hide-on-mobile">优先级</th><th class="hide-on-mobile">模型模式</th><th>状态</th><th>操作</th></tr></thead>
                 <tbody id="upstreams-table"><tr><td colspan="12" class="loading-cell"><span class="loading-dot"></span><span class="loading-dot"></span><span class="loading-dot"></span></td></tr></tbody></table>
                 </div>
             </div>
@@ -852,7 +870,7 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
                     <button type="submit" class="btn btn-primary" style="align-self:end;">添加</button>
                 </form>
                 <div class="table-container">
-                <table><thead><tr><th style="width:32px"><input type="checkbox" id="model-select-all" onchange="toggleAllModelCheckboxes(this.checked)"></th><th class="hide-on-mobile">ID</th><th>模式</th><th class="hide-on-mobile">添加时间</th><th>操作</th></tr></thead>
+                <table><thead><tr><th class="col-check"><input type="checkbox" id="model-select-all" onchange="toggleAllModelCheckboxes(this.checked)"></th><th class="hide-on-mobile">ID</th><th>模式</th><th class="hide-on-mobile">添加时间</th><th>操作</th></tr></thead>
                 <tbody id="models-table"></tbody></table>
                 </div>
             </div>
@@ -1548,7 +1566,7 @@ function renderUpstreamsTable() {
             ? '<span class="badge badge-orange" title="Authorization: Bearer">OAuth</span>'
             : '<span class="badge badge-muted" title="x-api-key">API Key</span>';
         const remarkHtml = u.remark ? '<div style="font-size:0.75rem;color:var(--text-dim);margin-top:2px;" title="'+esc(u.remark)+'">'+esc(u.remark.length>28?u.remark.substring(0,28)+'...':u.remark)+'</div>' : '';
-        return '<tr><td><input type="checkbox" class="upstream-cb" value="'+u.id+'" onchange="updateUpstreamBatchBtns()"></td><td class="hide-on-mobile">'+u.id+'</td><td><strong>'+esc(u.name)+'</strong>'+remarkHtml+'</td><td><code class="truncate-url" title="'+esc(u.base_url)+'">'+esc(u.base_url)+'</code></td><td class="hide-on-mobile">'+keyBadge+'</td><td class="hide-on-mobile">'+authBadge+'</td><td class="hide-on-mobile"><span style="font-size:0.75rem;color:'+schedColor+';font-weight:500;white-space:nowrap;">'+schedLabel+'</span></td><td class="hide-on-mobile">'+(u.proxy_url?'<code class="truncate-url" title="'+esc(u.proxy_url)+'">'+esc(u.proxy_url)+'</code>':'<span class="badge badge-muted">环境</span>')+'</td><td class="hide-on-mobile">'+u.priority+'</td><td class="hide-on-mobile"><div class="model-tags">'+modelHtml+'</div></td><td>'+
+        return '<tr><td class="col-check"><input type="checkbox" class="upstream-cb" value="'+u.id+'" onchange="updateUpstreamBatchBtns()"></td><td class="hide-on-mobile">'+u.id+'</td><td><strong>'+esc(u.name)+'</strong>'+remarkHtml+'</td><td><code class="truncate-url" title="'+esc(u.base_url)+'">'+esc(u.base_url)+'</code></td><td class="hide-on-mobile">'+keyBadge+'</td><td class="hide-on-mobile">'+authBadge+'</td><td class="hide-on-mobile"><span style="font-size:0.75rem;color:'+schedColor+';font-weight:500;white-space:nowrap;">'+schedLabel+'</span></td><td class="hide-on-mobile">'+(u.proxy_url?'<code class="truncate-url" title="'+esc(u.proxy_url)+'">'+esc(u.proxy_url)+'</code>':'<span class="badge badge-muted">环境</span>')+'</td><td class="hide-on-mobile">'+u.priority+'</td><td class="hide-on-mobile"><div class="model-tags">'+modelHtml+'</div></td><td>'+
         (u.enabled?'<span class="badge badge-green">启用</span>':'<span class="badge badge-red">禁用</span>')+
         '</td><td class="actions">'+
         '<button class="btn btn-ghost btn-sm" onclick="testProxy(event,'+u.id+')">测试</button>'+
@@ -2570,7 +2588,7 @@ function loadModelWhitelist() {
             return;
         }
         tbody.innerHTML = data.map(e =>
-            '<tr><td><input type="checkbox" class="model-cb" value="'+e.ID+'" onchange="updateModelBatchBtn()"></td><td class="hide-on-mobile">'+e.ID+'</td><td><code>'+esc(e.Pattern)+'</code></td><td class="hide-on-mobile">'+fmtTime(e.CreatedAt)+'</td><td>'+
+            '<tr><td class="col-check"><input type="checkbox" class="model-cb" value="'+e.ID+'" onchange="updateModelBatchBtn()"></td><td class="hide-on-mobile">'+e.ID+'</td><td><code>'+esc(e.Pattern)+'</code></td><td class="hide-on-mobile">'+fmtTime(e.CreatedAt)+'</td><td>'+
             '<button class="btn btn-danger btn-sm" onclick="deleteModelPattern('+e.ID+')">删除</button></td></tr>'
         ).join('');
     });
