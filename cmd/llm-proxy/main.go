@@ -60,7 +60,7 @@ func (h *CustomPrettyHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
 func (h *CustomPrettyHandler) WithGroup(_ string) slog.Handler      { return h }
 
 const (
-	version     = "2.6.0"
+	version     = "2.7.0"
 	defaultPort = "9002"
 )
 
@@ -277,8 +277,11 @@ func main() {
 	globalCounter := middleware.NewGlobalRequestCounter()
 	perKeyStats := middleware.NewPerKeyStatsCollector()
 
+	// In-memory capture of inbound /v1 client headers (Claude Code fingerprint debug).
+	headerCapture := middleware.NewHeaderCapture(20)
+
 	if yamlConfig.Admin.Enabled {
-		adminHandler := admin.NewAdminHandler(db, keyCache, rateLimiter, prober, dynamicProxy, auditLogger, modelFilter, globalCounter, perKeyStats, overrideCache, adminToken, version)
+		adminHandler := admin.NewAdminHandler(db, keyCache, rateLimiter, prober, dynamicProxy, auditLogger, modelFilter, globalCounter, perKeyStats, overrideCache, headerCapture, adminToken, version)
 		adminHandler.RegisterRoutes(r)
 		slog.Info("Admin interface enabled", "dashboard", "/admin/", "api", "/admin/api/")
 	}
@@ -304,6 +307,9 @@ func main() {
 	proxyChain = middleware.RequestClassifierMiddleware()(proxyChain)
 	// 全局 RPM/RPS 统计放在最外层，统计所有到达代理的请求
 	proxyChain = middleware.StatsMiddleware(globalCounter)(proxyChain)
+	// Header capture sits outside auth so we record raw Claude Code client headers
+	// even if a request later fails auth (still only when capture is enabled).
+	proxyChain = headerCapture.Middleware(proxyChain)
 	proxyChain = middleware.CORSMiddleware()(proxyChain)
 
 	r.PathPrefix("/v1/").Handler(proxyChain)

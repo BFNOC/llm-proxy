@@ -32,6 +32,7 @@ type AdminHandler struct {
 	requestCounter *middleware.GlobalRequestCounter
 	perKeyStats    *middleware.PerKeyStatsCollector
 	overrideCache  *middleware.ModelOverrideCache
+	headerCapture  *middleware.HeaderCapture
 	adminToken     string
 	version        string
 }
@@ -47,6 +48,7 @@ func NewAdminHandler(
 	rc *middleware.GlobalRequestCounter,
 	pks *middleware.PerKeyStatsCollector,
 	oc *middleware.ModelOverrideCache,
+	hc *middleware.HeaderCapture,
 	adminToken string,
 	version string,
 ) *AdminHandler {
@@ -61,6 +63,7 @@ func NewAdminHandler(
 		requestCounter: rc,
 		perKeyStats:    pks,
 		overrideCache:  oc,
+		headerCapture:  hc,
 		adminToken:     adminToken,
 		version:        version,
 	}
@@ -132,6 +135,11 @@ func (h *AdminHandler) RegisterRoutes(r *mux.Router) {
 
 	api.HandleFunc("/settings", h.getSettings).Methods("GET")
 	api.HandleFunc("/settings", h.updateSettings).Methods("PUT")
+
+	// Header capture (Claude Code / client fingerprint debugging)
+	api.HandleFunc("/header-capture", h.getHeaderCapture).Methods("GET")
+	api.HandleFunc("/header-capture", h.updateHeaderCapture).Methods("PUT")
+	api.HandleFunc("/header-capture", h.clearHeaderCapture).Methods("DELETE")
 
 	// Dashboard (serve embedded HTML)
 	r.PathPrefix("/admin/").HandlerFunc(h.serveDashboard)
@@ -1774,6 +1782,8 @@ func (h *AdminHandler) testUpstreamAPIKey(w http.ResponseWriter, r *http.Request
 		}
 		if targetKey != "" {
 			if upstream.AuthMode == "oauth" {
+				// Claude OAuth tokens need Claude Code client fingerprints;
+				// bare Bearer often gets 429 even when Claude Code still works.
 				headers["Authorization"] = "Bearer " + targetKey
 			} else {
 				headers["x-api-key"] = targetKey
@@ -1832,6 +1842,10 @@ func (h *AdminHandler) testUpstreamAPIKey(w http.ResponseWriter, r *http.Request
 	for k, v := range headers {
 		httpReq.Header.Set(k, v)
 	}
+	// Apply OAuth fingerprints after base headers so CF UA can still override.
+	if req.Protocol == "anthropic" && upstream.AuthMode == "oauth" && targetKey != "" {
+		proxy.EnsureAnthropicOAuthClientHeaders(httpReq.Header)
+	}
 	applyCFHeaders(httpReq, req.CFClearance, req.CFUserAgent)
 
 	start := time.Now()
@@ -1866,6 +1880,38 @@ func (h *AdminHandler) testUpstreamAPIKey(w http.ResponseWriter, r *http.Request
 		"latency_ms":  latency.Milliseconds(),
 		"model":       req.Model,
 		"protocol":    req.Protocol,
+		"auth_mode":   upstream.AuthMode,
+	}
+	// Echo non-secret request fingerprints so the panel can verify OAuth
+	// client headers were actually applied (debug opaque 429s).
+	if req.Protocol == "anthropic" {
+		// Echo real outbound request headers only (values for secrets are booleans
+		// via presence — never echo token material).
+		rh := map[string]string{}
+		for _, k := range []string{
+			"Anthropic-Version",
+			"Anthropic-Beta",
+			"User-Agent",
+			"X-App",
+			"Anthropic-Dangerous-Direct-Browser-Access",
+			"X-Claude-Code-Session-Id",
+			"X-Stainless-Arch",
+			"X-Stainless-Lang",
+			"X-Stainless-Os",
+			"X-Stainless-Package-Version",
+			"X-Stainless-Runtime",
+			"X-Stainless-Runtime-Version",
+			"X-Stainless-Timeout",
+			"X-Stainless-Retry-Count",
+			"Accept",
+			"Accept-Language",
+			"Content-Type",
+		} {
+			if v := httpReq.Header.Get(k); v != "" {
+				rh[k] = v
+			}
+		}
+		result["request_headers"] = rh
 	}
 	if !success {
 		result["error"] = fmt.Sprintf("上游返回 HTTP %d", resp.StatusCode)
@@ -2164,4 +2210,50 @@ func (h *AdminHandler) updateSettings(w http.ResponseWriter, r *http.Request) {
 		slog.Info("admin: updated auto_disable_threshold", "value", val)
 	}
 	jsonOK(w, map[string]interface{}{"status": "updated"})
+}
+
+// getHeaderCapture returns capture enabled flag + recent snapshots (newest first).
+func (h *AdminHandler) getHeaderCapture(w http.ResponseWriter, r *http.Request) {
+	if h.headerCapture == nil {
+		jsonOK(w, map[string]interface{}{"enabled": false, "captures": []interface{}{}})
+		return
+	}
+	enabled, items := h.headerCapture.Snapshot()
+	jsonOK(w, map[string]interface{}{
+		"enabled":  enabled,
+		"captures": items,
+		"hint":     "将 Claude Code 的 ANTHROPIC_BASE_URL 指向本代理 /v1，开启抓取后发一条消息即可。Authorization / x-api-key 已脱敏。",
+	})
+}
+
+// updateHeaderCapture enables or disables capture: {"enabled": true}.
+func (h *AdminHandler) updateHeaderCapture(w http.ResponseWriter, r *http.Request) {
+	if h.headerCapture == nil {
+		jsonError(w, http.StatusServiceUnavailable, "header capture not available")
+		return
+	}
+	var body struct {
+		Enabled *bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if body.Enabled == nil {
+		jsonError(w, http.StatusBadRequest, "enabled is required")
+		return
+	}
+	h.headerCapture.SetEnabled(*body.Enabled)
+	slog.Info("admin: header capture toggled", "enabled", *body.Enabled)
+	jsonOK(w, map[string]interface{}{"enabled": *body.Enabled})
+}
+
+// clearHeaderCapture drops stored snapshots (does not change enabled flag).
+func (h *AdminHandler) clearHeaderCapture(w http.ResponseWriter, r *http.Request) {
+	if h.headerCapture == nil {
+		jsonError(w, http.StatusServiceUnavailable, "header capture not available")
+		return
+	}
+	h.headerCapture.Clear()
+	jsonOK(w, map[string]interface{}{"status": "cleared"})
 }

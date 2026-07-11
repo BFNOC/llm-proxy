@@ -904,6 +904,24 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
             </div>
             <div class="card">
                 <div class="card-header">
+                    <h2>客户端 Header 抓取</h2>
+                    <div style="display:flex;gap:8px;align-items:center;">
+                        <span id="hc-status" class="count-chip">已关闭</span>
+                        <button class="btn btn-primary btn-sm" id="hc-toggle" onclick="toggleHeaderCapture()">开启抓取</button>
+                        <button class="btn btn-ghost btn-sm" onclick="loadHeaderCapture()">刷新</button>
+                        <button class="btn btn-danger btn-sm" onclick="clearHeaderCapture()">清空</button>
+                    </div>
+                </div>
+                <p class="card-desc">
+                    用于抓取 Claude Code 打到本代理的<strong>完整入站 Header</strong>（密钥已脱敏）。
+                    将 CC 的 <code>ANTHROPIC_BASE_URL</code> 设为
+                    <code id="hc-base-url">http://127.0.0.1:端口</code>
+                    ，用下游 Key 发一条消息后点刷新。
+                </p>
+                <div id="hc-list" class="empty-state" style="padding:20px;">尚未抓取到请求。先开启抓取，再从 Claude Code 发一条消息。</div>
+            </div>
+            <div class="card">
+                <div class="card-header">
                     <h2>额度 JSON 解析</h2>
                 </div>
                 <p class="card-desc">粘贴 new-api 查额返回的 JSON，解析并展示额度。</p>
@@ -1411,7 +1429,7 @@ function showTab(name, btn) {
     if (name === 'status') { loadStatus(); startStatusTimer(); } else { stopStatusTimer(); }
     if (name === 'models') loadModelWhitelist();
     if (name === 'keys') loadKeys();
-    if (name === 'tools') { loadTestModels(); loadSettings(); }
+    if (name === 'tools') { loadTestModels(); loadSettings(); loadHeaderCapture(); }
 }
 function startStatusTimer() {
     stopStatusTimer();
@@ -1662,13 +1680,17 @@ function handleAPIKeyInputKeydown(event, mode) {
 }
 
 // --- Per-Key API Key Management ---
+let manageKeysFetchSeq = 0;
 function openManageKeysDialog(upstreamId) {
     document.getElementById('mk-upstream-id').value = upstreamId;
     const list = document.getElementById('mk-keys-list');
     list.innerHTML = '<div style="text-align:center;padding:16px;color:var(--text-dim)">加载中...</div>';
     const dlg = document.getElementById('dlg-manage-keys');
     if (!dlg.open) dlg.showModal();
+    const seq = ++manageKeysFetchSeq;
     api('/upstreams/'+upstreamId+'/apikeys').then(data => {
+        // Ignore stale responses so a slow GET cannot overwrite a newer toggle refresh.
+        if (seq !== manageKeysFetchSeq) return;
         manageAPIKeyRows = data || [];
         if (manageAPIKeyRows.length === 0) {
             list.innerHTML = '<div class="empty-state">无 API Key</div>';
@@ -1676,11 +1698,12 @@ function openManageKeysDialog(upstreamId) {
         }
         list.innerHTML = manageAPIKeyRows.map((kd, idx) => {
             const shortKey = kd.key.length > 20 ? kd.key.substring(0, 10) + '...' + kd.key.substring(kd.key.length - 8) : kd.key;
-            return '<div style="display:flex;align-items:center;gap:10px;padding:12px 14px;background:var(--bg);border-radius:var(--radius-sm);margin-bottom:8px;border:1px solid '+(kd.enabled?'var(--border)':'rgba(239,68,68,0.2)')+';'+(!kd.enabled?'opacity:0.6;':'')+'">'+
+            const isOn = !!kd.enabled;
+            return '<div style="display:flex;align-items:center;gap:10px;padding:12px 14px;background:var(--bg);border-radius:var(--radius-sm);margin-bottom:8px;border:1px solid '+(isOn?'var(--border)':'rgba(239,68,68,0.2)')+';'+(isOn?'':'opacity:0.6;')+'">'+
                 '<code style="flex:1;font-size:0.82rem;word-break:break-all;" title="'+esc(kd.key)+'">'+esc(shortKey)+'</code>'+
-                '<button class="btn btn-ghost btn-sm" onclick="copyManagedAPIKey('+idx+',this)">复制</button>'+
-                '<button class="btn '+(kd.enabled?'btn-ghost':'btn-success')+' btn-sm" onclick="toggleAPIKey('+upstreamId+','+kd.row_id+','+(!kd.enabled)+')">'+(kd.enabled?'禁用':'启用')+'</button>'+
-                '<button class="btn btn-danger btn-sm" onclick="deleteAPIKey('+upstreamId+','+kd.row_id+')">删除</button>'+
+                '<button type="button" class="btn btn-ghost btn-sm" onclick="copyManagedAPIKey('+idx+',this)">复制</button>'+
+                '<button type="button" class="btn '+(isOn?'btn-ghost':'btn-success')+' btn-sm" onclick="toggleAPIKey('+upstreamId+','+kd.row_id+','+(!isOn)+')">'+(isOn?'禁用':'启用')+'</button>'+
+                '<button type="button" class="btn btn-danger btn-sm" onclick="deleteAPIKey('+upstreamId+','+kd.row_id+')">删除</button>'+
                 '</div>';
         }).join('');
     });
@@ -1694,7 +1717,10 @@ function copyManagedAPIKey(index, btn) {
 
 function toggleAPIKey(upstreamId, keyRowId, enabled) {
     api('/upstreams/'+upstreamId+'/apikeys/'+keyRowId+'/enabled', {method:'PUT', body: JSON.stringify({enabled:enabled})}).then(d => {
-        if(d.error) toastErr(d.error); else { loadUpstreams(); openManageKeysDialog(upstreamId); toastOk('已更新'); }
+        if(d.error) { toastErr(d.error); return; }
+        loadUpstreams();
+        openManageKeysDialog(upstreamId);
+        toastOk(enabled ? '已启用' : '已禁用');
     });
 }
 
@@ -1793,6 +1819,10 @@ function submitUpstreamTest() {
                 html += '<div style="color:var(--text);margin-bottom:8px;">'+esc(d.error_message)+'</div>';
             } else if (d.error) {
                 html += '<div style="color:var(--text);margin-bottom:8px;">'+esc(d.error)+'</div>';
+            }
+            if (d.auth_mode || d.request_headers) {
+                html += '<div style="font-size:0.72rem;font-weight:600;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.05em;margin:8px 0 6px;">本地面板发出的请求指纹</div>';
+                html += '<pre style="margin:0 0 8px;font-size:0.75rem;line-height:1.5;white-space:pre-wrap;word-break:break-word;padding:10px 12px;background:var(--bg);border-radius:var(--radius-xs);border:1px solid var(--border);color:var(--text-dim);">'+esc(JSON.stringify({auth_mode:d.auth_mode, headers:d.request_headers}, null, 2))+'</pre>';
             }
             if (d.raw_body) {
                 let rawText = d.raw_body;
@@ -2503,6 +2533,92 @@ async function batchDeleteModelPatterns() {
 }
 
 // --- Settings ---
+// --- Header Capture (Claude Code fingerprints) ---
+function loadHeaderCapture() {
+    const baseEl = document.getElementById('hc-base-url');
+    if (baseEl) baseEl.textContent = location.origin + '/v1';
+    api('/header-capture').then(d => {
+        if (d.error) { toastErr(d.error); return; }
+        const on = !!d.enabled;
+        const st = document.getElementById('hc-status');
+        const btn = document.getElementById('hc-toggle');
+        if (st) {
+            st.textContent = on ? '抓取中' : '已关闭';
+            st.style.color = on ? 'var(--green)' : '';
+        }
+        if (btn) btn.textContent = on ? '停止抓取' : '开启抓取';
+        renderHeaderCaptures(d.captures || []);
+    }).catch(() => toastErr('加载 Header 抓取失败'));
+}
+function toggleHeaderCapture() {
+    api('/header-capture').then(d => {
+        const next = !d.enabled;
+        return api('/header-capture', {method:'PUT', body: JSON.stringify({enabled: next})});
+    }).then(d => {
+        if (d.error) { toastErr(d.error); return; }
+        toastOk(d.enabled ? '已开启抓取，请用 Claude Code 发一条消息' : '已停止抓取');
+        loadHeaderCapture();
+    });
+}
+function clearHeaderCapture() {
+    api('/header-capture', {method:'DELETE'}).then(d => {
+        if (d.error) { toastErr(d.error); return; }
+        toastOk('已清空');
+        loadHeaderCapture();
+    });
+}
+function renderHeaderCaptures(list) {
+    const box = document.getElementById('hc-list');
+    if (!box) return;
+    if (!list.length) {
+        box.className = 'empty-state';
+        box.style.padding = '20px';
+        box.innerHTML = '尚未抓取到请求。先开启抓取，再从 Claude Code 发一条消息。';
+        return;
+    }
+    box.className = '';
+    box.style.padding = '0';
+    box.innerHTML = list.map((c, idx) => {
+        const flat = c.flat || {};
+        const keys = Object.keys(flat).sort((a,b) => a.localeCompare(b));
+        const interesting = keys.filter(k => {
+            const lk = k.toLowerCase();
+            return lk.indexOf('anthropic') >= 0 || lk === 'user-agent' || lk === 'x-app' ||
+                lk.indexOf('claude') >= 0 || lk === 'content-type' || lk === 'accept' ||
+                lk.indexOf('stainless') >= 0;
+        });
+        const interestingObj = {};
+        interesting.forEach(k => { interestingObj[k] = flat[k]; });
+        const fullJson = JSON.stringify(flat, null, 2);
+        const interestingJson = JSON.stringify(interestingObj, null, 2);
+        const time = c.time ? fmtTime(c.time) : '-';
+        return '<div style="border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px;margin-bottom:12px;background:var(--paper);">'+
+            '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px;">'+
+            '<span class="badge badge-purple">#'+esc(String(c.id||idx+1))+'</span>'+
+            '<code style="font-size:0.8rem;">'+esc(c.method||'')+' '+esc(c.path||'')+(c.query?'?'+esc(c.query):'')+'</code>'+
+            '<span class="count-chip">'+esc(time)+'</span>'+
+            '<span class="spacer" style="flex:1"></span>'+
+            '<button class="btn btn-ghost btn-sm" data-copy-hc="'+idx+'-i">复制关键头</button>'+
+            '<button class="btn btn-primary btn-sm" data-copy-hc="'+idx+'-f">复制全部 Flat</button>'+
+            '</div>'+
+            '<div style="font-size:0.72rem;font-weight:600;color:var(--text-dim);margin-bottom:6px;">关键头（anthropic / UA / x-app …）</div>'+
+            '<pre id="hc-pre-i-'+idx+'" style="margin:0 0 10px;font-size:0.75rem;line-height:1.45;white-space:pre-wrap;word-break:break-word;padding:10px 12px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-xs);max-height:220px;overflow:auto;">'+esc(interestingJson)+'</pre>'+
+            '<details><summary style="cursor:pointer;font-size:0.8rem;color:var(--text-dim);margin-bottom:6px;">全部 Header（含多值）</summary>'+
+            '<pre id="hc-pre-f-'+idx+'" style="margin:0;font-size:0.72rem;line-height:1.45;white-space:pre-wrap;word-break:break-word;padding:10px 12px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-xs);max-height:320px;overflow:auto;">'+esc(fullJson)+'</pre>'+
+            '</details></div>';
+    }).join('');
+    // bind copy buttons
+    box.querySelectorAll('[data-copy-hc]').forEach(btn => {
+        btn.onclick = function() {
+            const id = btn.getAttribute('data-copy-hc');
+            const parts = id.split('-');
+            const idx = parts[0], kind = parts[1];
+            const pre = document.getElementById(kind === 'i' ? 'hc-pre-i-'+idx : 'hc-pre-f-'+idx);
+            if (pre) copyTextToClipboard(pre.textContent, btn);
+        };
+    });
+}
+
 function loadSettings() {
     api('/settings').then(data => {
         if (data) {

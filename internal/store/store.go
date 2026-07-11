@@ -350,11 +350,22 @@ func (s *Store) GetUpstreamAllAPIKeys(upstreamID int64) ([]APIKeyInfo, error) {
 }
 
 // SetAPIKeyEnabled 启用或禁用某个上游的指定 API Key（按 row ID）。
+// 手动启用时同步清零 consecutive_failures，避免随后 prober 的
+// AutoDisableFailingKeys 因历史失败计数立刻再次禁用（表现为「启用要点两次」）。
 func (s *Store) SetAPIKeyEnabled(upstreamID, keyRowID int64, enabled bool) error {
-	res, err := s.db.Exec(
-		`UPDATE upstream_api_keys SET enabled = ? WHERE id = ? AND upstream_id = ?`,
-		enabled, keyRowID, upstreamID,
-	)
+	var res sql.Result
+	var err error
+	if enabled {
+		res, err = s.db.Exec(
+			`UPDATE upstream_api_keys SET enabled = 1, consecutive_failures = 0 WHERE id = ? AND upstream_id = ?`,
+			keyRowID, upstreamID,
+		)
+	} else {
+		res, err = s.db.Exec(
+			`UPDATE upstream_api_keys SET enabled = 0 WHERE id = ? AND upstream_id = ?`,
+			keyRowID, upstreamID,
+		)
+	}
 	if err != nil {
 		return fmt.Errorf("update api key enabled: %w", err)
 	}
