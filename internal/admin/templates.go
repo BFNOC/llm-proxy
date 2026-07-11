@@ -913,12 +913,12 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
                     </div>
                 </div>
                 <p class="card-desc">
-                    <strong>完整抓取</strong>入站 Header + Body（含 Authorization 等明文密钥）。仅在可信本机使用。
-                    将 CC 的 <code>ANTHROPIC_BASE_URL</code> 设为
+                    <strong>完整抓取</strong>入站 <code>/v1/*</code> Header + Body（含密钥明文）。支持 <strong>Claude Code</strong> 与 <strong>Codex</strong>。仅在可信本机使用。
+                    将客户端 Base URL 设为
                     <code id="hc-base-url">http://127.0.0.1:端口</code>
-                    ，用下游 Key 发一条消息后点刷新。Body 默认最多保留 2MB。
+                    （CC: <code>ANTHROPIC_BASE_URL</code>；Codex: <code>OPENAI_BASE_URL</code> 等），发一条消息后刷新。Body 默认最多 2MB。
                 </p>
-                <div id="hc-list" class="empty-state" style="padding:20px;">尚未抓取到请求。先开启抓取，再从 Claude Code 发一条消息。</div>
+                <div id="hc-list" class="empty-state" style="padding:20px;">尚未抓取到请求。先开启抓取，再从 Claude Code 或 Codex 发一条消息。</div>
             </div>
             <div class="card">
                 <div class="card-header">
@@ -1176,6 +1176,15 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
                 <label>提示词</label>
                 <input id="tu-prompt" value="你是什么模型？">
             </div>
+        </div>
+        <div class="form-group" id="tu-spoof-row">
+            <label style="display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none;">
+                <input type="checkbox" id="tu-client-spoof" checked style="width:16px;height:16px;accent-color:var(--accent);">
+                <span>客户端伪装</span>
+            </label>
+            <p id="tu-spoof-hint" style="color:var(--text-dim);font-size:0.78rem;margin-top:6px;line-height:1.5;">
+                开启后：OAuth Anthropic 使用 Claude Code 指纹（MacOS + 随机 session）；Responses 使用 Codex 指纹（随机 Session_id）。仅影响本次测试，真实客户端透传不受影响。
+            </p>
         </div>
         <div id="tu-result" style="display:none;"></div>
     </div>
@@ -1740,14 +1749,17 @@ function openTestUpstreamDialog(upstreamId, resetFields) {
     const currentProtocol = document.getElementById('tu-protocol').value || 'openai';
     const currentModel = document.getElementById('tu-model').value || '';
     const currentPrompt = document.getElementById('tu-prompt').value || '你是什么模型？';
+    const currentSpoof = document.getElementById('tu-client-spoof').checked;
     document.getElementById('tu-upstream-id').value = upstreamId;
     document.getElementById('tu-result').style.display = 'none';
     document.getElementById('tu-protocol').value = resetFields ? 'openai' : currentProtocol;
     document.getElementById('tu-model').value = resetFields ? '' : currentModel;
     document.getElementById('tu-prompt').value = resetFields ? '你是什么模型？' : currentPrompt;
+    document.getElementById('tu-client-spoof').checked = resetFields ? true : currentSpoof;
     const protocol = resetFields ? 'openai' : currentProtocol;
     // 加载测试模型列表并更新 datalist
     loadTestModels().then(() => updateTuModelDatalist(protocol));
+    updateTuSpoofHint(protocol);
     const sel = document.getElementById('tu-key-select');
     sel.innerHTML = '<option value="">加载中...</option>';
     const dlg = document.getElementById('dlg-test-upstream');
@@ -1769,6 +1781,19 @@ function onTuProtocolChange() {
     const proto = document.getElementById('tu-protocol').value;
     document.getElementById('tu-model').value = '';
     updateTuModelDatalist(proto);
+    updateTuSpoofHint(proto);
+}
+
+function updateTuSpoofHint(proto) {
+    const hint = document.getElementById('tu-spoof-hint');
+    if (!hint) return;
+    if (proto === 'anthropic') {
+        hint.textContent = '开启后：OAuth Anthropic 走 Claude Code 伪装（MacOS Stainless + 随机 session/device + utls）。API Key 模式仍为简单探测。仅影响本次测试。';
+    } else if (proto === 'responses') {
+        hint.textContent = '开启后：按真实 codex-tui 伪装（Mac OS UA、Originator、Session-Id/Thread-Id、X-Codex-*、随机 session/install/turn）。仅影响本次测试，真实 Codex 透传不受影响。';
+    } else {
+        hint.textContent = 'Chat Completions 协议下伪装开关无效，始终发送标准 OpenAI 探测请求。';
+    }
 }
 
 function submitUpstreamTest() {
@@ -1781,10 +1806,12 @@ function submitUpstreamTest() {
     btn.disabled = true;
     resultDiv.style.display = 'none';
     const cfBody = getCFConfig(parseInt(upstreamId));
+    const clientSpoof = !!document.getElementById('tu-client-spoof').checked;
     api('/upstreams/'+upstreamId+'/apikeys/'+keyRowId+'/test', {method:'POST', body: JSON.stringify({
         protocol: document.getElementById('tu-protocol').value,
         model: document.getElementById('tu-model').value,
         prompt: document.getElementById('tu-prompt').value,
+        client_spoof: clientSpoof,
         cf_clearance: cfBody ? cfBody.cf_clearance : '',
         cf_user_agent: cfBody ? cfBody.cf_user_agent : ''
     })}).then(d => {
@@ -1796,9 +1823,10 @@ function submitUpstreamTest() {
             html += '<div style="background:linear-gradient(135deg,rgba(16,185,129,0.1),rgba(16,185,129,0.05));padding:14px 18px;display:flex;align-items:center;justify-content:space-between;">';
             html += '<div style="display:flex;align-items:center;gap:8px;"><span style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:var(--green);color:#fff;font-size:12px;">&#10003;</span><span style="font-weight:600;color:var(--green);font-size:0.9rem;">连接成功</span></div>';
             html += '<span style="font-size:0.78rem;color:var(--text-dim);background:rgba(16,185,129,0.08);padding:2px 10px;border-radius:999px;">'+d.latency_ms+'ms</span></div>';
-            html += '<div style="padding:14px 18px;border-top:1px solid rgba(16,185,129,0.12);font-size:0.82rem;color:var(--text-dim);display:flex;gap:20px;">';
+            html += '<div style="padding:14px 18px;border-top:1px solid rgba(16,185,129,0.12);font-size:0.82rem;color:var(--text-dim);display:flex;gap:20px;flex-wrap:wrap;">';
             html += '<span>模型: <strong style="color:var(--text);font-weight:600;">'+esc(d.actual_model||d.model)+'</strong></span>';
             html += '<span>协议: <strong style="color:var(--text);font-weight:600;">'+esc(d.protocol)+'</strong></span>';
+            html += '<span>伪装: <strong style="color:var(--text);font-weight:600;">'+(d.client_spoof?(d.spoof_client||'on'):'off')+'</strong></span>';
             html += '</div>';
             if (d.reply) {
                 html += '<div style="border-top:1px solid rgba(16,185,129,0.12);padding:14px 18px;">';
@@ -2556,7 +2584,7 @@ function toggleHeaderCapture() {
         return api('/header-capture', {method:'PUT', body: JSON.stringify({enabled: next})});
     }).then(d => {
         if (d.error) { toastErr(d.error); return; }
-        toastOk(d.enabled ? '已开启抓取，请用 Claude Code 发一条消息' : '已停止抓取');
+        toastOk(d.enabled ? '已开启抓取，请用 Claude Code 或 Codex 发一条消息' : '已停止抓取');
         loadHeaderCapture();
     });
 }
@@ -2567,13 +2595,18 @@ function clearHeaderCapture() {
         loadHeaderCapture();
     });
 }
+function hcFamilyBadge(family) {
+    if (family === 'claude_code') return '<span class="badge badge-purple">Claude Code</span>';
+    if (family === 'codex') return '<span class="badge" style="background:rgba(59,130,246,0.12);color:#2563eb;border:1px solid rgba(59,130,246,0.25);">Codex</span>';
+    return '<span class="badge badge-orange">Other</span>';
+}
 function renderHeaderCaptures(list) {
     const box = document.getElementById('hc-list');
     if (!box) return;
     if (!list.length) {
         box.className = 'empty-state';
         box.style.padding = '20px';
-        box.innerHTML = '尚未抓取到请求。先开启抓取，再从 Claude Code 发一条消息。';
+        box.innerHTML = '尚未抓取到请求。先开启抓取，再从 Claude Code 或 Codex 发一条消息。';
         return;
     }
     box.className = '';
@@ -2587,7 +2620,10 @@ function renderHeaderCaptures(list) {
             const lk = k.toLowerCase();
             return lk.indexOf('anthropic') >= 0 || lk === 'user-agent' || lk === 'x-app' ||
                 lk.indexOf('claude') >= 0 || lk === 'content-type' || lk === 'accept' ||
-                lk.indexOf('stainless') >= 0 || lk === 'authorization' || lk === 'x-api-key';
+                lk.indexOf('stainless') >= 0 || lk === 'authorization' || lk === 'x-api-key' ||
+                lk === 'originator' || lk.indexOf('openai') >= 0 || lk.indexOf('codex') >= 0 ||
+                lk === 'session_id' || lk === 'session-id' || lk === 'conversation_id' ||
+                lk === 'chatgpt-account-id' || lk.indexOf('x-client-request') >= 0;
         });
         const interestingObj = {};
         interesting.forEach(k => { interestingObj[k] = flat[k]; });
@@ -2599,6 +2635,7 @@ function renderHeaderCaptures(list) {
         try { bodyPretty = JSON.stringify(JSON.parse(bodyText), null, 2); } catch (_) {}
         const time = c.time ? fmtTime(c.time) : '-';
         const trunc = c.body_truncated ? ' <span class="badge badge-orange">body 已截断</span>' : '';
+        const family = c.client_family || 'other';
         const meta = [
             c.host ? 'Host '+c.host : '',
             c.proto || '',
@@ -2609,6 +2646,7 @@ function renderHeaderCaptures(list) {
         return '<div style="border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px;margin-bottom:12px;background:var(--paper);">'+
             '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px;">'+
             '<span class="badge badge-purple">#'+esc(String(c.id||idx+1))+'</span>'+
+            hcFamilyBadge(family)+
             '<code style="font-size:0.8rem;">'+esc(c.method||'')+' '+esc(c.path||'')+(c.query?'?'+esc(c.query):'')+'</code>'+
             '<span class="count-chip">'+esc(time)+'</span>'+trunc+
             '<span class="spacer" style="flex:1"></span>'+

@@ -1711,11 +1711,12 @@ func (h *AdminHandler) testUpstreamAPIKey(w http.ResponseWriter, r *http.Request
 	}
 
 	var req struct {
-		Protocol    string `json:"protocol"`      // "openai" or "anthropic"
-		Model       string `json:"model"`         // 测试模型
-		Prompt      string `json:"prompt"`        // 测试提示词
-		CFClearance string `json:"cf_clearance"`  // CF 绕过
-		CFUserAgent string `json:"cf_user_agent"` // CF 绕过
+		Protocol     string `json:"protocol"`      // "openai" | "anthropic" | "responses"
+		Model        string `json:"model"`         // 测试模型
+		Prompt       string `json:"prompt"`        // 测试提示词
+		CFClearance  string `json:"cf_clearance"`  // CF 绕过
+		CFUserAgent  string `json:"cf_user_agent"` // CF 绕过
+		ClientSpoof  *bool  `json:"client_spoof"`  // 客户端伪装：Claude Code / Codex（仅本测试）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid JSON")
@@ -1733,7 +1734,7 @@ func (h *AdminHandler) testUpstreamAPIKey(w http.ResponseWriter, r *http.Request
 			// Align with sub2api DefaultTestModel (lighter than Opus for probe).
 			req.Model = proxy.DefaultAnthropicTestModel
 		case "responses":
-			req.Model = "gpt-4o"
+			req.Model = proxy.DefaultCodexTestModel
 		default:
 			req.Model = "gpt-4o-mini"
 		}
@@ -1770,18 +1771,28 @@ func (h *AdminHandler) testUpstreamAPIKey(w http.ResponseWriter, r *http.Request
 	var body []byte
 	var testURL string
 	var headers map[string]string
-	var testIdentity proxy.ClaudeCodeTestIdentity // admin OAuth test only; randomized per click
+	var claudeIdentity proxy.ClaudeCodeTestIdentity // admin OAuth+spoof only
+	var codexIdentity proxy.CodexTestIdentity       // admin responses+spoof only
 	oauthAnthropic := req.Protocol == "anthropic" && upstream.AuthMode == "oauth"
+	// client_spoof: when true, build Claude Code / Codex shaped probe (test panel only).
+	// Default ON for OAuth Anthropic and responses (Codex); OFF for plain OpenAI/API-key probes.
+	clientSpoof := false
+	if req.ClientSpoof != nil {
+		clientSpoof = *req.ClientSpoof
+	} else {
+		clientSpoof = oauthAnthropic || req.Protocol == "responses"
+	}
+	spoofClaude := clientSpoof && oauthAnthropic
+	spoofCodex := clientSpoof && req.Protocol == "responses"
 
 	switch req.Protocol {
 	case "anthropic":
-		// Align with sub2api TestAccountConnection:
-		// URL ?beta=true for OAuth, Claude Code–shaped body (system + metadata + stream).
-		// Identity (session/device) is random per test — does not affect live CC proxy traffic.
-		testURL = proxy.AnthropicMessagesTestURL(upstream.BaseURL, oauthAnthropic)
-		if oauthAnthropic {
+		// OAuth+spoof: sub2api-style Claude Code body (?beta=true, system/metadata/stream).
+		// Otherwise: minimal messages probe. Never affects live CC proxy traffic.
+		testURL = proxy.AnthropicMessagesTestURL(upstream.BaseURL, spoofClaude)
+		if spoofClaude {
 			var err error
-			body, testIdentity, err = proxy.BuildClaudeCodeTestPayload(req.Model, req.Prompt)
+			body, claudeIdentity, err = proxy.BuildClaudeCodeTestPayload(req.Model, req.Prompt)
 			if err != nil {
 				jsonOK(w, map[string]interface{}{
 					"success": false,
@@ -1798,7 +1809,7 @@ func (h *AdminHandler) testUpstreamAPIKey(w http.ResponseWriter, r *http.Request
 		}
 		headers = map[string]string{}
 		if targetKey != "" {
-			if oauthAnthropic {
+			if upstream.AuthMode == "oauth" {
 				headers["Authorization"] = "Bearer " + targetKey
 			} else {
 				headers["x-api-key"] = targetKey
@@ -1806,11 +1817,23 @@ func (h *AdminHandler) testUpstreamAPIKey(w http.ResponseWriter, r *http.Request
 		}
 	case "responses":
 		testURL = strings.TrimRight(upstream.BaseURL, "/") + "/v1/responses"
-		body, _ = json.Marshal(map[string]interface{}{
-			"model":  req.Model,
-			"input":  req.Prompt,
-			"stream": false,
-		})
+		if spoofCodex {
+			var err error
+			body, codexIdentity, err = proxy.BuildCodexResponsesTestPayload(req.Model, req.Prompt)
+			if err != nil {
+				jsonOK(w, map[string]interface{}{
+					"success": false,
+					"error":   fmt.Sprintf("构造 Codex 测试体失败: %v", err),
+				})
+				return
+			}
+		} else {
+			body, _ = json.Marshal(map[string]interface{}{
+				"model":  req.Model,
+				"input":  req.Prompt,
+				"stream": false,
+			})
+		}
 		headers = map[string]string{}
 		if targetKey != "" {
 			headers["Authorization"] = "Bearer " + targetKey
@@ -1829,9 +1852,9 @@ func (h *AdminHandler) testUpstreamAPIKey(w http.ResponseWriter, r *http.Request
 	}
 
 	// 构造带代理的 HTTP client。
-	// OAuth 探测使用 utls（Claude Code / Node.js 24 TLS 指纹），对齐 sub2api DoWithTLS。
+	// OAuth Claude 伪装探测使用 utls（Node.js TLS 指纹）；其余用普通 transport。
 	var transport *http.Transport
-	if oauthAnthropic {
+	if spoofClaude {
 		transport, err = proxy.BuildTransportUTLS(upstream.ProxyURL)
 	} else {
 		transport, err = proxy.BuildTransport(upstream.ProxyURL)
@@ -1843,9 +1866,8 @@ func (h *AdminHandler) testUpstreamAPIKey(w http.ResponseWriter, r *http.Request
 		})
 		return
 	}
-	// OAuth/stream tests can take longer than a simple ping.
 	timeout := 30 * time.Second
-	if oauthAnthropic {
+	if spoofClaude || spoofCodex {
 		timeout = 90 * time.Second
 	}
 	client := &http.Client{
@@ -1868,16 +1890,22 @@ func (h *AdminHandler) testUpstreamAPIKey(w http.ResponseWriter, r *http.Request
 	for k, v := range headers {
 		httpReq.Header.Set(k, v)
 	}
-	// OAuth: full Claude Code client headers (MacOS stainless + random session, test-only).
-	// API-key anthropic: still set version only.
+	// Apply client spoof headers only when toggle is on (test panel only).
 	if req.Protocol == "anthropic" && targetKey != "" {
-		if oauthAnthropic {
-			// Session header must match body metadata.user_id.session_id.
-			proxy.ApplyClaudeCodeTestHeaders(httpReq.Header, true, testIdentity.SessionID)
-			// Ensure Authorization not wiped
+		if spoofClaude {
+			proxy.ApplyClaudeCodeTestHeaders(httpReq.Header, true, claudeIdentity.SessionID)
 			httpReq.Header.Set("Authorization", "Bearer "+targetKey)
 		} else {
 			httpReq.Header.Set("anthropic-version", "2023-06-01")
+			if upstream.AuthMode == "oauth" {
+				httpReq.Header.Set("Authorization", "Bearer "+targetKey)
+			}
+		}
+	}
+	if spoofCodex {
+		proxy.ApplyCodexTestHeaders(httpReq.Header, codexIdentity)
+		if targetKey != "" {
+			httpReq.Header.Set("Authorization", "Bearer "+targetKey)
 		}
 	}
 	applyCFHeaders(httpReq, req.CFClearance, req.CFUserAgent)
@@ -1909,15 +1937,16 @@ func (h *AdminHandler) testUpstreamAPIKey(w http.ResponseWriter, r *http.Request
 
 	success := resp.StatusCode >= 200 && resp.StatusCode < 300
 	result := map[string]interface{}{
-		"success":     success,
-		"status_code": resp.StatusCode,
-		"latency_ms":  latency.Milliseconds(),
-		"model":       req.Model,
-		"protocol":    req.Protocol,
-		"auth_mode":   upstream.AuthMode,
-		"test_url":    testURL,
+		"success":      success,
+		"status_code":  resp.StatusCode,
+		"latency_ms":   latency.Milliseconds(),
+		"model":        req.Model,
+		"protocol":     req.Protocol,
+		"auth_mode":    upstream.AuthMode,
+		"test_url":     testURL,
+		"client_spoof": clientSpoof,
 	}
-	if req.Protocol == "anthropic" {
+	if spoofClaude || spoofCodex || req.Protocol == "anthropic" {
 		rh := map[string]string{}
 		for _, k := range []string{
 			"Anthropic-Version",
@@ -1935,6 +1964,14 @@ func (h *AdminHandler) testUpstreamAPIKey(w http.ResponseWriter, r *http.Request
 			"X-Stainless-Runtime-Version",
 			"X-Stainless-Timeout",
 			"X-Stainless-Retry-Count",
+			"Originator",
+			"OpenAI-Beta",
+			"Session-Id",
+			"Thread-Id",
+			"X-Client-Request-Id",
+			"X-Codex-Beta-Features",
+			"X-Codex-Window-Id",
+			"X-Codex-Turn-Metadata",
 			"Accept",
 			"Accept-Language",
 			"Content-Type",
@@ -1944,9 +1981,16 @@ func (h *AdminHandler) testUpstreamAPIKey(w http.ResponseWriter, r *http.Request
 			}
 		}
 		result["request_headers"] = rh
-		if oauthAnthropic && testIdentity.SessionID != "" {
-			result["test_session_id"] = testIdentity.SessionID
-			result["test_device_id"] = testIdentity.DeviceID
+		if spoofClaude && claudeIdentity.SessionID != "" {
+			result["test_session_id"] = claudeIdentity.SessionID
+			result["test_device_id"] = claudeIdentity.DeviceID
+			result["spoof_client"] = "claude_code"
+		}
+		if spoofCodex && codexIdentity.SessionID != "" {
+			result["test_session_id"] = codexIdentity.SessionID
+			result["test_installation_id"] = codexIdentity.InstallationID
+			result["test_turn_id"] = codexIdentity.TurnID
+			result["spoof_client"] = "codex"
 		}
 	}
 	if !success {
@@ -1983,8 +2027,12 @@ func (h *AdminHandler) testUpstreamAPIKey(w http.ResponseWriter, r *http.Request
 				}
 			}
 		}
-		if oauthAnthropic {
-			result["hint"] = "OAuth 探测仅用于管理面板测试（MacOS 指纹 + 每次随机 session/device，与真实 CC 透传无关）。若仍 429，上游可能只放行真实 Claude Code 会话；请以请求日志 200 为准。"
+		if spoofClaude {
+			result["hint"] = "已开启 Claude Code 客户端伪装（仅管理面板测试）。若仍 429，上游可能只放行真实 CC 会话；可关掉「客户端伪装」对比，或以请求日志 200 为准。"
+		} else if spoofCodex {
+			result["hint"] = "已开启 Codex 客户端伪装（仅管理面板测试）。session/originator 均为随机生成，不影响真实 Codex 透传。"
+		} else if oauthAnthropic && !clientSpoof {
+			result["hint"] = "OAuth 上游未使用客户端伪装（裸 Bearer 探测）。若 429，可打开「客户端伪装」再试。"
 		}
 	} else {
 		// 尝试提取回复内容
@@ -2247,16 +2295,29 @@ func (h *AdminHandler) updateSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 // getHeaderCapture returns capture enabled flag + recent snapshots (newest first).
+// Each item is annotated with client_family: claude_code | codex | other.
 func (h *AdminHandler) getHeaderCapture(w http.ResponseWriter, r *http.Request) {
 	if h.headerCapture == nil {
 		jsonOK(w, map[string]interface{}{"enabled": false, "captures": []interface{}{}})
 		return
 	}
 	enabled, items := h.headerCapture.Snapshot()
+	// Enrich for UI badges without mutating the middleware store.
+	type captureView struct {
+		middleware.CapturedHeaderRequest
+		ClientFamily string `json:"client_family"`
+	}
+	out := make([]captureView, 0, len(items))
+	for _, it := range items {
+		out = append(out, captureView{
+			CapturedHeaderRequest: it,
+			ClientFamily:          proxy.DetectInboundClientFamily(it.Path, it.Flat),
+		})
+	}
 	jsonOK(w, map[string]interface{}{
 		"enabled":  enabled,
-		"captures": items,
-		"hint":     "完整抓取入站 Header + Body（含密钥明文）。仅在可信本机开启。将 Claude Code 的 ANTHROPIC_BASE_URL 指向本代理 /v1，发一条消息后刷新。",
+		"captures": out,
+		"hint":     "完整抓取入站 /v1 Header + Body（含密钥明文）。支持 Claude Code 与 Codex。仅在可信本机开启。CC: ANTHROPIC_BASE_URL；Codex: OPENAI_BASE_URL / 代理指向本机 /v1。",
 	})
 }
 
