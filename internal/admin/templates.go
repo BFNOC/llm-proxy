@@ -913,10 +913,10 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
                     </div>
                 </div>
                 <p class="card-desc">
-                    用于抓取 Claude Code 打到本代理的<strong>完整入站 Header</strong>（密钥已脱敏）。
+                    <strong>完整抓取</strong>入站 Header + Body（含 Authorization 等明文密钥）。仅在可信本机使用。
                     将 CC 的 <code>ANTHROPIC_BASE_URL</code> 设为
                     <code id="hc-base-url">http://127.0.0.1:端口</code>
-                    ，用下游 Key 发一条消息后点刷新。
+                    ，用下游 Key 发一条消息后点刷新。Body 默认最多保留 2MB。
                 </p>
                 <div id="hc-list" class="empty-state" style="padding:20px;">尚未抓取到请求。先开启抓取，再从 Claude Code 发一条消息。</div>
             </div>
@@ -2578,6 +2578,8 @@ function renderHeaderCaptures(list) {
     }
     box.className = '';
     box.style.padding = '0';
+    // Keep raw list for full-dump copy (includes secrets + body).
+    window.__hcCaptures = list;
     box.innerHTML = list.map((c, idx) => {
         const flat = c.flat || {};
         const keys = Object.keys(flat).sort((a,b) => a.localeCompare(b));
@@ -2585,35 +2587,61 @@ function renderHeaderCaptures(list) {
             const lk = k.toLowerCase();
             return lk.indexOf('anthropic') >= 0 || lk === 'user-agent' || lk === 'x-app' ||
                 lk.indexOf('claude') >= 0 || lk === 'content-type' || lk === 'accept' ||
-                lk.indexOf('stainless') >= 0;
+                lk.indexOf('stainless') >= 0 || lk === 'authorization' || lk === 'x-api-key';
         });
         const interestingObj = {};
         interesting.forEach(k => { interestingObj[k] = flat[k]; });
         const fullJson = JSON.stringify(flat, null, 2);
+        const multiJson = JSON.stringify(c.headers || {}, null, 2);
         const interestingJson = JSON.stringify(interestingObj, null, 2);
+        let bodyText = c.body || '';
+        let bodyPretty = bodyText;
+        try { bodyPretty = JSON.stringify(JSON.parse(bodyText), null, 2); } catch (_) {}
         const time = c.time ? fmtTime(c.time) : '-';
+        const trunc = c.body_truncated ? ' <span class="badge badge-orange">body 已截断</span>' : '';
+        const meta = [
+            c.host ? 'Host '+c.host : '',
+            c.proto || '',
+            c.content_length != null ? 'CL '+c.content_length : '',
+            c.body_bytes != null ? 'captured '+c.body_bytes+'B' : '',
+            c.remote_addr || ''
+        ].filter(Boolean).join(' · ');
         return '<div style="border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px;margin-bottom:12px;background:var(--paper);">'+
             '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px;">'+
             '<span class="badge badge-purple">#'+esc(String(c.id||idx+1))+'</span>'+
             '<code style="font-size:0.8rem;">'+esc(c.method||'')+' '+esc(c.path||'')+(c.query?'?'+esc(c.query):'')+'</code>'+
-            '<span class="count-chip">'+esc(time)+'</span>'+
+            '<span class="count-chip">'+esc(time)+'</span>'+trunc+
             '<span class="spacer" style="flex:1"></span>'+
-            '<button class="btn btn-ghost btn-sm" data-copy-hc="'+idx+'-i">复制关键头</button>'+
-            '<button class="btn btn-primary btn-sm" data-copy-hc="'+idx+'-f">复制全部 Flat</button>'+
+            '<button type="button" class="btn btn-ghost btn-sm" data-copy-hc="'+idx+'-i">复制关键头</button>'+
+            '<button type="button" class="btn btn-ghost btn-sm" data-copy-hc="'+idx+'-f">复制全部头</button>'+
+            '<button type="button" class="btn btn-ghost btn-sm" data-copy-hc="'+idx+'-b">复制 Body</button>'+
+            '<button type="button" class="btn btn-primary btn-sm" data-copy-hc="'+idx+'-a">复制完整 Dump</button>'+
             '</div>'+
-            '<div style="font-size:0.72rem;font-weight:600;color:var(--text-dim);margin-bottom:6px;">关键头（anthropic / UA / x-app …）</div>'+
+            (meta ? '<div style="font-size:0.75rem;color:var(--text-dim);margin:-4px 0 10px;">'+esc(meta)+'</div>' : '')+
+            '<div style="font-size:0.72rem;font-weight:600;color:var(--text-dim);margin-bottom:6px;">关键头（含 Authorization 明文）</div>'+
             '<pre id="hc-pre-i-'+idx+'" style="margin:0 0 10px;font-size:0.75rem;line-height:1.45;white-space:pre-wrap;word-break:break-word;padding:10px 12px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-xs);max-height:220px;overflow:auto;">'+esc(interestingJson)+'</pre>'+
-            '<details><summary style="cursor:pointer;font-size:0.8rem;color:var(--text-dim);margin-bottom:6px;">全部 Header（含多值）</summary>'+
-            '<pre id="hc-pre-f-'+idx+'" style="margin:0;font-size:0.72rem;line-height:1.45;white-space:pre-wrap;word-break:break-word;padding:10px 12px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-xs);max-height:320px;overflow:auto;">'+esc(fullJson)+'</pre>'+
+            '<details open><summary style="cursor:pointer;font-size:0.8rem;color:var(--text-dim);margin-bottom:6px;">全部 Header（Flat）</summary>'+
+            '<pre id="hc-pre-f-'+idx+'" style="margin:0 0 10px;font-size:0.72rem;line-height:1.45;white-space:pre-wrap;word-break:break-word;padding:10px 12px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-xs);max-height:280px;overflow:auto;">'+esc(fullJson)+'</pre>'+
+            '</details>'+
+            '<details><summary style="cursor:pointer;font-size:0.8rem;color:var(--text-dim);margin-bottom:6px;">Header 多值原始</summary>'+
+            '<pre id="hc-pre-m-'+idx+'" style="margin:0 0 10px;font-size:0.72rem;line-height:1.45;white-space:pre-wrap;word-break:break-word;padding:10px 12px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-xs);max-height:200px;overflow:auto;">'+esc(multiJson)+'</pre>'+
+            '</details>'+
+            '<details open><summary style="cursor:pointer;font-size:0.8rem;color:var(--text-dim);margin-bottom:6px;">Body'+(c.body_truncated?'（已截断）':'')+' · '+esc(String(c.body_bytes||0))+' bytes</summary>'+
+            '<pre id="hc-pre-b-'+idx+'" style="margin:0;font-size:0.72rem;line-height:1.45;white-space:pre-wrap;word-break:break-word;padding:10px 12px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-xs);max-height:420px;overflow:auto;">'+esc(bodyPretty||'(empty)')+'</pre>'+
             '</details></div>';
     }).join('');
-    // bind copy buttons
     box.querySelectorAll('[data-copy-hc]').forEach(btn => {
         btn.onclick = function() {
             const id = btn.getAttribute('data-copy-hc');
             const parts = id.split('-');
-            const idx = parts[0], kind = parts[1];
-            const pre = document.getElementById(kind === 'i' ? 'hc-pre-i-'+idx : 'hc-pre-f-'+idx);
+            const idx = parseInt(parts[0], 10), kind = parts[1];
+            if (kind === 'a') {
+                const raw = (window.__hcCaptures || [])[idx];
+                if (raw) copyTextToClipboard(JSON.stringify(raw, null, 2), btn);
+                return;
+            }
+            const map = {i:'hc-pre-i-', f:'hc-pre-f-', b:'hc-pre-b-', m:'hc-pre-m-'};
+            const pre = document.getElementById((map[kind]||'hc-pre-f-')+idx);
             if (pre) copyTextToClipboard(pre.textContent, btn);
         };
     });

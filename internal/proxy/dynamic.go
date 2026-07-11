@@ -407,8 +407,15 @@ func (dp *DynamicProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// for middleware processing (e.g. model filtering).
 		outReq.Header.Del("Accept-Encoding")
 
-		// 按上游代理配置获取对应 transport
-		upTransport, err := BuildTransport(active.ProxyURL)
+		// 按上游代理配置获取对应 transport。
+		// OAuth 上游使用 Node/Claude Code TLS 指纹（utls），降低被识别为第三方客户端的概率。
+		var upTransport *http.Transport
+		var err error
+		if active.AuthMode == AuthModeOAuth {
+			upTransport, err = BuildTransportUTLS(active.ProxyURL)
+		} else {
+			upTransport, err = BuildTransport(active.ProxyURL)
+		}
 		if err != nil {
 			if !isLast {
 				slog.Warn("proxy: failed to build transport, trying next",

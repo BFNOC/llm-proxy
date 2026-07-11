@@ -102,3 +102,19 @@ func TestBuildTransport_EmptyProxyURL_HasValidProxy(t *testing.T) {
 	assert.NoError(t, err)
 	_ = proxyURL // 不关心具体值，只要不 panic 且不报错
 }
+
+func TestBuildTransportUTLS_Builds(t *testing.T) {
+	tr, err := BuildTransportUTLS("")
+	require.NoError(t, err)
+	require.NotNil(t, tr)
+	assert.NotNil(t, tr.DialTLSContext)
+	assert.False(t, tr.ForceAttemptHTTP2)
+
+	trHTTP, err := BuildTransportUTLS("http://127.0.0.1:18081")
+	require.NoError(t, err)
+	assert.NotNil(t, trHTTP.DialTLSContext)
+
+	trSocks, err := BuildTransportUTLS("socks5://127.0.0.1:1080")
+	require.NoError(t, err)
+	assert.NotNil(t, trSocks.DialTLSContext)
+}

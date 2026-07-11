@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -1729,7 +1730,8 @@ func (h *AdminHandler) testUpstreamAPIKey(w http.ResponseWriter, r *http.Request
 	if req.Model == "" {
 		switch req.Protocol {
 		case "anthropic":
-			req.Model = "claude-sonnet-4-20250514"
+			// Align with sub2api DefaultTestModel (lighter than Opus for probe).
+			req.Model = proxy.DefaultAnthropicTestModel
 		case "responses":
 			req.Model = "gpt-4o"
 		default:
@@ -1768,22 +1770,35 @@ func (h *AdminHandler) testUpstreamAPIKey(w http.ResponseWriter, r *http.Request
 	var body []byte
 	var testURL string
 	var headers map[string]string
+	var testIdentity proxy.ClaudeCodeTestIdentity // admin OAuth test only; randomized per click
+	oauthAnthropic := req.Protocol == "anthropic" && upstream.AuthMode == "oauth"
 
 	switch req.Protocol {
 	case "anthropic":
-		testURL = strings.TrimRight(upstream.BaseURL, "/") + "/v1/messages"
-		body, _ = json.Marshal(map[string]interface{}{
-			"model":      req.Model,
-			"max_tokens": 100,
-			"messages":   []map[string]string{{"role": "user", "content": req.Prompt}},
-		})
-		headers = map[string]string{
-			"anthropic-version": "2023-06-01",
+		// Align with sub2api TestAccountConnection:
+		// URL ?beta=true for OAuth, Claude Code–shaped body (system + metadata + stream).
+		// Identity (session/device) is random per test — does not affect live CC proxy traffic.
+		testURL = proxy.AnthropicMessagesTestURL(upstream.BaseURL, oauthAnthropic)
+		if oauthAnthropic {
+			var err error
+			body, testIdentity, err = proxy.BuildClaudeCodeTestPayload(req.Model, req.Prompt)
+			if err != nil {
+				jsonOK(w, map[string]interface{}{
+					"success": false,
+					"error":   fmt.Sprintf("构造 Claude Code 测试体失败: %v", err),
+				})
+				return
+			}
+		} else {
+			body, _ = json.Marshal(map[string]interface{}{
+				"model":      req.Model,
+				"max_tokens": 100,
+				"messages":   []map[string]string{{"role": "user", "content": req.Prompt}},
+			})
 		}
+		headers = map[string]string{}
 		if targetKey != "" {
-			if upstream.AuthMode == "oauth" {
-				// Claude OAuth tokens need Claude Code client fingerprints;
-				// bare Bearer often gets 429 even when Claude Code still works.
+			if oauthAnthropic {
 				headers["Authorization"] = "Bearer " + targetKey
 			} else {
 				headers["x-api-key"] = targetKey
@@ -1813,8 +1828,14 @@ func (h *AdminHandler) testUpstreamAPIKey(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	// 构造带代理的 HTTP client
-	transport, err := proxy.BuildTransport(upstream.ProxyURL)
+	// 构造带代理的 HTTP client。
+	// OAuth 探测使用 utls（Claude Code / Node.js 24 TLS 指纹），对齐 sub2api DoWithTLS。
+	var transport *http.Transport
+	if oauthAnthropic {
+		transport, err = proxy.BuildTransportUTLS(upstream.ProxyURL)
+	} else {
+		transport, err = proxy.BuildTransport(upstream.ProxyURL)
+	}
 	if err != nil {
 		jsonOK(w, map[string]interface{}{
 			"success": false,
@@ -1822,15 +1843,20 @@ func (h *AdminHandler) testUpstreamAPIKey(w http.ResponseWriter, r *http.Request
 		})
 		return
 	}
+	// OAuth/stream tests can take longer than a simple ping.
+	timeout := 30 * time.Second
+	if oauthAnthropic {
+		timeout = 90 * time.Second
+	}
 	client := &http.Client{
 		Transport: transport,
-		Timeout:   30 * time.Second,
+		Timeout:   timeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
 	}
 
-	httpReq, err := http.NewRequestWithContext(r.Context(), "POST", testURL, strings.NewReader(string(body)))
+	httpReq, err := http.NewRequestWithContext(r.Context(), "POST", testURL, bytes.NewReader(body))
 	if err != nil {
 		jsonOK(w, map[string]interface{}{
 			"success": false,
@@ -1842,9 +1868,17 @@ func (h *AdminHandler) testUpstreamAPIKey(w http.ResponseWriter, r *http.Request
 	for k, v := range headers {
 		httpReq.Header.Set(k, v)
 	}
-	// Apply OAuth fingerprints after base headers so CF UA can still override.
-	if req.Protocol == "anthropic" && upstream.AuthMode == "oauth" && targetKey != "" {
-		proxy.EnsureAnthropicOAuthClientHeaders(httpReq.Header)
+	// OAuth: full Claude Code client headers (MacOS stainless + random session, test-only).
+	// API-key anthropic: still set version only.
+	if req.Protocol == "anthropic" && targetKey != "" {
+		if oauthAnthropic {
+			// Session header must match body metadata.user_id.session_id.
+			proxy.ApplyClaudeCodeTestHeaders(httpReq.Header, true, testIdentity.SessionID)
+			// Ensure Authorization not wiped
+			httpReq.Header.Set("Authorization", "Bearer "+targetKey)
+		} else {
+			httpReq.Header.Set("anthropic-version", "2023-06-01")
+		}
 	}
 	applyCFHeaders(httpReq, req.CFClearance, req.CFUserAgent)
 
@@ -1862,7 +1896,7 @@ func (h *AdminHandler) testUpstreamAPIKey(w http.ResponseWriter, r *http.Request
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 262144))
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 512*1024))
 	if err != nil {
 		jsonOK(w, map[string]interface{}{
 			"success":     false,
@@ -1881,12 +1915,9 @@ func (h *AdminHandler) testUpstreamAPIKey(w http.ResponseWriter, r *http.Request
 		"model":       req.Model,
 		"protocol":    req.Protocol,
 		"auth_mode":   upstream.AuthMode,
+		"test_url":    testURL,
 	}
-	// Echo non-secret request fingerprints so the panel can verify OAuth
-	// client headers were actually applied (debug opaque 429s).
 	if req.Protocol == "anthropic" {
-		// Echo real outbound request headers only (values for secrets are booleans
-		// via presence — never echo token material).
 		rh := map[string]string{}
 		for _, k := range []string{
 			"Anthropic-Version",
@@ -1895,9 +1926,10 @@ func (h *AdminHandler) testUpstreamAPIKey(w http.ResponseWriter, r *http.Request
 			"X-App",
 			"Anthropic-Dangerous-Direct-Browser-Access",
 			"X-Claude-Code-Session-Id",
+			"x-client-request-id",
 			"X-Stainless-Arch",
 			"X-Stainless-Lang",
-			"X-Stainless-Os",
+			"X-Stainless-OS",
 			"X-Stainless-Package-Version",
 			"X-Stainless-Runtime",
 			"X-Stainless-Runtime-Version",
@@ -1912,6 +1944,10 @@ func (h *AdminHandler) testUpstreamAPIKey(w http.ResponseWriter, r *http.Request
 			}
 		}
 		result["request_headers"] = rh
+		if oauthAnthropic && testIdentity.SessionID != "" {
+			result["test_session_id"] = testIdentity.SessionID
+			result["test_device_id"] = testIdentity.DeviceID
+		}
 	}
 	if !success {
 		result["error"] = fmt.Sprintf("上游返回 HTTP %d", resp.StatusCode)
@@ -1947,21 +1983,19 @@ func (h *AdminHandler) testUpstreamAPIKey(w http.ResponseWriter, r *http.Request
 				}
 			}
 		}
+		if oauthAnthropic {
+			result["hint"] = "OAuth 探测仅用于管理面板测试（MacOS 指纹 + 每次随机 session/device，与真实 CC 透传无关）。若仍 429，上游可能只放行真实 Claude Code 会话；请以请求日志 200 为准。"
+		}
 	} else {
 		// 尝试提取回复内容
 		switch req.Protocol {
 		case "anthropic":
-			var anthropicResp struct {
-				Content []struct {
-					Text string `json:"text"`
-				} `json:"content"`
-				Model string `json:"model"`
+			reply, actualModel := proxy.ParseAnthropicStreamReply(respBody)
+			if reply != "" {
+				result["reply"] = reply
 			}
-			if json.Unmarshal(respBody, &anthropicResp) == nil {
-				if len(anthropicResp.Content) > 0 {
-					result["reply"] = anthropicResp.Content[0].Text
-				}
-				result["actual_model"] = anthropicResp.Model
+			if actualModel != "" {
+				result["actual_model"] = actualModel
 			}
 		case "responses":
 			var responsesResp struct {
@@ -2222,7 +2256,7 @@ func (h *AdminHandler) getHeaderCapture(w http.ResponseWriter, r *http.Request) 
 	jsonOK(w, map[string]interface{}{
 		"enabled":  enabled,
 		"captures": items,
-		"hint":     "将 Claude Code 的 ANTHROPIC_BASE_URL 指向本代理 /v1，开启抓取后发一条消息即可。Authorization / x-api-key 已脱敏。",
+		"hint":     "完整抓取入站 Header + Body（含密钥明文）。仅在可信本机开启。将 Claude Code 的 ANTHROPIC_BASE_URL 指向本代理 /v1，发一条消息后刷新。",
 	})
 }
 

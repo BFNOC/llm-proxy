@@ -1,37 +1,47 @@
 package middleware
 
 import (
+	"bytes"
+	"io"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 )
 
 const (
-	headerCaptureDefaultMax = 20
-	// Sensitive headers are stored in redacted form only.
+	headerCaptureDefaultMax     = 20
+	headerCaptureDefaultBodyMax = 2 * 1024 * 1024 // store up to 2 MiB body text per capture
+	headerCaptureMaxRead        = 8 * 1024 * 1024 // hard cap when buffering request for tee
 )
 
-// CapturedHeaderRequest is one inbound /v1 request snapshot for debugging
-// (e.g. Claude Code client fingerprints).
+// CapturedHeaderRequest is one full inbound /v1 request snapshot for debugging
+// (headers + body). Values are stored as received — secrets are NOT redacted.
+// Only enable on a trusted admin host.
 type CapturedHeaderRequest struct {
-	ID        int64               `json:"id"`
-	Time      time.Time           `json:"time"`
-	Method    string              `json:"method"`
-	Path      string              `json:"path"`
-	Query     string              `json:"query,omitempty"`
-	RemoteAddr string             `json:"remote_addr,omitempty"`
-	Headers   map[string][]string `json:"headers"` // multi-value, secrets redacted
-	// Flat is single-value map (first value) for easy copy into curl/tests.
-	Flat map[string]string `json:"flat"`
+	ID             int64               `json:"id"`
+	Time           time.Time           `json:"time"`
+	Method         string              `json:"method"`
+	Path           string              `json:"path"`
+	Query          string              `json:"query,omitempty"`
+	Proto          string              `json:"proto,omitempty"`
+	Host           string              `json:"host,omitempty"`
+	RemoteAddr     string              `json:"remote_addr,omitempty"`
+	ContentLength  int64               `json:"content_length"`
+	Headers        map[string][]string `json:"headers"` // multi-value, full values
+	Flat           map[string]string   `json:"flat"`    // first value per key
+	Body           string              `json:"body,omitempty"`
+	BodyBytes      int                 `json:"body_bytes"`
+	BodyTruncated  bool                `json:"body_truncated"`
+	BodyCaptureMax int                 `json:"body_capture_max"`
 }
 
-// HeaderCapture records inbound request headers while enabled.
+// HeaderCapture records full inbound requests while enabled.
 // Safe for concurrent use.
 type HeaderCapture struct {
 	mu      sync.Mutex
 	enabled bool
 	max     int
+	bodyMax int
 	seq     int64
 	items   []CapturedHeaderRequest
 }
@@ -41,15 +51,15 @@ func NewHeaderCapture(maxItems int) *HeaderCapture {
 	if maxItems <= 0 {
 		maxItems = headerCaptureDefaultMax
 	}
-	return &HeaderCapture{max: maxItems}
+	return &HeaderCapture{max: maxItems, bodyMax: headerCaptureDefaultBodyMax}
 }
 
-// Middleware records headers for every request that reaches the proxy chain
-// when capture is enabled. It never blocks or alters the request.
+// Middleware records the full request for every /v1 hit when capture is enabled.
+// Body is buffered and restored so downstream handlers still receive the payload.
 func (c *HeaderCapture) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if c != nil && c.IsEnabled() {
-			c.Capture(r)
+			r = c.Capture(r)
 		}
 		next.ServeHTTP(w, r)
 	})
@@ -111,38 +121,91 @@ func (c *HeaderCapture) Latest() (CapturedHeaderRequest, bool) {
 	return c.items[0], true
 }
 
-// Capture stores a redacted header snapshot of r.
-func (c *HeaderCapture) Capture(r *http.Request) {
+// Capture stores a full snapshot of r (headers + body) and returns r with a
+// restored body so the rest of the chain can read it.
+func (c *HeaderCapture) Capture(r *http.Request) *http.Request {
 	if c == nil || r == nil {
-		return
+		return r
 	}
+
+	bodyMax := c.bodyMax
+	if bodyMax <= 0 {
+		bodyMax = headerCaptureDefaultBodyMax
+	}
+
 	headers := make(map[string][]string, len(r.Header))
 	flat := make(map[string]string, len(r.Header))
 	for k, vv := range r.Header {
-		redacted := make([]string, len(vv))
-		for i, v := range vv {
-			redacted[i] = redactHeaderValue(k, v)
+		copied := make([]string, len(vv))
+		copy(copied, vv)
+		headers[k] = copied
+		if len(copied) > 0 {
+			flat[k] = copied[0]
 		}
-		headers[k] = redacted
-		if len(redacted) > 0 {
-			flat[k] = redacted[0]
+	}
+
+	var (
+		bodyStr    string
+		bodyBytes  int
+		truncated  bool
+		fullBody   []byte
+		origLength = r.ContentLength
+	)
+
+	if r.Body != nil {
+		// Buffer the whole request (capped) so we can both capture and forward.
+		lr := io.LimitReader(r.Body, headerCaptureMaxRead+1)
+		buf, err := io.ReadAll(lr)
+		_, _ = io.Copy(io.Discard, r.Body)
+		_ = r.Body.Close()
+		if err != nil {
+			r.Body = io.NopCloser(bytes.NewReader(nil))
+			r.ContentLength = 0
+		} else {
+			if len(buf) > headerCaptureMaxRead {
+				// Extremely large body: keep first maxRead for proxy, mark truncated.
+				buf = buf[:headerCaptureMaxRead]
+				truncated = true
+			}
+			fullBody = buf
+			// What we store for admin may be further limited.
+			store := buf
+			if len(store) > bodyMax {
+				store = store[:bodyMax]
+				truncated = true
+			}
+			bodyBytes = len(store)
+			bodyStr = string(store)
+
+			r.Body = io.NopCloser(bytes.NewReader(fullBody))
+			r.ContentLength = int64(len(fullBody))
+			r.GetBody = func() (io.ReadCloser, error) {
+				return io.NopCloser(bytes.NewReader(fullBody)), nil
+			}
 		}
 	}
 
 	item := CapturedHeaderRequest{
-		Time:       time.Now(),
-		Method:     r.Method,
-		Path:       r.URL.Path,
-		Query:      r.URL.RawQuery,
-		RemoteAddr: r.RemoteAddr,
-		Headers:    headers,
-		Flat:       flat,
+		Time:           time.Now(),
+		Method:         r.Method,
+		Path:           r.URL.Path,
+		Query:          r.URL.RawQuery,
+		Proto:          r.Proto,
+		Host:           r.Host,
+		RemoteAddr:     r.RemoteAddr,
+		ContentLength:  origLength,
+		Headers:        headers,
+		Flat:           flat,
+		Body:           bodyStr,
+		BodyBytes:      bodyBytes,
+		BodyTruncated:  truncated,
+		BodyCaptureMax: bodyMax,
 	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.enabled {
-		return
+		return r
 	}
 	c.seq++
 	item.ID = c.seq
@@ -151,44 +214,5 @@ func (c *HeaderCapture) Capture(r *http.Request) {
 	if len(c.items) > c.max {
 		c.items = c.items[:c.max]
 	}
-}
-
-func redactHeaderValue(name, value string) string {
-	n := strings.ToLower(name)
-	switch n {
-	case "authorization":
-		return redactAuthorization(value)
-	case "x-api-key", "api-key", "proxy-authorization":
-		return redactSecret(value)
-	case "cookie", "set-cookie":
-		if value == "" {
-			return ""
-		}
-		return "[redacted cookie]"
-	default:
-		return value
-	}
-}
-
-func redactAuthorization(v string) string {
-	v = strings.TrimSpace(v)
-	if v == "" {
-		return ""
-	}
-	parts := strings.SplitN(v, " ", 2)
-	if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
-		return "Bearer " + redactSecret(parts[1])
-	}
-	return redactSecret(v)
-}
-
-func redactSecret(v string) string {
-	v = strings.TrimSpace(v)
-	if v == "" {
-		return ""
-	}
-	if len(v) <= 12 {
-		return v[:2] + "…" + v[len(v)-2:]
-	}
-	return v[:8] + "…" + v[len(v)-6:]
+	return r
 }
