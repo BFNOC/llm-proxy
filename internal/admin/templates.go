@@ -1174,31 +1174,33 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
 
 <!-- Upstream Test Dialog -->
 <dialog id="dlg-test-upstream">
-    <div class="dlg-header"><h3>测试上游连接</h3><p class="dlg-desc">选择 Key 与协议，验证连通性</p></div>
+    <div class="dlg-header"><h3>测试上游连接</h3><p class="dlg-desc">模型与协议独立选择（同一模型可对应多种协议）；每个上游会记住上次配置</p></div>
     <div class="dlg-body">
         <input type="hidden" id="tu-upstream-id">
+        <input type="hidden" id="tu-protocol" value="openai">
         <div class="form-group">
             <label>使用 Key</label>
             <select id="tu-key-select"></select>
         </div>
         <div class="form-group">
-            <label>协议</label>
-            <select id="tu-protocol" onchange="onTuProtocolChange()">
-                <option value="openai">OpenAI (Chat Completions)</option>
-                <option value="anthropic">Anthropic (Messages)</option>
-                <option value="responses">OpenAI (Responses / Codex)</option>
-            </select>
+            <label>模型</label>
+            <input id="tu-model" value="" placeholder="输入或从列表选择模型" list="tu-model-list" oninput="onTuModelInput()" onchange="onTuModelInput()">
+            <datalist id="tu-model-list"></datalist>
         </div>
-        <div class="dlg-grid-2">
-            <div class="form-group">
-                <label>模型</label>
-                <input id="tu-model" value="" placeholder="输入或选择模型" list="tu-model-list">
-                <datalist id="tu-model-list"></datalist>
+        <div class="form-group">
+            <label>协议 <span id="tu-proto-hint" style="font-weight:500;text-transform:none;letter-spacing:0;color:var(--text-dim);font-size:0.75rem;"></span></label>
+            <div id="tu-proto-pills" style="display:flex;flex-wrap:wrap;gap:8px;">
+                <button type="button" class="btn btn-sm tu-proto-pill" data-proto="openai" onclick="setTuProtocol('openai')">Chat Completions</button>
+                <button type="button" class="btn btn-sm tu-proto-pill" data-proto="anthropic" onclick="setTuProtocol('anthropic')">Anthropic</button>
+                <button type="button" class="btn btn-sm tu-proto-pill" data-proto="responses" onclick="setTuProtocol('responses')">Responses / Codex</button>
             </div>
-            <div class="form-group">
-                <label>提示词</label>
-                <input id="tu-prompt" value="你是什么模型？">
-            </div>
+            <p style="color:var(--text-dim);font-size:0.75rem;margin-top:6px;line-height:1.45;">
+                高亮的是当前协议；带「多协议」提示时该模型在测试模型库里登记了多种协议，可随时切换。
+            </p>
+        </div>
+        <div class="form-group">
+            <label>提示词</label>
+            <input id="tu-prompt" value="你是什么模型？">
         </div>
         <div class="form-group" id="tu-spoof-row">
             <label style="display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none;">
@@ -1206,7 +1208,7 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
                 <span>客户端伪装</span>
             </label>
             <p id="tu-spoof-hint" style="color:var(--text-dim);font-size:0.78rem;margin-top:6px;line-height:1.5;">
-                开启后：OAuth Anthropic 使用 Claude Code 指纹（MacOS + 随机 session）；Responses 使用 Codex 指纹（随机 Session_id）。仅影响本次测试，真实客户端透传不受影响。
+                开启后：OAuth Anthropic 使用 Claude Code 指纹；Responses 使用 Codex 指纹。仅影响本次测试。
             </p>
         </div>
         <div id="tu-result" style="display:none;"></div>
@@ -1821,47 +1823,142 @@ async function deleteAPIKey(upstreamId, keyRowId) {
 }
 
 function testProxy(e, id) {
-    // 打开测试对话框，让用户选择 Key、协议、模型
     openTestUpstreamDialog(id, true);
 }
 
+const TU_PROTO_ORDER = ['openai', 'anthropic', 'responses'];
+const TU_PROTO_LABEL = {
+    openai: 'Chat Completions',
+    anthropic: 'Anthropic',
+    responses: 'Responses / Codex'
+};
+function tuLastKey(upstreamId) { return 'tu-last-v2-' + upstreamId; }
+function loadTuLastConfig(upstreamId) {
+    try {
+        const raw = localStorage.getItem(tuLastKey(upstreamId));
+        return raw ? JSON.parse(raw) : null;
+    } catch (_) { return null; }
+}
+function saveTuLastConfig(upstreamId, cfg) {
+    try { localStorage.setItem(tuLastKey(upstreamId), JSON.stringify(cfg)); } catch (_) {}
+}
+function inferTuProtocol(upstream) {
+    if (!upstream) return 'openai';
+    if ((upstream.auth_mode || '') === 'oauth') return 'anthropic';
+    const url = (upstream.base_url || '').toLowerCase();
+    if (url.indexOf('anthropic') >= 0) return 'anthropic';
+    return 'openai';
+}
+/** Protocols registered for a model name in test_models (may be multiple). */
+function protocolsForModel(modelName) {
+    const name = (modelName || '').trim();
+    if (!name) return [];
+    const set = {};
+    (allTestModels || []).forEach(m => {
+        if ((m.name || '') === name) set[m.protocol || 'openai'] = true;
+    });
+    return TU_PROTO_ORDER.filter(p => set[p]);
+}
+function pickProtocolForModel(modelName, preferred) {
+    const avail = protocolsForModel(modelName);
+    if (preferred && (!avail.length || avail.indexOf(preferred) >= 0)) return preferred;
+    if (avail.length) return avail[0];
+    return preferred || 'openai';
+}
+function setTuProtocol(proto, opts) {
+    const p = TU_PROTO_ORDER.indexOf(proto) >= 0 ? proto : 'openai';
+    const el = document.getElementById('tu-protocol');
+    if (el) el.value = p;
+    // Style pills: active + "registered for this model" markers.
+    const model = (document.getElementById('tu-model').value || '').trim();
+    const avail = protocolsForModel(model);
+    document.querySelectorAll('.tu-proto-pill').forEach(btn => {
+        const bp = btn.getAttribute('data-proto');
+        const active = bp === p;
+        const registered = avail.indexOf(bp) >= 0;
+        btn.classList.remove('btn-primary', 'btn-ghost', 'btn-success');
+        if (active) btn.classList.add('btn-primary');
+        else btn.classList.add('btn-ghost');
+        // Dot marker for multi-protocol registration without locking choice.
+        btn.style.boxShadow = registered && !active ? 'inset 0 0 0 1px var(--accent)' : '';
+        btn.title = registered
+            ? (TU_PROTO_LABEL[bp] + '（此模型在测试库中有登记）')
+            : (TU_PROTO_LABEL[bp] + '（可手动选择，即使未在测试库登记）');
+    });
+    const hint = document.getElementById('tu-proto-hint');
+    if (hint) {
+        if (avail.length > 1) hint.textContent = '· 此模型登记了 ' + avail.length + ' 种协议，可切换';
+        else if (avail.length === 1) hint.textContent = '· 测试库登记：' + (TU_PROTO_LABEL[avail[0]] || avail[0]);
+        else hint.textContent = model ? '· 未在测试库登记，协议可自由选' : '';
+    }
+    updateTuSpoofHint(p);
+    if (!(opts && opts.skipDatalist)) updateTuModelDatalist();
+}
+function onTuModelInput() {
+    // Keep model free-text; only auto-adjust protocol when current one is
+    // incompatible with registered multi-protocol set (or none selected yet).
+    const model = (document.getElementById('tu-model').value || '').trim();
+    const cur = document.getElementById('tu-protocol').value || 'openai';
+    const avail = protocolsForModel(model);
+    let next = cur;
+    if (avail.length && avail.indexOf(cur) < 0) {
+        next = avail[0];
+    }
+    setTuProtocol(next, {skipDatalist: true});
+}
+function getTuFormConfig() {
+    return {
+        protocol: document.getElementById('tu-protocol').value || 'openai',
+        model: (document.getElementById('tu-model').value || '').trim(),
+        prompt: document.getElementById('tu-prompt').value || '你是什么模型？',
+        client_spoof: !!document.getElementById('tu-client-spoof').checked,
+        key_row_id: document.getElementById('tu-key-select').value
+    };
+}
+
 function openTestUpstreamDialog(upstreamId, resetFields) {
-    const currentProtocol = document.getElementById('tu-protocol').value || 'openai';
-    const currentModel = document.getElementById('tu-model').value || '';
-    const currentPrompt = document.getElementById('tu-prompt').value || '你是什么模型？';
-    const currentSpoof = document.getElementById('tu-client-spoof').checked;
     document.getElementById('tu-upstream-id').value = upstreamId;
     document.getElementById('tu-result').style.display = 'none';
-    document.getElementById('tu-protocol').value = resetFields ? 'openai' : currentProtocol;
-    document.getElementById('tu-model').value = resetFields ? '' : currentModel;
-    document.getElementById('tu-prompt').value = resetFields ? '你是什么模型？' : currentPrompt;
-    document.getElementById('tu-client-spoof').checked = resetFields ? true : currentSpoof;
-    const protocol = resetFields ? 'openai' : currentProtocol;
-    // 加载测试模型列表并更新 datalist
-    loadTestModels().then(() => updateTuModelDatalist(protocol));
-    updateTuSpoofHint(protocol);
+    const upstream = allUpstreams.find(u => u.id === parseInt(upstreamId, 10));
+    const last = loadTuLastConfig(upstreamId);
+    let defaultProto = (last && last.protocol) || inferTuProtocol(upstream);
+    const defaultModel = (last && last.model) || '';
+    const defaultPrompt = (last && last.prompt) || '你是什么模型？';
+    const defaultSpoof = last && typeof last.client_spoof === 'boolean' ? last.client_spoof : true;
+
+    document.getElementById('tu-prompt').value = defaultPrompt;
+    document.getElementById('tu-client-spoof').checked = defaultSpoof;
+    document.getElementById('tu-model').value = defaultModel;
+
     const sel = document.getElementById('tu-key-select');
     sel.innerHTML = '<option value="">加载中...</option>';
     const dlg = document.getElementById('dlg-test-upstream');
     if (!dlg.open) dlg.showModal();
+
+    loadTestModels().then(() => {
+        // Prefer last protocol; if model has multiple registered, keep last if valid.
+        // Do NOT auto-fill a model when empty — leave blank so user can type/search.
+        defaultProto = pickProtocolForModel(defaultModel, defaultProto);
+        updateTuModelDatalist();
+        setTuProtocol(defaultProto);
+    });
+
     api('/upstreams/'+upstreamId+'/apikeys').then(data => {
         if (!data || data.length === 0) {
             sel.innerHTML = '<option value="0">无鉴权（公益站）</option>';
             return;
         }
+        let selected = last && last.key_row_id != null ? String(last.key_row_id) : '';
         const firstEnabledIndex = data.findIndex(kd => kd.enabled);
-        sel.innerHTML = data.map((kd, i) => {
+        const ids = data.map(kd => String(kd.row_id));
+        if (!selected || ids.indexOf(selected) < 0) {
+            selected = String(data[firstEnabledIndex >= 0 ? firstEnabledIndex : 0].row_id);
+        }
+        sel.innerHTML = data.map(kd => {
             const shortKey = kd.key.length > 20 ? kd.key.substring(0, 10) + '...' + kd.key.substring(kd.key.length - 8) : kd.key;
-            return '<option value="'+kd.row_id+'"'+(i===(firstEnabledIndex >= 0 ? firstEnabledIndex : 0)?' selected':'')+'>('+kd.row_id+') '+esc(shortKey)+(kd.enabled?'':' [已禁用]')+'</option>';
+            return '<option value="'+kd.row_id+'"'+(String(kd.row_id)===selected?' selected':'')+'>('+kd.row_id+') '+esc(shortKey)+(kd.enabled?'':' [已禁用]')+'</option>';
         }).join('');
     });
-}
-
-function onTuProtocolChange() {
-    const proto = document.getElementById('tu-protocol').value;
-    document.getElementById('tu-model').value = '';
-    updateTuModelDatalist(proto);
-    updateTuSpoofHint(proto);
 }
 
 function updateTuSpoofHint(proto) {
@@ -1870,7 +1967,7 @@ function updateTuSpoofHint(proto) {
     if (proto === 'anthropic') {
         hint.textContent = '开启后：OAuth Anthropic 走 Claude Code 伪装（MacOS Stainless + 随机 session/device + utls）。API Key 模式仍为简单探测。仅影响本次测试。';
     } else if (proto === 'responses') {
-        hint.textContent = '开启后：按真实 codex-tui 伪装（Mac OS UA、Originator、Session-Id/Thread-Id、X-Codex-*、随机 session/install/turn）。仅影响本次测试，真实 Codex 透传不受影响。';
+        hint.textContent = '开启后：按真实 codex-tui 伪装（Mac OS UA、Originator、Session-Id/Thread-Id、X-Codex-*）。仅影响本次测试。';
     } else {
         hint.textContent = 'Chat Completions 协议下伪装开关无效，始终发送标准 OpenAI 探测请求。';
     }
@@ -1878,20 +1975,22 @@ function updateTuSpoofHint(proto) {
 
 function submitUpstreamTest() {
     const upstreamId = document.getElementById('tu-upstream-id').value;
-    const keyRowId = document.getElementById('tu-key-select').value;
+    const cfg = getTuFormConfig();
+    const keyRowId = cfg.key_row_id;
     if (!keyRowId && keyRowId !== '0') { toastErr('请选择一个 Key'); return; }
+    if (!cfg.model) { toastErr('请填写模型'); return; }
     const btn = document.getElementById('btn-tu-test');
     const resultDiv = document.getElementById('tu-result');
     btn.innerHTML = '<svg style="width:14px;height:14px;animation:spin 1s linear infinite;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg> 测试中...';
     btn.disabled = true;
     resultDiv.style.display = 'none';
     const cfBody = getCFConfig(parseInt(upstreamId));
-    const clientSpoof = !!document.getElementById('tu-client-spoof').checked;
+    saveTuLastConfig(upstreamId, cfg);
     api('/upstreams/'+upstreamId+'/apikeys/'+keyRowId+'/test', {method:'POST', body: JSON.stringify({
-        protocol: document.getElementById('tu-protocol').value,
-        model: document.getElementById('tu-model').value,
-        prompt: document.getElementById('tu-prompt').value,
-        client_spoof: clientSpoof,
+        protocol: cfg.protocol,
+        model: cfg.model,
+        prompt: cfg.prompt,
+        client_spoof: cfg.client_spoof,
         cf_clearance: cfBody ? cfBody.cf_clearance : '',
         cf_user_agent: cfBody ? cfBody.cf_user_agent : ''
     })}).then(d => {
@@ -2865,12 +2964,20 @@ async function deleteTestModel(id) {
     });
 }
 
-function updateTuModelDatalist(protocol) {
+function updateTuModelDatalist() {
+    // Datalist lists unique model names across all protocols (same model may support many).
     const dl = document.getElementById('tu-model-list');
     if (!dl) return;
-    let models = allTestModels;
-    if (protocol) models = models.filter(m => (m.protocol||'') === protocol);
-    dl.innerHTML = models.map(m => '<option value="'+esc(m.name||'')+'">').join('');
+    const seen = {};
+    const names = [];
+    (allTestModels || []).forEach(m => {
+        const n = (m.name || '').trim();
+        if (!n || seen[n]) return;
+        seen[n] = true;
+        names.push(n);
+    });
+    names.sort((a, b) => a.localeCompare(b));
+    dl.innerHTML = names.map(n => '<option value="'+esc(n)+'">').join('');
 }
 
 // --- Status ---
