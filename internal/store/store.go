@@ -271,6 +271,70 @@ func (s *Store) DeleteUpstream(id int64) error {
 	return nil
 }
 
+// BatchSetUpstreamEnabled sets enabled for multiple upstreams. Returns rows affected.
+func (s *Store) BatchSetUpstreamEnabled(ids []int64, enabled bool) (int64, error) {
+	ids = uniquePositiveIDs(ids)
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	now := time.Now()
+	placeholders, args := int64InClause(ids)
+	args = append([]interface{}{enabled, now}, args...)
+	query := `UPDATE upstream_providers SET enabled=?, updated_at=? WHERE id IN (` + placeholders + `)`
+	res, err := s.db.Exec(query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("batch set upstream enabled: %w", err)
+	}
+	return res.RowsAffected()
+}
+
+// BatchDeleteUpstreams removes multiple upstreams. CASCADE cleans related keys/bindings.
+// Returns number of deleted rows.
+func (s *Store) BatchDeleteUpstreams(ids []int64) (int64, error) {
+	ids = uniquePositiveIDs(ids)
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	placeholders, args := int64InClause(ids)
+	query := `DELETE FROM upstream_providers WHERE id IN (` + placeholders + `)`
+	res, err := s.db.Exec(query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("batch delete upstreams: %w", err)
+	}
+	return res.RowsAffected()
+}
+
+// uniquePositiveIDs dedupes and drops non-positive ids.
+func uniquePositiveIDs(ids []int64) []int64 {
+	if len(ids) == 0 {
+		return nil
+	}
+	seen := make(map[int64]struct{}, len(ids))
+	out := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
+}
+
+// int64InClause builds "?,?,?" placeholders and args for an IN list.
+func int64InClause(ids []int64) (placeholders string, args []interface{}) {
+	parts := make([]string, len(ids))
+	args = make([]interface{}, len(ids))
+	for i, id := range ids {
+		parts[i] = "?"
+		args[i] = id
+	}
+	return strings.Join(parts, ","), args
+}
+
 // getUpstreamAPIKeys 返回单个上游的所有已启用 API Key（已解密）。
 // 仅供代理运行时使用；禁用的 Key 不会被加载到内存。
 func (s *Store) getUpstreamAPIKeys(upstreamID int64) ([]string, error) {

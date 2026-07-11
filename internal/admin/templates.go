@@ -776,9 +776,14 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
             <div class="card">
                 <div class="card-header">
                     <h2>上游服务</h2>
-                    <button class="btn btn-primary btn-sm" onclick="document.getElementById('dlg-upstream').showModal()">添加上游</button>
+                    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                        <button class="btn btn-success btn-sm" id="btn-batch-enable-upstreams" style="display:none" onclick="batchSetUpstreamsEnabled(true)">批量启用</button>
+                        <button class="btn btn-ghost btn-sm" id="btn-batch-disable-upstreams" style="display:none" onclick="batchSetUpstreamsEnabled(false)">批量禁用</button>
+                        <button class="btn btn-danger btn-sm" id="btn-batch-delete-upstreams" style="display:none" onclick="batchDeleteUpstreams()">批量删除</button>
+                        <button class="btn btn-primary btn-sm" onclick="document.getElementById('dlg-upstream').showModal()">添加上游</button>
+                    </div>
                 </div>
-                <p class="card-desc">配置转发目标。OAuth 模式会用 Authorization: Bearer 发送上游 Key。</p>
+                <p class="card-desc">配置转发目标。OAuth 模式会用 Authorization: Bearer 发送上游 Key。勾选行可批量启用 / 禁用 / 删除。</p>
                 <div class="toolbar">
                     <input class="search-input" id="upstream-search" placeholder="搜索名称 / 地址 / 备注" oninput="renderUpstreamsTable()">
                     <select id="upstream-filter-enabled" style="width:120px" onchange="renderUpstreamsTable()">
@@ -789,8 +794,8 @@ var dashboardHTML = []byte(`<!DOCTYPE html>
                     <span id="upstream-count" class="count-chip">0</span>
                 </div>
                 <div class="table-container">
-                <table><thead><tr><th class="hide-on-mobile">ID</th><th>名称</th><th>地址</th><th class="hide-on-mobile">密钥</th><th class="hide-on-mobile">鉴权</th><th class="hide-on-mobile">调度</th><th class="hide-on-mobile">代理</th><th class="hide-on-mobile">优先级</th><th class="hide-on-mobile">模型模式</th><th>状态</th><th>操作</th></tr></thead>
-                <tbody id="upstreams-table"><tr><td colspan="11" class="loading-cell"><span class="loading-dot"></span><span class="loading-dot"></span><span class="loading-dot"></span></td></tr></tbody></table>
+                <table><thead><tr><th style="width:32px"><input type="checkbox" id="upstream-select-all" onchange="toggleAllUpstreamCheckboxes(this.checked)" title="全选当前列表"></th><th class="hide-on-mobile">ID</th><th>名称</th><th>地址</th><th class="hide-on-mobile">密钥</th><th class="hide-on-mobile">鉴权</th><th class="hide-on-mobile">调度</th><th class="hide-on-mobile">代理</th><th class="hide-on-mobile">优先级</th><th class="hide-on-mobile">模型模式</th><th>状态</th><th>操作</th></tr></thead>
+                <tbody id="upstreams-table"><tr><td colspan="12" class="loading-cell"><span class="loading-dot"></span><span class="loading-dot"></span><span class="loading-dot"></span></td></tr></tbody></table>
                 </div>
             </div>
         </div>
@@ -1457,9 +1462,29 @@ function loadUpstreams() {
         allModelPatterns = mp || {};
         renderUpstreamsTable();
     }).catch(() => {
-        document.getElementById('upstreams-table').innerHTML = '<tr><td colspan="11" class="empty-state"><strong>加载失败</strong><p>无法获取上游列表，请刷新重试</p></td></tr>';
+        document.getElementById('upstreams-table').innerHTML = '<tr><td colspan="12" class="empty-state"><strong>加载失败</strong><p>无法获取上游列表，请刷新重试</p></td></tr>';
         toastErr('加载上游失败');
     });
+}
+function selectedUpstreamIDs() {
+    return Array.from(document.querySelectorAll('.upstream-cb:checked')).map(cb => parseInt(cb.value, 10)).filter(n => !isNaN(n) && n > 0);
+}
+function toggleAllUpstreamCheckboxes(checked) {
+    document.querySelectorAll('.upstream-cb').forEach(cb => { cb.checked = checked; });
+    updateUpstreamBatchBtns();
+}
+function updateUpstreamBatchBtns() {
+    const n = document.querySelectorAll('.upstream-cb:checked').length;
+    const show = n > 0;
+    const en = document.getElementById('btn-batch-enable-upstreams');
+    const dis = document.getElementById('btn-batch-disable-upstreams');
+    const del = document.getElementById('btn-batch-delete-upstreams');
+    if (en) { en.style.display = show ? 'inline-flex' : 'none'; en.textContent = '批量启用 (' + n + ')'; }
+    if (dis) { dis.style.display = show ? 'inline-flex' : 'none'; dis.textContent = '批量禁用 (' + n + ')'; }
+    if (del) { del.style.display = show ? 'inline-flex' : 'none'; del.textContent = '批量删除 (' + n + ')'; }
+    const selAll = document.getElementById('upstream-select-all');
+    const total = document.querySelectorAll('.upstream-cb').length;
+    if (selAll) selAll.checked = total > 0 && n === total;
 }
 function renderUpstreamsTable() {
     const tbody = document.getElementById('upstreams-table');
@@ -1476,12 +1501,15 @@ function renderUpstreamsTable() {
     }
     const countEl = document.getElementById('upstream-count');
     if (countEl) countEl.textContent = list.length + (list.length !== allUpstreams.length ? ' / ' + allUpstreams.length : '');
+    const selAll = document.getElementById('upstream-select-all');
+    if (selAll) selAll.checked = false;
+    updateUpstreamBatchBtns();
     if (allUpstreams.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="11" class="empty-state"><strong>还没有上游</strong><p>添加第一个上游后即可开始转发请求</p><button class="btn btn-primary btn-sm" onclick="document.getElementById(\'dlg-upstream\').showModal()">添加上游</button></td></tr>';
+        tbody.innerHTML = '<tr><td colspan="12" class="empty-state"><strong>还没有上游</strong><p>添加第一个上游后即可开始转发请求</p><button class="btn btn-primary btn-sm" onclick="document.getElementById(\'dlg-upstream\').showModal()">添加上游</button></td></tr>';
         return;
     }
     if (list.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="11" class="empty-state"><strong>无匹配结果</strong><p>试试调整搜索词或状态筛选</p></td></tr>';
+        tbody.innerHTML = '<tr><td colspan="12" class="empty-state"><strong>无匹配结果</strong><p>试试调整搜索词或状态筛选</p></td></tr>';
         return;
     }
     tbody.innerHTML = list.map(u => {
@@ -1510,7 +1538,7 @@ function renderUpstreamsTable() {
             ? '<span class="badge badge-orange" title="Authorization: Bearer">OAuth</span>'
             : '<span class="badge badge-muted" title="x-api-key">API Key</span>';
         const remarkHtml = u.remark ? '<div style="font-size:0.75rem;color:var(--text-dim);margin-top:2px;" title="'+esc(u.remark)+'">'+esc(u.remark.length>28?u.remark.substring(0,28)+'...':u.remark)+'</div>' : '';
-        return '<tr><td class="hide-on-mobile">'+u.id+'</td><td><strong>'+esc(u.name)+'</strong>'+remarkHtml+'</td><td><code class="truncate-url" title="'+esc(u.base_url)+'">'+esc(u.base_url)+'</code></td><td class="hide-on-mobile">'+keyBadge+'</td><td class="hide-on-mobile">'+authBadge+'</td><td class="hide-on-mobile"><span style="font-size:0.75rem;color:'+schedColor+';font-weight:500;white-space:nowrap;">'+schedLabel+'</span></td><td class="hide-on-mobile">'+(u.proxy_url?'<code class="truncate-url" title="'+esc(u.proxy_url)+'">'+esc(u.proxy_url)+'</code>':'<span class="badge badge-muted">环境</span>')+'</td><td class="hide-on-mobile">'+u.priority+'</td><td class="hide-on-mobile"><div class="model-tags">'+modelHtml+'</div></td><td>'+
+        return '<tr><td><input type="checkbox" class="upstream-cb" value="'+u.id+'" onchange="updateUpstreamBatchBtns()"></td><td class="hide-on-mobile">'+u.id+'</td><td><strong>'+esc(u.name)+'</strong>'+remarkHtml+'</td><td><code class="truncate-url" title="'+esc(u.base_url)+'">'+esc(u.base_url)+'</code></td><td class="hide-on-mobile">'+keyBadge+'</td><td class="hide-on-mobile">'+authBadge+'</td><td class="hide-on-mobile"><span style="font-size:0.75rem;color:'+schedColor+';font-weight:500;white-space:nowrap;">'+schedLabel+'</span></td><td class="hide-on-mobile">'+(u.proxy_url?'<code class="truncate-url" title="'+esc(u.proxy_url)+'">'+esc(u.proxy_url)+'</code>':'<span class="badge badge-muted">环境</span>')+'</td><td class="hide-on-mobile">'+u.priority+'</td><td class="hide-on-mobile"><div class="model-tags">'+modelHtml+'</div></td><td>'+
         (u.enabled?'<span class="badge badge-green">启用</span>':'<span class="badge badge-red">禁用</span>')+
         '</td><td class="actions">'+
         '<button class="btn btn-ghost btn-sm" onclick="testProxy(event,'+u.id+')">测试</button>'+
@@ -1526,6 +1554,7 @@ function renderUpstreamsTable() {
         '</div></div>'+
         '</td></tr>';
     }).join('');
+    updateUpstreamBatchBtns();
 }
 
 function createUpstream(e) {
@@ -1602,6 +1631,29 @@ function toggleUpstream(id, enabled) {
     api('/upstreams/'+id, {method:'PUT', body: JSON.stringify({enabled:enabled})}).then(d => {
         if(d.error) toastErr(d.error); else { loadUpstreams(); toastOk('已更新'); }
     });
+}
+
+async function batchSetUpstreamsEnabled(enabled) {
+    const ids = selectedUpstreamIDs();
+    if (ids.length === 0) { toastErr('请先勾选上游'); return; }
+    const action = enabled ? '启用' : '禁用';
+    if (!await askConfirm('确认批量' + action + '选中的 ' + ids.length + ' 个上游？', {title:'批量' + action, okText:action})) return;
+    api('/upstreams/batch/enabled', {method:'PUT', body: JSON.stringify({ids: ids, enabled: enabled})}).then(d => {
+        if (d.error) { toastErr(d.error); return; }
+        toastOk('已' + action + ' ' + (d.updated != null ? d.updated : ids.length) + ' 个上游');
+        loadUpstreams();
+    }).catch(() => toastErr('批量' + action + '失败'));
+}
+
+async function batchDeleteUpstreams() {
+    const ids = selectedUpstreamIDs();
+    if (ids.length === 0) { toastErr('请先勾选上游'); return; }
+    if (!await askConfirm('删除选中的 ' + ids.length + ' 个上游后，相关 Key 与绑定也会被清理。此操作不可恢复。', {title:'批量删除上游', okText:'删除', danger:true})) return;
+    api('/upstreams/batch', {method:'DELETE', body: JSON.stringify({ids: ids})}).then(d => {
+        if (d.error) { toastErr(d.error); return; }
+        toastOk('已删除 ' + (d.deleted != null ? d.deleted : ids.length) + ' 个上游');
+        loadUpstreams();
+    }).catch(() => toastErr('批量删除失败'));
 }
 
 function normalizeAPIKeyInput(raw) {

@@ -225,6 +225,54 @@ func TestUpstream_DeleteNotFound(t *testing.T) {
 	assert.Contains(t, err.Error(), "not found")
 }
 
+func TestUpstream_BatchSetEnabledAndDelete(t *testing.T) {
+	s := newTestStore(t)
+	u1, err := s.CreateUpstream("batch-a", "https://a.example.com", []string{"k1"}, 0, "", "", "", "")
+	require.NoError(t, err)
+	u2, err := s.CreateUpstream("batch-b", "https://b.example.com", []string{"k2"}, 0, "", "", "", "")
+	require.NoError(t, err)
+	u3, err := s.CreateUpstream("batch-c", "https://c.example.com", []string{"k3"}, 0, "", "", "", "")
+	require.NoError(t, err)
+
+	// All created enabled by default.
+	n, err := s.BatchSetUpstreamEnabled([]int64{u1.ID, u2.ID, u1.ID, 0, -1}, false)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), n)
+
+	got1, err := s.GetUpstream(u1.ID)
+	require.NoError(t, err)
+	assert.False(t, got1.Enabled)
+	got2, err := s.GetUpstream(u2.ID)
+	require.NoError(t, err)
+	assert.False(t, got2.Enabled)
+	got3, err := s.GetUpstream(u3.ID)
+	require.NoError(t, err)
+	assert.True(t, got3.Enabled)
+
+	n, err = s.BatchSetUpstreamEnabled([]int64{u1.ID, u2.ID}, true)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), n)
+
+	deleted, err := s.BatchDeleteUpstreams([]int64{u1.ID, u3.ID, u1.ID})
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), deleted)
+
+	_, err = s.GetUpstream(u1.ID)
+	require.Error(t, err)
+	_, err = s.GetUpstream(u3.ID)
+	require.Error(t, err)
+	_, err = s.GetUpstream(u2.ID)
+	require.NoError(t, err)
+
+	// Empty / unknown ids are no-ops, not errors.
+	n, err = s.BatchSetUpstreamEnabled(nil, false)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), n)
+	deleted, err = s.BatchDeleteUpstreams([]int64{99999})
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), deleted)
+}
+
 func TestUpstream_APIKeyNotStoredAsPlaintext(t *testing.T) {
 	s := newTestStore(t)
 	plainKey := "sk-plaintext-secret-key"

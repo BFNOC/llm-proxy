@@ -76,17 +76,19 @@ func (h *AdminHandler) RegisterRoutes(r *mux.Router) {
 	api := r.PathPrefix("/admin/api").Subrouter()
 	api.Use(h.authMiddleware)
 
-	// Upstreams
+	// Upstreams (batch routes before /{id} to avoid path conflicts)
 	api.HandleFunc("/upstreams", h.listUpstreams).Methods("GET")
 	api.HandleFunc("/upstreams", h.createUpstream).Methods("POST")
+	api.HandleFunc("/upstreams/batch/enabled", h.batchSetUpstreamEnabled).Methods("PUT")
+	api.HandleFunc("/upstreams/batch", h.batchDeleteUpstreams).Methods("DELETE")
+	api.HandleFunc("/upstreams/models", h.getAllUpstreamModelPatterns).Methods("GET")
+	api.HandleFunc("/upstreams/declared-models", h.getAllUpstreamDeclaredModels).Methods("GET")
 	api.HandleFunc("/upstreams/{id}", h.updateUpstream).Methods("PUT")
 	api.HandleFunc("/upstreams/{id}", h.deleteUpstream).Methods("DELETE")
 	api.HandleFunc("/upstreams/{id}/test-proxy", h.testUpstreamProxy).Methods("POST")
 	api.HandleFunc("/upstreams/{id}/check-quota", h.checkUpstreamQuota).Methods("POST")
-	api.HandleFunc("/upstreams/models", h.getAllUpstreamModelPatterns).Methods("GET")
 	api.HandleFunc("/upstreams/{id}/models", h.getUpstreamModelPatterns).Methods("GET")
 	api.HandleFunc("/upstreams/{id}/models", h.setUpstreamModelPatterns).Methods("PUT")
-	api.HandleFunc("/upstreams/declared-models", h.getAllUpstreamDeclaredModels).Methods("GET")
 	api.HandleFunc("/upstreams/{id}/declared-models", h.getUpstreamDeclaredModels).Methods("GET")
 	api.HandleFunc("/upstreams/{id}/declared-models", h.setUpstreamDeclaredModels).Methods("PUT")
 	// Per-key API key management
@@ -429,6 +431,86 @@ func (h *AdminHandler) deleteUpstream(w http.ResponseWriter, r *http.Request) {
 	slog.Info("admin: deleted upstream", "id", id)
 
 	jsonOK(w, map[string]string{"status": "deleted"})
+}
+
+// batchSetUpstreamEnabled bulk-enables or disables upstreams: {"ids":[1,2], "enabled":true}.
+func (h *AdminHandler) batchSetUpstreamEnabled(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		IDs     []int64 `json:"ids"`
+		Enabled *bool   `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if len(req.IDs) == 0 {
+		jsonError(w, http.StatusBadRequest, "ids is required")
+		return
+	}
+	if req.Enabled == nil {
+		jsonError(w, http.StatusBadRequest, "enabled is required")
+		return
+	}
+	updated, err := h.store.BatchSetUpstreamEnabled(req.IDs, *req.Enabled)
+	if err != nil {
+		slog.Error("admin: store error", "error", err)
+		jsonError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	go h.prober.ProbeNow()
+	slog.Info("admin: batch set upstream enabled", "ids", req.IDs, "enabled", *req.Enabled, "updated", updated)
+	jsonOK(w, map[string]interface{}{
+		"status":  "updated",
+		"enabled": *req.Enabled,
+		"updated": updated,
+	})
+}
+
+// batchDeleteUpstreams bulk-deletes upstreams: {"ids":[1,2]}.
+func (h *AdminHandler) batchDeleteUpstreams(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		IDs []int64 `json:"ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if len(req.IDs) == 0 {
+		jsonError(w, http.StatusBadRequest, "ids is required")
+		return
+	}
+	// Snapshot proxy URLs before delete for transport pool cleanup.
+	type proxyRef struct {
+		id       int64
+		proxyURL string
+	}
+	var refs []proxyRef
+	for _, id := range req.IDs {
+		if id <= 0 {
+			continue
+		}
+		if u, err := h.store.GetUpstream(id); err == nil && u != nil {
+			refs = append(refs, proxyRef{id: id, proxyURL: u.ProxyURL})
+		}
+	}
+	deleted, err := h.store.BatchDeleteUpstreams(req.IDs)
+	if err != nil {
+		slog.Error("admin: store error", "error", err)
+		jsonError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	for _, ref := range refs {
+		h.tryRemoveTransport(ref.proxyURL, ref.id)
+	}
+	go h.prober.ProbeNow()
+	if h.overrideCache != nil {
+		h.overrideCache.Reload()
+	}
+	if h.modelFilter != nil {
+		h.modelFilter.ReloadDeclaredModels()
+	}
+	slog.Info("admin: batch deleted upstreams", "ids", req.IDs, "deleted", deleted)
+	jsonOK(w, map[string]interface{}{"status": "deleted", "deleted": deleted})
 }
 
 // --- Keys ---
