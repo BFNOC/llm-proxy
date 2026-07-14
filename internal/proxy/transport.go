@@ -18,19 +18,19 @@ import (
 // 相同代理配置的上游复用同一 transport，避免重复创建连接池。
 var (
 	transportCache     sync.Map // map[string]*http.Transport
-	utlsTransportCache sync.Map // map[string]*http.Transport — Node/Claude Code TLS fingerprint
+	utlsTransportCache sync.Map // map[string]*http.Transport —— Node/Claude Code TLS 指纹
 )
 
-// SSRFProtection controls whether BuildTransport applies DNS rebinding
-// protection (safeDialContext) for direct (non-proxy) transports.
-// Defaults to true. Set to false only in test environments where
-// httptest.NewServer listens on loopback addresses.
+// SSRFProtection 控制 BuildTransport 是否对直连（非代理）transport 应用
+// DNS 重绑定防护（safeDialContext）。
+// 默认值为 true。仅在测试环境（httptest.NewServer 监听在回环地址上）
+// 中才应设为 false。
 var SSRFProtection = true
 
-// safeDialContext wraps a net.Dialer to resolve DNS and validate that none of
-// the resolved IPs are private, loopback, or link-local before dialing.
-// This prevents DNS rebinding SSRF: an attacker-controlled domain may return a
-// public IP at validation time, then switch to a private IP before the proxy dials.
+// safeDialContext 包装一个 net.Dialer，在拨号前解析 DNS 并校验解析出的 IP
+// 均不是私有、回环或链路本地地址。
+// 这可以防止 DNS 重绑定型 SSRF：攻击者控制的域名可能在校验时返回一个
+// 公网 IP，随后在代理真正拨号前切换为私有 IP。
 func safeDialContext(dialer *net.Dialer) func(ctx context.Context, network, addr string) (net.Conn, error) {
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
 		host, port, err := net.SplitHostPort(addr)
@@ -46,7 +46,7 @@ func safeDialContext(dialer *net.Dialer) func(ctx context.Context, network, addr
 				return nil, fmt.Errorf("resolved IP %s is not allowed (private/loopback)", ip.IP)
 			}
 		}
-		// Dial using only validated IPs
+		// 仅使用已校验通过的 IP 进行拨号
 		return dialer.DialContext(ctx, network, net.JoinHostPort(ips[0].IP.String(), port))
 	}
 }
@@ -73,8 +73,8 @@ func BuildTransport(proxyURL string, cfgs ...*config.TransportConfig) (*http.Tra
 		// 空值保留历史行为：从环境变量读取代理配置
 		t = newBaseTransport(cfg)
 		t.Proxy = http.ProxyFromEnvironment
-		// DNS rebinding SSRF protection: validate resolved IPs before dialing.
-		// Skipped when SSRFProtection is false (test environments with loopback servers).
+		// DNS 重绑定型 SSRF 防护：拨号前校验解析出的 IP。
+		// 当 SSRFProtection 为 false 时跳过（测试环境使用回环地址的服务器）。
 		if SSRFProtection {
 			t.DialContext = safeDialContext(&net.Dialer{
 				Timeout:   cfg.DialTimeout,
@@ -125,9 +125,9 @@ func BuildTransportUTLS(proxyURL string) (*http.Transport, error) {
 
 	profile := tlsfingerprint.NodeClaudeCodeProfile()
 	t := newBaseTransport(nil)
-	// uTLS ClientHello uses ALPN http/1.1 only; disable automatic HTTP/2 upgrade.
+	// uTLS ClientHello 只使用 ALPN http/1.1；禁用自动 HTTP/2 升级。
 	t.ForceAttemptHTTP2 = false
-	// DialTLSContext owns TLS; clear Proxy so net/http does not double-wrap TLS.
+	// DialTLSContext 自行接管 TLS；清空 Proxy 以避免 net/http 对 TLS 二次包装。
 	t.Proxy = nil
 	t.DialTLSContext = nil
 	t.TLSClientConfig = nil
@@ -203,11 +203,11 @@ func newBaseTransport(cfg *config.TransportConfig) *http.Transport {
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          cfg.MaxIdleConns,
 		MaxIdleConnsPerHost:   cfg.MaxIdleConnsPerHost,
-		MaxConnsPerHost:       0, // 0 = unlimited concurrent dials
+		MaxConnsPerHost:       0, // 0 = 并发拨号数不限
 		IdleConnTimeout:       cfg.IdleConnTimeout,
 		TLSHandshakeTimeout:   cfg.TLSHandshakeTimeout,
 		ExpectContinueTimeout: 1 * time.Second,
-		ResponseHeaderTimeout: 5 * time.Minute, // slow TTFB models / large tools
+		ResponseHeaderTimeout: 5 * time.Minute, // 兼容首字节延迟高的模型 / 大型工具调用
 		DisableCompression:    true,
 	}
 }

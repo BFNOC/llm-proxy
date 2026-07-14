@@ -9,7 +9,7 @@ import (
 	"github.com/Instawork/llm-proxy/internal/store"
 )
 
-// ResolvedKey contains the downstream key data needed by middleware.
+// ResolvedKey 包含中间件所需的下游 Key 数据。
 type ResolvedKey struct {
 	ID       int64
 	Name     string
@@ -17,7 +17,7 @@ type ResolvedKey struct {
 	Enabled  bool
 }
 
-// KeySnapshot is an immutable map from key_hash -> ResolvedKey.
+// KeySnapshot 是一个从 key_hash 到 ResolvedKey 的不可变映射。
 type KeySnapshot struct {
 	keys map[string]*ResolvedKey
 }
@@ -29,9 +29,9 @@ func (s *KeySnapshot) Lookup(hash string) *ResolvedKey {
 	return s.keys[hash]
 }
 
-// KeyCache holds an atomic reference to the current KeySnapshot.
+// KeyCache 持有指向当前 KeySnapshot 的原子引用。
 type KeyCache struct {
-	snapshot atomic.Value // stores *KeySnapshot
+	snapshot atomic.Value // 存储 *KeySnapshot
 }
 
 func NewKeyCache() *KeyCache {
@@ -40,7 +40,7 @@ func NewKeyCache() *KeyCache {
 	return kc
 }
 
-// Reload builds a new snapshot from all keys in the store and atomically swaps it in.
+// Reload 基于 store 中的全部 Key 构建新快照，并原子替换当前快照。
 func (kc *KeyCache) Reload(s *store.Store) error {
 	allKeys, err := s.GetAllKeys()
 	if err != nil {
@@ -65,8 +65,8 @@ func (kc *KeyCache) get() *KeySnapshot {
 	return kc.snapshot.Load().(*KeySnapshot)
 }
 
-// KeyResolverMiddleware looks up the key hash from the context in the atomic snapshot.
-// Requests with an unknown or disabled key are rejected with 401.
+// KeyResolverMiddleware 用上下文中的 key hash 在原子快照中查找对应 Key。
+// 未知或已禁用的 Key 会被 401 拒绝。
 func KeyResolverMiddleware(cache *KeyCache) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

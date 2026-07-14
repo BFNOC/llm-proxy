@@ -1,5 +1,5 @@
-// Package tlsfingerprint provides TLS fingerprint simulation for HTTP clients.
-// It uses the utls library to create TLS connections that mimic Node.js/Claude Code clients.
+// Package tlsfingerprint 为 HTTP 客户端提供 TLS 指纹模拟能力。
+// 它使用 utls 库创建能够模拟 Node.js/Claude Code 客户端的 TLS 连接。
 package tlsfingerprint
 
 import (
@@ -16,51 +16,51 @@ import (
 	"golang.org/x/net/proxy"
 )
 
-// Profile contains TLS fingerprint configuration.
-// All slice fields use built-in defaults when empty.
+// Profile 包含 TLS 指纹配置。
+// 所有切片字段留空时都会使用内置默认值。
 type Profile struct {
-	Name                string // Profile name for identification
+	Name                string // 用于标识的 Profile 名称
 	CipherSuites        []uint16
 	Curves              []uint16
 	PointFormats        []uint16
 	EnableGREASE        bool
-	SignatureAlgorithms []uint16 // Empty uses defaultSignatureAlgorithms
-	ALPNProtocols       []string // Empty uses ["http/1.1"]
-	SupportedVersions   []uint16 // Empty uses [TLS1.3, TLS1.2]
-	KeyShareGroups      []uint16 // Empty uses [X25519]
-	PSKModes            []uint16 // Empty uses [psk_dhe_ke]
-	Extensions          []uint16 // Extension type IDs in order; empty uses default Node.js 24.x order
+	SignatureAlgorithms []uint16 // 留空时使用 defaultSignatureAlgorithms
+	ALPNProtocols       []string // 留空时使用 ["http/1.1"]
+	SupportedVersions   []uint16 // 留空时使用 [TLS1.3, TLS1.2]
+	KeyShareGroups      []uint16 // 留空时使用 [X25519]
+	PSKModes            []uint16 // 留空时使用 [psk_dhe_ke]
+	Extensions          []uint16 // 按顺序排列的扩展类型 ID；留空时使用默认的 Node.js 24.x 顺序
 }
 
-// Dialer creates TLS connections with custom fingerprints.
+// Dialer 使用自定义指纹创建 TLS 连接。
 type Dialer struct {
 	profile    *Profile
 	baseDialer func(ctx context.Context, network, addr string) (net.Conn, error)
 }
 
-// HTTPProxyDialer creates TLS connections through HTTP/HTTPS proxies with custom fingerprints.
-// It handles the CONNECT tunnel establishment before performing TLS handshake.
+// HTTPProxyDialer 通过 HTTP/HTTPS 代理创建带自定义指纹的 TLS 连接。
+// 它会先建立 CONNECT 隧道，再执行 TLS 握手。
 type HTTPProxyDialer struct {
 	profile  *Profile
 	proxyURL *url.URL
 }
 
-// SOCKS5ProxyDialer creates TLS connections through SOCKS5 proxies with custom fingerprints.
-// It uses golang.org/x/net/proxy to establish the SOCKS5 tunnel.
+// SOCKS5ProxyDialer 通过 SOCKS5 代理创建带自定义指纹的 TLS 连接。
+// 它使用 golang.org/x/net/proxy 建立 SOCKS5 隧道。
 type SOCKS5ProxyDialer struct {
 	profile  *Profile
 	proxyURL *url.URL
 }
 
-// Default TLS fingerprint values captured from Claude Code (Node.js 24.x)
-// Captured via tls-fingerprint-web capture server
+// 默认 TLS 指纹值，采集自 Claude Code（Node.js 24.x）
+// 通过 tls-fingerprint-web 抓包服务器采集
 // JA3 Hash: 44f88fca027f27bab4bb08d4af15f23e
 // JA4:      t13d1714h1_5b57614c22b0_7baf387fc6ff
 var (
-	// defaultCipherSuites contains the 17 cipher suites from Node.js 24.x
-	// Order is critical for JA3 fingerprint matching
+	// defaultCipherSuites 包含来自 Node.js 24.x 的 17 个密码套件
+	// 顺序对 JA3 指纹匹配至关重要
 	defaultCipherSuites = []uint16{
-		// TLS 1.3 cipher suites
+		// TLS 1.3 密码套件
 		0x1301, // TLS_AES_128_GCM_SHA256
 		0x1302, // TLS_AES_256_GCM_SHA384
 		0x1303, // TLS_CHACHA20_POLY1305_SHA256
@@ -75,34 +75,34 @@ var (
 		0xcca9, // TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256
 		0xcca8, // TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256
 
-		// ECDHE + AES-CBC-SHA (legacy fallback)
+		// ECDHE + AES-CBC-SHA（旧版回退）
 		0xc009, // TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA
 		0xc013, // TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA
 		0xc00a, // TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA
 		0xc014, // TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA
 
-		// RSA + AES-GCM (non-PFS)
+		// RSA + AES-GCM（无前向保密）
 		0x009c, // TLS_RSA_WITH_AES_128_GCM_SHA256
 		0x009d, // TLS_RSA_WITH_AES_256_GCM_SHA384
 
-		// RSA + AES-CBC-SHA (non-PFS, legacy)
+		// RSA + AES-CBC-SHA（无前向保密，旧版）
 		0x002f, // TLS_RSA_WITH_AES_128_CBC_SHA
 		0x0035, // TLS_RSA_WITH_AES_256_CBC_SHA
 	}
 
-	// defaultCurves contains the 3 supported groups from Node.js 24.x
+	// defaultCurves 包含来自 Node.js 24.x 的 3 个受支持椭圆曲线组
 	defaultCurves = []utls.CurveID{
 		utls.X25519,    // 0x001d
 		utls.CurveP256, // 0x0017 (secp256r1)
 		utls.CurveP384, // 0x0018 (secp384r1)
 	}
 
-	// defaultPointFormats contains point formats from Node.js 24.x
+	// defaultPointFormats 包含来自 Node.js 24.x 的点格式
 	defaultPointFormats = []uint16{
-		0, // uncompressed
+		0, // 未压缩
 	}
 
-	// defaultSignatureAlgorithms contains the 9 signature algorithms from Node.js 24.x
+	// defaultSignatureAlgorithms 包含来自 Node.js 24.x 的 9 个签名算法
 	defaultSignatureAlgorithms = []utls.SignatureScheme{
 		0x0403, // ecdsa_secp256r1_sha256
 		0x0804, // rsa_pss_rsae_sha256
@@ -116,9 +116,9 @@ var (
 	}
 )
 
-// NewDialer creates a new TLS fingerprint dialer.
-// baseDialer is used for TCP connection establishment (supports proxy scenarios).
-// If baseDialer is nil, direct TCP dial is used.
+// NewDialer 创建一个新的 TLS 指纹 dialer。
+// baseDialer 用于建立 TCP 连接（支持代理场景）。
+// 如果 baseDialer 为 nil，则使用直连 TCP 拨号。
 func NewDialer(profile *Profile, baseDialer func(ctx context.Context, network, addr string) (net.Conn, error)) *Dialer {
 	if baseDialer == nil {
 		baseDialer = (&net.Dialer{}).DialContext
@@ -126,24 +126,24 @@ func NewDialer(profile *Profile, baseDialer func(ctx context.Context, network, a
 	return &Dialer{profile: profile, baseDialer: baseDialer}
 }
 
-// NewHTTPProxyDialer creates a new TLS fingerprint dialer that works through HTTP/HTTPS proxies.
-// It establishes a CONNECT tunnel before performing TLS handshake with custom fingerprint.
+// NewHTTPProxyDialer 创建一个通过 HTTP/HTTPS 代理工作的 TLS 指纹 dialer。
+// 它会先建立 CONNECT 隧道，再用自定义指纹执行 TLS 握手。
 func NewHTTPProxyDialer(profile *Profile, proxyURL *url.URL) *HTTPProxyDialer {
 	return &HTTPProxyDialer{profile: profile, proxyURL: proxyURL}
 }
 
-// NewSOCKS5ProxyDialer creates a new TLS fingerprint dialer that works through SOCKS5 proxies.
-// It establishes a SOCKS5 tunnel before performing TLS handshake with custom fingerprint.
+// NewSOCKS5ProxyDialer 创建一个通过 SOCKS5 代理工作的 TLS 指纹 dialer。
+// 它会先建立 SOCKS5 隧道，再用自定义指纹执行 TLS 握手。
 func NewSOCKS5ProxyDialer(profile *Profile, proxyURL *url.URL) *SOCKS5ProxyDialer {
 	return &SOCKS5ProxyDialer{profile: profile, proxyURL: proxyURL}
 }
 
-// DialTLSContext establishes a TLS connection through SOCKS5 proxy with the configured fingerprint.
-// Flow: SOCKS5 CONNECT to target -> TLS handshake with utls on the tunnel
+// DialTLSContext 通过 SOCKS5 代理并以配置的指纹建立 TLS 连接。
+// 流程：SOCKS5 CONNECT 到目标 -> 在隧道上用 utls 完成 TLS 握手
 func (d *SOCKS5ProxyDialer) DialTLSContext(ctx context.Context, network, addr string) (net.Conn, error) {
 	slog.Debug("tls_fingerprint_socks5_connecting", "proxy", d.proxyURL.Host, "target", addr)
 
-	// Step 1: Create SOCKS5 dialer
+	// 第一步：创建 SOCKS5 dialer
 	var auth *proxy.Auth
 	if d.proxyURL.User != nil {
 		username := d.proxyURL.User.Username()
@@ -154,10 +154,10 @@ func (d *SOCKS5ProxyDialer) DialTLSContext(ctx context.Context, network, addr st
 		}
 	}
 
-	// Determine proxy address
+	// 确定代理地址
 	proxyAddr := d.proxyURL.Host
 	if d.proxyURL.Port() == "" {
-		proxyAddr = net.JoinHostPort(d.proxyURL.Hostname(), "1080") // Default SOCKS5 port
+		proxyAddr = net.JoinHostPort(d.proxyURL.Hostname(), "1080") // SOCKS5 默认端口
 	}
 
 	socksDialer, err := proxy.SOCKS5("tcp", proxyAddr, auth, proxy.Direct)
@@ -166,7 +166,7 @@ func (d *SOCKS5ProxyDialer) DialTLSContext(ctx context.Context, network, addr st
 		return nil, fmt.Errorf("create SOCKS5 dialer: %w", err)
 	}
 
-	// Step 2: Establish SOCKS5 tunnel to target
+	// 第二步：建立到目标的 SOCKS5 隧道
 	slog.Debug("tls_fingerprint_socks5_establishing_tunnel", "target", addr)
 	conn, err := socksDialer.Dial("tcp", addr)
 	if err != nil {
@@ -175,21 +175,21 @@ func (d *SOCKS5ProxyDialer) DialTLSContext(ctx context.Context, network, addr st
 	}
 	slog.Debug("tls_fingerprint_socks5_tunnel_established")
 
-	// Step 3: Perform TLS handshake on the tunnel with utls fingerprint
+	// 第三步：在隧道上用 utls 指纹执行 TLS 握手
 	return performTLSHandshake(ctx, conn, d.profile, addr)
 }
 
-// DialTLSContext establishes a TLS connection through HTTP proxy with the configured fingerprint.
-// Flow: TCP connect to proxy -> CONNECT tunnel -> TLS handshake with utls
+// DialTLSContext 通过 HTTP 代理并以配置的指纹建立 TLS 连接。
+// 流程：TCP 连接到代理 -> CONNECT 隧道 -> 用 utls 完成 TLS 握手
 func (d *HTTPProxyDialer) DialTLSContext(ctx context.Context, network, addr string) (net.Conn, error) {
 	slog.Debug("tls_fingerprint_http_proxy_connecting", "proxy", d.proxyURL.Host, "target", addr)
 
-	// Step 1: TCP connect to proxy server
+	// 第一步：TCP 连接到代理服务器
 	var proxyAddr string
 	if d.proxyURL.Port() != "" {
 		proxyAddr = d.proxyURL.Host
 	} else {
-		// Default ports
+		// 默认端口
 		if d.proxyURL.Scheme == "https" {
 			proxyAddr = net.JoinHostPort(d.proxyURL.Hostname(), "443")
 		} else {
@@ -205,7 +205,7 @@ func (d *HTTPProxyDialer) DialTLSContext(ctx context.Context, network, addr stri
 	}
 	slog.Debug("tls_fingerprint_http_proxy_connected", "proxy_addr", proxyAddr)
 
-	// Step 2: Send CONNECT request to establish tunnel
+	// 第二步：发送 CONNECT 请求以建立隧道
 	req := &http.Request{
 		Method: "CONNECT",
 		URL:    &url.URL{Opaque: addr},
@@ -213,7 +213,7 @@ func (d *HTTPProxyDialer) DialTLSContext(ctx context.Context, network, addr stri
 		Header: make(http.Header),
 	}
 
-	// Add proxy authentication if present
+	// 如果存在代理鉴权信息则附加上去
 	if d.proxyURL.User != nil {
 		username := d.proxyURL.User.Username()
 		password, _ := d.proxyURL.User.Password()
@@ -228,7 +228,7 @@ func (d *HTTPProxyDialer) DialTLSContext(ctx context.Context, network, addr stri
 		return nil, fmt.Errorf("write CONNECT request: %w", err)
 	}
 
-	// Step 3: Read CONNECT response
+	// 第三步：读取 CONNECT 响应
 	br := bufio.NewReader(conn)
 	resp, err := http.ReadResponse(br, req)
 	if err != nil {
@@ -236,8 +236,8 @@ func (d *HTTPProxyDialer) DialTLSContext(ctx context.Context, network, addr stri
 		slog.Debug("tls_fingerprint_http_proxy_read_response_failed", "error", err)
 		return nil, fmt.Errorf("read CONNECT response: %w", err)
 	}
-	// CONNECT response has no body; do not defer resp.Body.Close() as it wraps the
-	// same conn that will be used for the TLS handshake.
+	// CONNECT 响应没有响应体；不要 defer resp.Body.Close()，因为它包装的
+	// 正是接下来 TLS 握手要使用的同一个连接。
 
 	if resp.StatusCode != http.StatusOK {
 		_ = conn.Close()
@@ -246,14 +246,14 @@ func (d *HTTPProxyDialer) DialTLSContext(ctx context.Context, network, addr stri
 	}
 	slog.Debug("tls_fingerprint_http_proxy_tunnel_established")
 
-	// Step 4: Perform TLS handshake on the tunnel with utls fingerprint
+	// 第四步：在隧道上用 utls 指纹执行 TLS 握手
 	return performTLSHandshake(ctx, conn, d.profile, addr)
 }
 
-// DialTLSContext establishes a TLS connection with the configured fingerprint.
-// This method is designed to be used as http.Transport.DialTLSContext.
+// DialTLSContext 以配置的指纹建立 TLS 连接。
+// 这个方法设计为可以直接用作 http.Transport.DialTLSContext。
 func (d *Dialer) DialTLSContext(ctx context.Context, network, addr string) (net.Conn, error) {
-	// Establish TCP connection using base dialer (supports proxy)
+	// 使用 base dialer 建立 TCP 连接（支持代理场景）
 	slog.Debug("tls_fingerprint_dialing_tcp", "addr", addr)
 	conn, err := d.baseDialer(ctx, network, addr)
 	if err != nil {
@@ -262,13 +262,13 @@ func (d *Dialer) DialTLSContext(ctx context.Context, network, addr string) (net.
 	}
 	slog.Debug("tls_fingerprint_tcp_connected", "addr", addr)
 
-	// Perform TLS handshake with utls fingerprint
+	// 用 utls 指纹执行 TLS 握手
 	return performTLSHandshake(ctx, conn, d.profile, addr)
 }
 
-// performTLSHandshake performs the uTLS handshake on an established connection.
-// It builds a ClientHello spec from the profile, applies it, and completes the handshake.
-// On failure, conn is closed and an error is returned.
+// performTLSHandshake 在已建立的连接上执行 uTLS 握手。
+// 它根据 profile 构建 ClientHello spec、应用该 spec，并完成握手。
+// 失败时会关闭 conn 并返回错误。
 func performTLSHandshake(ctx context.Context, conn net.Conn, profile *Profile, addr string) (net.Conn, error) {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -298,7 +298,7 @@ func performTLSHandshake(ctx context.Context, conn net.Conn, profile *Profile, a
 	return tlsConn, nil
 }
 
-// toUTLSCurves converts uint16 slice to utls.CurveID slice.
+// toUTLSCurves 把 uint16 切片转换为 utls.CurveID 切片。
 func toUTLSCurves(curves []uint16) []utls.CurveID {
 	result := make([]utls.CurveID, len(curves))
 	for i, c := range curves {
@@ -307,8 +307,8 @@ func toUTLSCurves(curves []uint16) []utls.CurveID {
 	return result
 }
 
-// defaultExtensionOrder is the Node.js 24.x extension order.
-// Used when Profile.Extensions is empty.
+// defaultExtensionOrder 是 Node.js 24.x 的扩展顺序。
+// 当 Profile.Extensions 为空时使用。
 var defaultExtensionOrder = []uint16{
 	0,     // server_name
 	65037, // encrypted_client_hello
@@ -326,15 +326,15 @@ var defaultExtensionOrder = []uint16{
 	43,    // supported_versions
 }
 
-// isGREASEValue checks if a uint16 value matches the TLS GREASE pattern (0x?a?a).
+// isGREASEValue 检查一个 uint16 值是否匹配 TLS GREASE 模式（0x?a?a）。
 func isGREASEValue(v uint16) bool {
 	return v&0x0f0f == 0x0a0a && v>>8 == v&0xff
 }
 
-// buildClientHelloSpecFromProfile constructs ClientHelloSpec from a Profile.
-// This is a standalone function that can be used by both Dialer and HTTPProxyDialer.
+// buildClientHelloSpecFromProfile 根据 Profile 构造 ClientHelloSpec。
+// 这是一个独立函数，Dialer 和 HTTPProxyDialer 都可以使用它。
 func buildClientHelloSpecFromProfile(profile *Profile) *utls.ClientHelloSpec {
-	// Resolve effective values (profile overrides or built-in defaults)
+	// 解析出最终生效的值（profile 覆盖值或内置默认值）
 	cipherSuites := defaultCipherSuites
 	if profile != nil && len(profile.CipherSuites) > 0 {
 		cipherSuites = profile.CipherSuites
@@ -380,21 +380,21 @@ func buildClientHelloSpecFromProfile(profile *Profile) *utls.ClientHelloSpec {
 
 	enableGREASE := profile != nil && profile.EnableGREASE
 
-	// Build key shares
+	// 构建 key shares
 	keyShares := make([]utls.KeyShare, len(keyShareGroups))
 	for i, g := range keyShareGroups {
 		keyShares[i] = utls.KeyShare{Group: g}
 	}
 
-	// Determine extension order
+	// 确定扩展顺序
 	extOrder := defaultExtensionOrder
 	if profile != nil && len(profile.Extensions) > 0 {
 		extOrder = profile.Extensions
 	}
 
-	// Build extensions list from the ordered IDs.
-	// Parametric extensions (curves, sigalgs, etc.) are populated with resolved profile values.
-	// Unknown IDs use GenericExtension (sends type ID with empty data).
+	// 根据有序的 ID 列表构建扩展列表。
+	// 带参数的扩展（curves、sigalgs 等）会填充解析后的 profile 值。
+	// 未知 ID 使用 GenericExtension（发送类型 ID + 空数据）。
 	extensions := make([]utls.TLSExtension, 0, len(extOrder)+2)
 	for _, id := range extOrder {
 		if isGREASEValue(id) {
@@ -429,19 +429,19 @@ func buildClientHelloSpecFromProfile(profile *Profile) *utls.ClientHelloSpec {
 		case 51: // key_share
 			extensions = append(extensions, &utls.KeyShareExtension{KeyShares: keyShares})
 		case 0xfe0d: // encrypted_client_hello (ECH, 65037)
-			// Send GREASE ECH with random payload — mimics Node.js behavior when no real ECHConfig is available.
-			// An empty GenericExtension causes "error decoding message" from servers that validate ECH format.
+			// 发送带随机载荷的 GREASE ECH —— 模拟 Node.js 在没有真实 ECHConfig 时的行为。
+			// 空的 GenericExtension 会让校验 ECH 格式的服务器返回 "error decoding message"。
 			extensions = append(extensions, &utls.GREASEEncryptedClientHelloExtension{})
 		case 0xff01: // renegotiation_info
 			extensions = append(extensions, &utls.RenegotiationInfoExtension{})
 		default:
-			// Unknown extension — send as GenericExtension (type ID + empty data).
-			// This covers encrypt_then_mac(22) and any future extensions.
+			// 未知扩展 —— 以 GenericExtension 形式发送（类型 ID + 空数据）。
+			// 这覆盖了 encrypt_then_mac(22) 以及未来可能出现的新扩展。
 			extensions = append(extensions, &utls.GenericExtension{Id: id})
 		}
 	}
 
-	// For default extension order with EnableGREASE, wrap with GREASE bookends
+	// 对于默认扩展顺序且启用了 EnableGREASE 的情况，用 GREASE 首尾包裹
 	if enableGREASE && (profile == nil || len(profile.Extensions) == 0) {
 		extensions = append([]utls.TLSExtension{&utls.UtlsGREASEExtension{}}, extensions...)
 		extensions = append(extensions, &utls.UtlsGREASEExtension{})
@@ -449,14 +449,14 @@ func buildClientHelloSpecFromProfile(profile *Profile) *utls.ClientHelloSpec {
 
 	return &utls.ClientHelloSpec{
 		CipherSuites:       cipherSuites,
-		CompressionMethods: []uint8{0}, // null compression only (standard)
+		CompressionMethods: []uint8{0}, // 仅使用空压缩（标准做法）
 		Extensions:         extensions,
 		TLSVersMax:         utls.VersionTLS13,
 		TLSVersMin:         utls.VersionTLS10,
 	}
 }
 
-// toUint8s converts []uint16 to []uint8 (for utls fields that require []uint8).
+// toUint8s 把 []uint16 转换为 []uint8（用于 utls 中要求 []uint8 类型的字段）。
 func toUint8s(vals []uint16) []uint8 {
 	out := make([]uint8, len(vals))
 	for i, v := range vals {

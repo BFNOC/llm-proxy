@@ -36,7 +36,7 @@ type rpmShard struct {
 	buckets map[int64]*slidingWindow
 }
 
-// PerKeyRPMLimiter tracks per-key requests per minute using a sliding window.
+// PerKeyRPMLimiter 使用滑动窗口跟踪每个 Key 每分钟的请求数。
 type PerKeyRPMLimiter struct {
 	shards [rpmLimiterShards]rpmShard
 	stopGC chan struct{}
@@ -75,7 +75,7 @@ func (l *PerKeyRPMLimiter) gcLoop() {
 	}
 }
 
-// GC drops idle windows with no timestamps in the last minute.
+// GC 清除最近一分钟内没有时间戳的空闲窗口。
 func (l *PerKeyRPMLimiter) GC() {
 	now := time.Now()
 	for i := range l.shards {
@@ -90,15 +90,15 @@ func (l *PerKeyRPMLimiter) GC() {
 	}
 }
 
-// StopGC stops the background GC goroutine (for tests/shutdown).
+// StopGC 停止后台 GC goroutine（用于测试/停机）。
 func (l *PerKeyRPMLimiter) StopGC() {
 	l.gcOnce.Do(func() {
 		close(l.stopGC)
 	})
 }
 
-// Check returns (allowed, retryAfterSeconds).
-// rpm=0 means unlimited.
+// Check 返回 (allowed, retryAfterSeconds)。
+// rpm=0 表示不限制。
 func (l *PerKeyRPMLimiter) Check(keyID int64, rpm int) (bool, int) {
 	if rpm <= 0 {
 		return true, 0
@@ -117,7 +117,7 @@ func (l *PerKeyRPMLimiter) Check(keyID int64, rpm int) (bool, int) {
 
 	count := sw.countInWindow(now)
 	if count >= rpm {
-		retryAfter := 60 // worst case
+		retryAfter := 60 // 最坏情况
 		if len(sw.timestamps) > 0 {
 			oldest := sw.timestamps[0]
 			retryAfter = int(time.Until(oldest.Add(time.Minute)).Seconds()) + 1
@@ -132,7 +132,7 @@ func (l *PerKeyRPMLimiter) Check(keyID int64, rpm int) (bool, int) {
 	return true, 0
 }
 
-// RemoveKey cleans up the window for a deleted key.
+// RemoveKey 清理已删除 Key 的窗口。
 func (l *PerKeyRPMLimiter) RemoveKey(keyID int64) {
 	s := l.shard(keyID)
 	s.mu.Lock()
@@ -140,7 +140,7 @@ func (l *PerKeyRPMLimiter) RemoveKey(keyID int64) {
 	delete(s.buckets, keyID)
 }
 
-// RateLimitMiddleware applies per-key RPM limiting using a sliding window.
+// RateLimitMiddleware 使用滑动窗口对每个 Key 施加 RPM 限流。
 func RateLimitMiddleware(limiter *PerKeyRPMLimiter) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

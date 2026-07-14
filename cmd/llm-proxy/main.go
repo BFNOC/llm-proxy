@@ -24,7 +24,7 @@ import (
 	"github.com/gorilla/mux"
 )
 
-// CustomPrettyHandler implements a custom slog.Handler for pretty local output.
+// CustomPrettyHandler 实现了一个自定义的 slog.Handler，用于本地美化输出。
 type CustomPrettyHandler struct {
 	level slog.Level
 	w     io.Writer
@@ -38,7 +38,7 @@ func (h *CustomPrettyHandler) Enabled(_ context.Context, level slog.Level) bool 
 	return level >= h.level
 }
 
-// cst is the China Standard Time timezone (UTC+8).
+// cst 是中国标准时间时区（UTC+8）。
 var cst = time.FixedZone("CST", 8*60*60)
 
 func (h *CustomPrettyHandler) Handle(_ context.Context, r slog.Record) error {
@@ -106,7 +106,7 @@ func main() {
 		yamlConfig = config.GetDefaultYAMLConfig()
 	}
 
-	// Override from env vars
+	// 用环境变量覆盖配置
 	if v := os.Getenv("LOG_LEVEL"); v != "" {
 		yamlConfig.Logging.Level = v
 	}
@@ -114,25 +114,25 @@ func main() {
 		yamlConfig.Logging.Format = v
 	}
 	if v := os.Getenv("PORT"); v != "" {
-		// Override port from env
+		// 用环境变量覆盖端口
 		fmt.Sscanf(v, "%d", &yamlConfig.Server.Port)
 	}
 
-	// Re-initialize logger with final config values (YAML + env overrides).
+	// 用最终配置值（YAML + 环境变量覆盖）重新初始化日志器。
 	os.Setenv("LOG_LEVEL", yamlConfig.Logging.Level)
 	os.Setenv("LOG_FORMAT", yamlConfig.Logging.Format)
 	initLogger()
 
 	yamlConfig.LogConfiguration(slog.Default())
 
-	// Validate required env vars
+	// 校验必需的环境变量
 	encryptionKeyHex := os.Getenv("ENCRYPTION_KEY")
 	if encryptionKeyHex == "" {
 		slog.Error("ENCRYPTION_KEY environment variable is required (32 bytes, hex or raw)")
 		os.Exit(1)
 	}
 
-	// Support both raw 32-byte string and hex-encoded
+	// 同时支持 32 字节原始字符串和十六进制编码
 	var encryptionKey []byte
 	if len(encryptionKeyHex) == 64 {
 		encryptionKey, err = hex.DecodeString(encryptionKeyHex)
@@ -153,7 +153,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Ensure data directory exists
+	// 确保数据目录存在
 	dataDir := yamlConfig.Storage.SQLitePath
 	if idx := strings.LastIndex(dataDir, "/"); idx > 0 {
 		if err := os.MkdirAll(dataDir[:idx], 0o755); err != nil {
@@ -162,7 +162,7 @@ func main() {
 		}
 	}
 
-	// Open SQLite store
+	// 打开 SQLite store
 	db, err := store.NewStore(yamlConfig.Storage.SQLitePath, encryptionKey)
 	if err != nil {
 		slog.Error("Failed to open SQLite store", "error", err)
@@ -171,7 +171,7 @@ func main() {
 	defer db.Close()
 	slog.Info("SQLite store opened", "path", yamlConfig.Storage.SQLitePath)
 
-	// Create key cache and load snapshot
+	// 创建 Key 缓存并加载快照
 	keyCache := middleware.NewKeyCache()
 	if err := keyCache.Reload(db); err != nil {
 		slog.Error("Failed to load key cache", "error", err)
@@ -179,16 +179,16 @@ func main() {
 	}
 	slog.Info("Key cache loaded")
 
-	// Create per-key RPM limiter
+	// 创建 per-key RPM 限流器
 	rateLimiter := middleware.NewPerKeyRPMLimiter()
 
-	// Create dynamic proxy
+	// 创建动态代理
 	dynamicProxy := proxy.NewDynamicProxy()
 
-	// Create model override cache (per-key model routing overrides)
+	// 创建模型覆盖缓存（per-key 模型路由覆盖）
 	overrideCache := middleware.NewModelOverrideCache(db)
 
-	// Create upstream prober and start background goroutine
+	// 创建上游探活器并启动后台 goroutine
 	probeInterval := time.Duration(yamlConfig.Upstream.ProbeIntervalSeconds) * time.Second
 	probeTimeout := time.Duration(yamlConfig.Upstream.ProbeTimeoutSeconds) * time.Second
 
@@ -206,7 +206,7 @@ func main() {
 	go prober.Start(proberCtx)
 	slog.Info("Upstream prober started", "interval", probeInterval)
 
-	// Background log cleanup: delete request_logs older than log_retention_days (default 15).
+	// 后台日志清理：删除早于 log_retention_days（默认 15 天）的 request_logs。
 	logCleanupCtx, logCleanupCancel := context.WithCancel(context.Background())
 	go func() {
 		const cleanupInterval = 6 * time.Hour
@@ -234,11 +234,11 @@ func main() {
 	}()
 	slog.Info("Log cleanup goroutine started", "interval", "6h", "default_retention_days", 15)
 
-	// Create audit logger
+	// 创建审计日志器
 	var auditLogger *middleware.AuditLogger
 	if yamlConfig.Audit.Enabled {
-		// Initialize GeoIP for IP region lookup (only needed with audit logging).
-		// Graceful degradation: if mmdb is missing, geo will be nil and lookups skipped.
+		// 初始化 GeoIP 用于 IP 归属地查询（仅审计日志开启时需要）。
+		// 优雅降级：若 mmdb 缺失，geo 为 nil，查询将被跳过。
 		geoIPDBPath := "data/GeoLite2-City.mmdb"
 		if v := os.Getenv("GEOIP_DB_PATH"); v != "" {
 			geoIPDBPath = v
@@ -253,10 +253,10 @@ func main() {
 		slog.Info("Audit logger started", "buffer", yamlConfig.Audit.ChannelBuffer, "batch_size", yamlConfig.Audit.BatchSize)
 	}
 
-	// Build router
+	// 构建路由器
 	r := mux.NewRouter()
 
-	// Health endpoints (no auth)
+	// 健康检查端点（无需鉴权）
 	r.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"}) //nolint:errcheck
@@ -276,10 +276,10 @@ func main() {
 		json.NewEncoder(w).Encode(status) //nolint:errcheck
 	}).Methods("GET", "HEAD")
 
-	// Admin routes (separate subrouter, no CORS)
-	// Model whitelist filter
+	// Admin 路由（独立子路由，不走 CORS）
+	// 模型白名单过滤器
 	modelFilter := middleware.NewModelFilter(db)
-	// Inject whitelist matcher unconditionally (works even when admin is disabled)
+	// 无条件注入白名单匹配器（即使 admin 被禁用也能生效）
 	dynamicProxy.WhitelistMatcher = modelFilter.MatchModel
 	// 连续失败 Key 自动禁用回调（达到阈值立即禁用，不等 prober）
 	dynamicProxy.KeyFailCallback = func(upstreamID, keyRowID int64) {
@@ -301,11 +301,11 @@ func main() {
 		_ = db.ResetKeyFailures(upstreamID, keyRowID)
 	}
 
-	// Create stats counters (纯内存，用于 Dashboard 实时统计)
+	// 创建统计计数器（纯内存，用于 Dashboard 实时统计）
 	globalCounter := middleware.NewGlobalRequestCounter()
 	perKeyStats := middleware.NewPerKeyStatsCollector()
 
-	// In-memory capture of inbound /v1 client headers (Claude Code fingerprint debug).
+	// 内存中抓取入站 /v1 客户端 Header（用于 Claude Code 指纹调试）。
 	headerCapture := middleware.NewHeaderCapture(20)
 
 	bindingCache := middleware.NewBindingCache(db)
@@ -341,14 +341,14 @@ func main() {
 	proxyChain = middleware.RequestClassifierMiddleware()(proxyChain)
 	// 全局 RPM/RPS 统计放在最外层，统计所有到达代理的请求
 	proxyChain = middleware.StatsMiddleware(globalCounter)(proxyChain)
-	// Header capture sits outside auth so we record raw Claude Code client headers
-	// even if a request later fails auth (still only when capture is enabled).
+	// Header 抓取放在鉴权之外，这样即使请求后续鉴权失败，
+	// 也能记录原始 Claude Code 客户端 Header（仍然只在开启抓取时生效）。
 	proxyChain = headerCapture.Middleware(proxyChain)
 	proxyChain = middleware.CORSMiddleware()(proxyChain)
 
 	r.PathPrefix("/v1/").Handler(proxyChain)
 
-	// Root endpoint — return API info instead of 404.
+	// 根路径端点——返回 API 信息，而不是 404。
 	r.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
@@ -363,14 +363,14 @@ func main() {
 		}) //nolint:errcheck
 	})
 
-	// Start server
+	// 启动服务器
 	bindAddr := "127.0.0.1"
 	if v := os.Getenv("BIND_ADDR"); v != "" {
 		bindAddr = v
 	}
 	port := fmt.Sprintf("%d", yamlConfig.Server.Port)
-	// Timeouts: align with long SSE + common LB/Cloudflare 300s idle.
-	// WriteTimeout must stay 0 so streaming responses are not cut mid-flight.
+	// 超时设置：与长 SSE 连接及常见 LB/Cloudflare 300s 空闲超时对齐。
+	// WriteTimeout 必须保持为 0，避免流式响应在传输中被截断。
 	server := &http.Server{
 		Addr:              bindAddr + ":" + port,
 		Handler:           r,
@@ -378,7 +378,7 @@ func main() {
 		ReadTimeout:       60 * time.Second,
 		WriteTimeout:      0,
 		IdleTimeout:       300 * time.Second,
-		MaxHeaderBytes:    1 << 20, // 1 MiB
+		MaxHeaderBytes:    1 << 20, // 1 MiB（1 兆字节）
 	}
 
 	go func() {
@@ -389,7 +389,7 @@ func main() {
 		}
 	}()
 
-	// Graceful shutdown
+	// 优雅停机
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
@@ -406,12 +406,12 @@ func main() {
 		slog.Info("HTTP server shut down successfully")
 	}
 
-	// Stop prober and log cleanup
+	// 停止探活器和日志清理
 	proberCancel()
 	logCleanupCancel()
 	slog.Info("Upstream prober stopped")
 
-	// Drain audit logger
+	// 排空审计日志器
 	if auditLogger != nil {
 		slog.Info("Draining audit logger...")
 		auditLogger.Stop()

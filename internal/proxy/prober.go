@@ -12,8 +12,8 @@ import (
 	"github.com/Instawork/llm-proxy/internal/store"
 )
 
-// UpstreamProber periodically probes all configured upstreams and updates the
-// DynamicProxy to point at the highest-priority healthy one.
+// UpstreamProber 周期性探测所有已配置的上游，并更新 DynamicProxy，
+// 使其指向优先级最高的健康上游。
 type UpstreamProber struct {
 	store          *store.Store
 	proxy          *DynamicProxy
@@ -24,8 +24,8 @@ type UpstreamProber struct {
 	mu             sync.Mutex
 }
 
-// NewUpstreamProber creates a prober that checks upstreams on the given
-// interval and uses timeout for each individual probe request.
+// NewUpstreamProber 创建一个探测器，按给定的 interval 检查上游，
+// 每次单独的探测请求使用 timeout 作为超时时间。
 func NewUpstreamProber(s *store.Store, p *DynamicProxy, interval, timeout time.Duration) *UpstreamProber {
 	return &UpstreamProber{
 		store:    s,
@@ -35,9 +35,8 @@ func NewUpstreamProber(s *store.Store, p *DynamicProxy, interval, timeout time.D
 	}
 }
 
-// Start runs the probe loop until ctx is cancelled. It performs an initial
-// probe immediately before entering the tick loop, so the proxy is usable as
-// soon as Start returns (assuming it is called in a goroutine).
+// Start 运行探测循环，直到 ctx 被取消。它会在进入 tick 循环之前立即执行一次
+// 探测，因此只要在 goroutine 中调用 Start，代理就能尽快变得可用。
 func (p *UpstreamProber) Start(ctx context.Context) {
 	p.probeOnce()
 
@@ -54,8 +53,8 @@ func (p *UpstreamProber) Start(ctx context.Context) {
 	}
 }
 
-// probeOnce evaluates all upstreams and potentially switches the active one.
-// It holds the mutex for the entire evaluation to prevent concurrent switches.
+// probeOnce 评估所有上游，可能会切换当前活跃的上游。
+// 整个评估过程会一直持有互斥锁，以防止并发切换。
 func (p *UpstreamProber) probeOnce() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -66,7 +65,7 @@ func (p *UpstreamProber) probeOnce() {
 		return
 	}
 
-	// Filter to only enabled upstreams.
+	// 只保留已启用的上游。
 	var enabled []store.UpstreamProvider
 	for _, u := range upstreams {
 		if u.Enabled {
@@ -81,7 +80,7 @@ func (p *UpstreamProber) probeOnce() {
 		return
 	}
 
-	// Sort by priority ascending (lower value = higher preference).
+	// 按优先级升序排序（数值越小优先级越高）。
 	sort.Slice(enabled, func(i, j int) bool {
 		return enabled[i].Priority < enabled[j].Priority
 	})
@@ -113,7 +112,7 @@ func (p *UpstreamProber) probeOnce() {
 		slog.Info("prober: auto-disabled failing keys", "count", disabled)
 	}
 
-	// Probe all enabled upstreams and collect the healthy ones.
+	// 探测所有已启用的上游，收集健康的那些。
 
 	var healthy []*ActiveUpstream
 	for _, u := range enabled {
@@ -147,8 +146,8 @@ func (p *UpstreamProber) probeOnce() {
 	}
 
 	if len(healthy) == 0 {
-		// No upstream is reachable. Keep the last active list rather than
-		// clearing it, so transient network blips don't result in a 503 storm.
+		// 没有可达的上游。保留上一次的活跃列表而不是清空它，
+		// 这样瞬时网络抖动就不会导致 503 风暴。
 		slog.Error("prober: all enabled upstreams unhealthy, keeping last active")
 		return
 	}
@@ -161,9 +160,9 @@ func (p *UpstreamProber) probeOnce() {
 	}
 }
 
-// probeUpstream issues a HEAD request to baseURL/v1/models (optionally through
-// the configured proxy) and returns true when the server is reachable (any
-// HTTP status below 500 counts, including 401 which still means the server is up).
+// probeUpstream 向 baseURL/v1/models 发起 HEAD 请求（可选经由配置的代理），
+// 当服务器可达时返回 true（任何低于 500 的 HTTP 状态码都算数，
+// 包括 401，因为这仍然说明服务器是启动着的）。
 func (p *UpstreamProber) probeUpstream(baseURL, proxyURL string) bool {
 	transport, err := BuildTransport(proxyURL)
 	if err != nil {
@@ -186,13 +185,13 @@ func (p *UpstreamProber) probeUpstream(baseURL, proxyURL string) bool {
 	return resp.StatusCode < 500
 }
 
-// ProbeNow triggers an immediate probe cycle. Useful after admin mutations.
+// ProbeNow 立即触发一次探测周期。适用于 admin 修改配置之后的场景。
 func (p *UpstreamProber) ProbeNow() {
 	p.probeOnce()
 }
 
-// GetCurrentID returns the ID of the upstream that is currently active.
-// Returns 0 if no upstream has been selected yet.
+// GetCurrentID 返回当前活跃上游的 ID。
+// 如果尚未选定任何上游，则返回 0。
 func (p *UpstreamProber) GetCurrentID() int64 {
 	p.mu.Lock()
 	defer p.mu.Unlock()

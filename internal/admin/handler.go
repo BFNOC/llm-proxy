@@ -74,13 +74,13 @@ func NewAdminHandler(
 	}
 }
 
-// RegisterRoutes registers admin API routes on the given subrouter.
+// RegisterRoutes 在给定的子路由器上注册 admin API 路由。
 func (h *AdminHandler) RegisterRoutes(r *mux.Router) {
-	// All admin routes require admin auth
+	// 所有 admin 路由都要求 admin 鉴权
 	api := r.PathPrefix("/admin/api").Subrouter()
 	api.Use(h.authMiddleware)
 
-	// Upstreams (batch routes before /{id} to avoid path conflicts)
+	// 上游（批量路由放在 /{id} 之前，避免路径冲突）
 	api.HandleFunc("/upstreams", h.listUpstreams).Methods("GET")
 	api.HandleFunc("/upstreams", h.createUpstream).Methods("POST")
 	api.HandleFunc("/upstreams/batch/enabled", h.batchSetUpstreamEnabled).Methods("PUT")
@@ -95,25 +95,25 @@ func (h *AdminHandler) RegisterRoutes(r *mux.Router) {
 	api.HandleFunc("/upstreams/{id}/models", h.setUpstreamModelPatterns).Methods("PUT")
 	api.HandleFunc("/upstreams/{id}/declared-models", h.getUpstreamDeclaredModels).Methods("GET")
 	api.HandleFunc("/upstreams/{id}/declared-models", h.setUpstreamDeclaredModels).Methods("PUT")
-	// Per-key API key management
+	// 按上游管理各自的 API Key
 	api.HandleFunc("/upstreams/{id}/apikeys", h.listUpstreamAPIKeys).Methods("GET")
 	api.HandleFunc("/upstreams/{id}/apikeys", h.addUpstreamAPIKeys).Methods("POST")
 	api.HandleFunc("/upstreams/{id}/apikeys/{key_id}", h.deleteUpstreamAPIKey).Methods("DELETE")
 	api.HandleFunc("/upstreams/{id}/apikeys/{key_id}/enabled", h.setAPIKeyEnabled).Methods("PUT")
 	api.HandleFunc("/upstreams/{id}/apikeys/{key_id}/test", h.testUpstreamAPIKey).Methods("POST")
 
-	// Keys
+	// Key
 	api.HandleFunc("/keys", h.listKeys).Methods("GET")
 	api.HandleFunc("/keys", h.createKey).Methods("POST")
 	api.HandleFunc("/keys/{id}", h.updateKey).Methods("PUT")
 	api.HandleFunc("/keys/{id}", h.deleteKey).Methods("DELETE")
 	api.HandleFunc("/keys/{id}/reveal", h.revealKey).Methods("GET")
 
-	// Logs
+	// 日志
 	api.HandleFunc("/logs", h.queryLogs).Methods("GET")
 	api.HandleFunc("/logs/key-stats", h.getKeyUsageStats).Methods("GET")
 
-	// Model whitelist
+	// 模型白名单
 	api.HandleFunc("/models/whitelist", h.listModelWhitelist).Methods("GET")
 	api.HandleFunc("/models/whitelist", h.addModelWhitelist).Methods("POST")
 	api.HandleFunc("/models/whitelist/batch", h.batchDeleteModelWhitelist).Methods("DELETE")
@@ -125,16 +125,16 @@ func (h *AdminHandler) RegisterRoutes(r *mux.Router) {
 	api.HandleFunc("/keys/{id}/upstreams", h.getKeyUpstreams).Methods("GET")
 	api.HandleFunc("/keys/{id}/upstreams", h.setKeyUpstreams).Methods("PUT")
 
-	// Key model overrides
+	// Key 模型路由覆盖
 	api.HandleFunc("/keys/model-overrides", h.getAllKeyModelOverrides).Methods("GET")
 	api.HandleFunc("/keys/{id}/model-overrides", h.getKeyModelOverrides).Methods("GET")
 	api.HandleFunc("/keys/{id}/model-overrides", h.setKeyModelOverrides).Methods("PUT")
 
-	// Status
+	// 状态
 	api.HandleFunc("/status", h.getStatus).Methods("GET")
 	api.HandleFunc("/key-rpm", h.getKeyRPM).Methods("GET")
 
-	// Test models
+	// 测试模型
 	api.HandleFunc("/test-models", h.listTestModels).Methods("GET")
 	api.HandleFunc("/test-models", h.createTestModel).Methods("POST")
 	api.HandleFunc("/test-models/{id}", h.updateTestModel).Methods("PUT")
@@ -143,12 +143,12 @@ func (h *AdminHandler) RegisterRoutes(r *mux.Router) {
 	api.HandleFunc("/settings", h.getSettings).Methods("GET")
 	api.HandleFunc("/settings", h.updateSettings).Methods("PUT")
 
-	// Header capture (Claude Code / client fingerprint debugging)
+	// Header 抓取（Claude Code / 客户端指纹调试）
 	api.HandleFunc("/header-capture", h.getHeaderCapture).Methods("GET")
 	api.HandleFunc("/header-capture", h.updateHeaderCapture).Methods("PUT")
 	api.HandleFunc("/header-capture", h.clearHeaderCapture).Methods("DELETE")
 
-	// Dashboard shell + static CSS/JS (embed). Assets must be registered before the catch-all.
+	// Dashboard 壳层 + 静态 CSS/JS（embed）。静态资源必须在兜底路由之前注册。
 	r.PathPrefix("/admin/assets/").Handler(assetsHandler())
 	r.PathPrefix("/admin/").HandlerFunc(h.serveDashboard)
 }
@@ -164,7 +164,7 @@ func (h *AdminHandler) authMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// --- Upstreams ---
+// --- 上游 ---
 
 func (h *AdminHandler) listUpstreams(w http.ResponseWriter, r *http.Request) {
 	upstreams, err := h.store.ListUpstreams()
@@ -173,7 +173,7 @@ func (h *AdminHandler) listUpstreams(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	// API Keys are now returned unmasked for admin convenience
+	// 为方便管理员操作，API Key 现在以明文返回
 	type apiKeyInfo struct {
 		RowID   int64  `json:"row_id"`
 		Key     string `json:"key"`
@@ -270,13 +270,13 @@ func (h *AdminHandler) createUpstream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// SSRF validation
+	// SSRF 校验
 	if err := validateBaseURL(req.BaseURL); err != nil {
 		jsonError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	// Proxy URL validation
+	// 代理 URL 校验
 	if req.ProxyURL != "" {
 		if err := validateProxyURL(req.ProxyURL); err != nil {
 			jsonError(w, http.StatusBadRequest, err.Error())
@@ -302,7 +302,7 @@ func (h *AdminHandler) updateUpstream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Read existing upstream to preserve fields not provided in the request.
+	// 读取现有上游，保留请求中未提供的字段。
 	existing, err := h.store.GetUpstream(id)
 	if err != nil {
 		jsonError(w, http.StatusNotFound, fmt.Sprintf("upstream %d not found", id))
@@ -401,7 +401,7 @@ func (h *AdminHandler) updateUpstream(w http.ResponseWriter, r *http.Request) {
 	if proxyURL != existing.ProxyURL {
 		h.tryRemoveTransport(existing.ProxyURL, id)
 	}
-	// Trigger re-probe so disabled/enabled change takes effect immediately.
+	// 立即触发一次探活，让启用/禁用变更马上生效。
 	go func() {
 		defer func() { recover() }()
 		h.prober.ProbeNow()
@@ -427,12 +427,12 @@ func (h *AdminHandler) deleteUpstream(w http.ResponseWriter, r *http.Request) {
 	if existing != nil {
 		h.tryRemoveTransport(existing.ProxyURL, id)
 	}
-	// Trigger immediate probe to update active upstream if needed.
+	// 立即触发一次探活，按需更新可用上游集合。
 	go func() {
 		defer func() { recover() }()
 		h.prober.ProbeNow()
 	}()
-	// FK cascade may have removed overrides/bindings referencing this upstream
+	// FK 级联可能已删除引用此上游的覆盖规则/绑定
 	if h.overrideCache != nil {
 		h.overrideCache.Reload()
 	}
@@ -447,7 +447,7 @@ func (h *AdminHandler) deleteUpstream(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{"status": "deleted"})
 }
 
-// batchSetUpstreamEnabled bulk-enables or disables upstreams: {"ids":[1,2], "enabled":true}.
+// batchSetUpstreamEnabled 批量启用或禁用上游：{"ids":[1,2], "enabled":true}。
 func (h *AdminHandler) batchSetUpstreamEnabled(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		IDs     []int64 `json:"ids"`
@@ -483,7 +483,7 @@ func (h *AdminHandler) batchSetUpstreamEnabled(w http.ResponseWriter, r *http.Re
 	})
 }
 
-// batchDeleteUpstreams bulk-deletes upstreams: {"ids":[1,2]}.
+// batchDeleteUpstreams 批量删除上游：{"ids":[1,2]}。
 func (h *AdminHandler) batchDeleteUpstreams(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		IDs []int64 `json:"ids"`
@@ -496,7 +496,7 @@ func (h *AdminHandler) batchDeleteUpstreams(w http.ResponseWriter, r *http.Reque
 		jsonError(w, http.StatusBadRequest, "ids is required")
 		return
 	}
-	// Snapshot proxy URLs before delete for transport pool cleanup.
+	// 删除前先快照代理 URL，供后续清理 transport 连接池使用。
 	type proxyRef struct {
 		id       int64
 		proxyURL string
@@ -536,7 +536,7 @@ func (h *AdminHandler) batchDeleteUpstreams(w http.ResponseWriter, r *http.Reque
 	jsonOK(w, map[string]interface{}{"status": "deleted", "deleted": deleted})
 }
 
-// --- Keys ---
+// --- Key ---
 
 func (h *AdminHandler) listKeys(w http.ResponseWriter, r *http.Request) {
 	keys, err := h.store.ListKeys()
@@ -586,14 +586,14 @@ func (h *AdminHandler) createKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Reload key cache
+	// 重新加载 Key 缓存
 	if err := h.keyCache.Reload(h.store); err != nil {
 		slog.Error("admin: failed to reload key cache", "error", err)
 	}
 
 	slog.Info("admin: created key", "id", key.ID, "name", key.Name)
 	w.WriteHeader(http.StatusCreated)
-	// Return plaintext ONCE
+	// 明文仅返回一次
 	jsonOK(w, map[string]interface{}{
 		"id":        key.ID,
 		"key":       plaintext,
@@ -609,7 +609,7 @@ func (h *AdminHandler) updateKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Read existing key to preserve fields not provided in the request.
+	// 读取现有 Key，保留请求中未提供的字段。
 	existing, err := h.store.LookupKeyByID(id)
 	if err != nil {
 		jsonError(w, http.StatusNotFound, fmt.Sprintf("key %d not found", id))
@@ -646,7 +646,7 @@ func (h *AdminHandler) updateKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Reload key cache
+	// 重新加载 Key 缓存
 	if err := h.keyCache.Reload(h.store); err != nil {
 		slog.Error("admin: failed to reload key cache", "error", err)
 	}
@@ -667,7 +667,7 @@ func (h *AdminHandler) deleteKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Reload key cache + clean rate limiter + clean stats
+	// 重新加载 Key 缓存 + 清理限流器 + 清理统计
 	if err := h.keyCache.Reload(h.store); err != nil {
 		slog.Error("admin: failed to reload key cache", "error", err)
 	}
@@ -675,7 +675,7 @@ func (h *AdminHandler) deleteKey(w http.ResponseWriter, r *http.Request) {
 	if h.perKeyStats != nil {
 		h.perKeyStats.RemoveKey(id)
 	}
-	// FK cascade may have removed overrides/bindings for this key
+	// FK 级联可能已删除此 Key 的覆盖规则/绑定
 	if h.overrideCache != nil {
 		h.overrideCache.Reload()
 	}
@@ -705,7 +705,7 @@ func (h *AdminHandler) revealKey(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{"key": plain})
 }
 
-// --- Logs ---
+// --- 日志 ---
 
 func (h *AdminHandler) queryLogs(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
@@ -774,7 +774,7 @@ func (h *AdminHandler) getKeyUsageStats(w http.ResponseWriter, r *http.Request) 
 	jsonOK(w, stats)
 }
 
-// --- Model Whitelist ---
+// --- 模型白名单 ---
 
 func (h *AdminHandler) listModelWhitelist(w http.ResponseWriter, r *http.Request) {
 	entries, err := h.store.ListModelWhitelist()
@@ -798,7 +798,7 @@ func (h *AdminHandler) addModelWhitelist(w http.ResponseWriter, r *http.Request)
 		jsonError(w, http.StatusBadRequest, "pattern is required")
 		return
 	}
-	// Validate glob syntax to prevent invalid patterns from silently blocking all requests
+	// 校验 glob 语法，防止非法模式静默拦截所有请求
 	if _, err := path.Match(req.Pattern, "test"); err != nil {
 		jsonError(w, http.StatusBadRequest, fmt.Sprintf("invalid pattern %q: %v", req.Pattern, err))
 		return
@@ -861,7 +861,7 @@ func (h *AdminHandler) batchDeleteModelWhitelist(w http.ResponseWriter, r *http.
 	jsonOK(w, map[string]interface{}{"status": "deleted", "deleted": deleted})
 }
 
-// --- Key-Upstream Bindings ---
+// --- Key-上游绑定关系 ---
 
 // getAllKeyBindings 返回所有 Key 的显式上游绑定，供管理页批量渲染。
 // 结果里不存在的 Key 应按“未绑定 = 允许全部健康上游”解释。
@@ -883,7 +883,7 @@ func (h *AdminHandler) getKeyUpstreams(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	// Verify key exists
+	// 校验 Key 存在
 	if _, err := h.store.LookupKeyByID(id); err != nil {
 		jsonError(w, http.StatusNotFound, fmt.Sprintf("key %d not found", id))
 		return
@@ -908,7 +908,7 @@ func (h *AdminHandler) setKeyUpstreams(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	// Verify key exists
+	// 校验 Key 存在
 	if _, err := h.store.LookupKeyByID(id); err != nil {
 		jsonError(w, http.StatusNotFound, fmt.Sprintf("key %d not found", id))
 		return
@@ -959,7 +959,7 @@ func (h *AdminHandler) setKeyUpstreams(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]interface{}{"status": "updated", "upstream_ids": req.UpstreamIDs})
 }
 
-// --- Key Model Overrides ---
+// --- Key 模型路由覆盖 ---
 
 // getAllKeyModelOverrides 返回所有 Key 的模型路由覆盖，供管理页批量渲染。
 func (h *AdminHandler) getAllKeyModelOverrides(w http.ResponseWriter, r *http.Request) {
@@ -1022,7 +1022,7 @@ func (h *AdminHandler) setKeyModelOverrides(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Validate and deduplicate overrides
+	// 校验并去重覆盖规则
 	if len(req.Overrides) > 0 {
 		upstreams, err := h.store.ListUpstreams()
 		if err != nil {
@@ -1041,7 +1041,7 @@ func (h *AdminHandler) setKeyModelOverrides(w http.ResponseWriter, r *http.Reque
 				jsonError(w, http.StatusBadRequest, "model_pattern is required")
 				return
 			}
-			// Validate pattern syntax
+			// 校验模式语法
 			if _, err := path.Match(o.ModelPattern, "test"); err != nil {
 				jsonError(w, http.StatusBadRequest, fmt.Sprintf("invalid pattern %q: %v", o.ModelPattern, err))
 				return
@@ -1050,7 +1050,7 @@ func (h *AdminHandler) setKeyModelOverrides(w http.ResponseWriter, r *http.Reque
 				jsonError(w, http.StatusBadRequest, fmt.Sprintf("upstream %d not found", o.UpstreamID))
 				return
 			}
-			// Deduplicate
+			// 去重
 			key := fmt.Sprintf("%s:%d", o.ModelPattern, o.UpstreamID)
 			if seen[key] {
 				jsonError(w, http.StatusBadRequest, fmt.Sprintf("duplicate override: pattern=%q upstream=%d", o.ModelPattern, o.UpstreamID))
@@ -1060,7 +1060,7 @@ func (h *AdminHandler) setKeyModelOverrides(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
-	// Convert to store input
+	// 转换为 store 层输入结构
 	inputs := make([]store.KeyModelOverrideInput, len(req.Overrides))
 	for i, o := range req.Overrides {
 		inputs[i] = store.KeyModelOverrideInput{
@@ -1075,7 +1075,7 @@ func (h *AdminHandler) setKeyModelOverrides(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Refresh override cache
+	// 刷新覆盖规则缓存
 	if h.overrideCache != nil {
 		h.overrideCache.Reload()
 	}
@@ -1093,7 +1093,7 @@ func (h *AdminHandler) getStatus(w http.ResponseWriter, r *http.Request) {
 		auditDropped = h.auditLogger.DroppedCount()
 	}
 
-	// Healthy upstreams
+	// 健康上游列表
 	type upstreamInfo struct {
 		ID                int64  `json:"id"`
 		Name              string `json:"name"`
@@ -1119,16 +1119,16 @@ func (h *AdminHandler) getStatus(w http.ResponseWriter, r *http.Request) {
 		healthyList = []upstreamInfo{}
 	}
 
-	// Key count
+	// Key 总数
 	// 统计信息采用尽力而为策略；即使计数失败，也不让状态接口整体不可用。
 	keyCount, _ := h.store.CountKeys()
 
-	// Today's request count
+	// 当日请求数
 	now := time.Now().UTC()
 	startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
 	todayRequests, _ := h.store.CountLogsSince(startOfDay)
 
-	// Uptime
+	// 运行时长
 	uptime := time.Since(startTime).Truncate(time.Second).String()
 
 	status := map[string]interface{}{
@@ -1167,7 +1167,7 @@ func (h *AdminHandler) getKeyRPM(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, h.perKeyStats.AllActiveRPMs())
 }
 
-// --- Test Models ---
+// --- 测试模型 ---
 
 func (h *AdminHandler) listTestModels(w http.ResponseWriter, r *http.Request) {
 	protocol := r.URL.Query().Get("protocol")
@@ -1249,14 +1249,14 @@ func (h *AdminHandler) deleteTestModel(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{"status": "deleted"})
 }
 
-// --- Dashboard ---
+// --- Dashboard 页面 ---
 
 func (h *AdminHandler) serveDashboard(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write(dashboardHTML)
 }
 
-// --- Helpers ---
+// --- 辅助函数 ---
 
 func parseID(r *http.Request) (int64, error) {
 	vars := mux.Vars(r)
@@ -1340,7 +1340,7 @@ func applyCFHeaders(req *http.Request, clearance, userAgent string) {
 	}
 }
 
-// validateBaseURL enforces https and rejects private/loopback/link-local IPs.
+// validateBaseURL 强制要求 http/https，并拒绝 private/loopback/link-local IP。
 func validateBaseURL(rawURL string) error {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
@@ -1377,7 +1377,7 @@ func validateProxyURL(raw string) error {
 	}
 	switch parsed.Scheme {
 	case "http", "https", "socks5":
-		// ok
+		// 合法
 	default:
 		return fmt.Errorf("proxy_url must use http, https, or socks5 scheme")
 	}
@@ -1694,7 +1694,7 @@ func (h *AdminHandler) checkUpstreamQuota(w http.ResponseWriter, r *http.Request
 	})
 }
 
-// --- Per-Key API Key Management ---
+// --- 按上游管理各自的 API Key ---
 
 // listUpstreamAPIKeys 返回指定上游的所有 API Key 及启用状态。
 func (h *AdminHandler) listUpstreamAPIKeys(w http.ResponseWriter, r *http.Request) {
@@ -1745,7 +1745,7 @@ func (h *AdminHandler) setAPIKeyEnabled(w http.ResponseWriter, r *http.Request) 
 		jsonError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	// Trigger re-probe so key changes take effect immediately.
+	// 立即触发一次探活，让 Key 变更马上生效。
 	go func() {
 		defer func() { recover() }()
 		h.prober.ProbeNow()
@@ -1851,7 +1851,7 @@ func (h *AdminHandler) testUpstreamAPIKey(w http.ResponseWriter, r *http.Request
 	if req.Model == "" {
 		switch req.Protocol {
 		case "anthropic":
-			// Align with sub2api DefaultTestModel (lighter than Opus for probe).
+			// 与 sub2api 的 DefaultTestModel 保持一致（探测用，比 Opus 更轻量）。
 			req.Model = proxy.DefaultAnthropicTestModel
 		case "responses":
 			req.Model = proxy.DefaultCodexTestModel
@@ -1891,11 +1891,11 @@ func (h *AdminHandler) testUpstreamAPIKey(w http.ResponseWriter, r *http.Request
 	var body []byte
 	var testURL string
 	var headers map[string]string
-	var claudeIdentity proxy.ClaudeCodeTestIdentity // admin OAuth+spoof only
-	var codexIdentity proxy.CodexTestIdentity       // admin responses+spoof only
+	var claudeIdentity proxy.ClaudeCodeTestIdentity // 仅 admin OAuth+伪装场景使用
+	var codexIdentity proxy.CodexTestIdentity       // 仅 admin responses+伪装场景使用
 	oauthAnthropic := req.Protocol == "anthropic" && upstream.AuthMode == "oauth"
-	// client_spoof: when true, build Claude Code / Codex shaped probe (test panel only).
-	// Default ON for OAuth Anthropic and responses (Codex); OFF for plain OpenAI/API-key probes.
+	// client_spoof：为 true 时构造 Claude Code / Codex 形态的探测请求（仅测试面板使用）。
+	// OAuth Anthropic 和 responses（Codex）默认开启；普通 OpenAI/API-key 探测默认关闭。
 	clientSpoof := false
 	if req.ClientSpoof != nil {
 		clientSpoof = *req.ClientSpoof
@@ -1907,8 +1907,8 @@ func (h *AdminHandler) testUpstreamAPIKey(w http.ResponseWriter, r *http.Request
 
 	switch req.Protocol {
 	case "anthropic":
-		// OAuth+spoof: sub2api-style Claude Code body (?beta=true, system/metadata/stream).
-		// Otherwise: minimal messages probe. Never affects live CC proxy traffic.
+		// OAuth+伪装：sub2api 风格的 Claude Code 请求体（?beta=true，system/metadata/stream）。
+		// 否则：最简 messages 探测请求。绝不影响真实的 CC 代理流量。
 		testURL = proxy.AnthropicMessagesTestURL(upstream.BaseURL, spoofClaude)
 		if spoofClaude {
 			var err error
@@ -2010,7 +2010,7 @@ func (h *AdminHandler) testUpstreamAPIKey(w http.ResponseWriter, r *http.Request
 	for k, v := range headers {
 		httpReq.Header.Set(k, v)
 	}
-	// Apply client spoof headers only when toggle is on (test panel only).
+	// 仅当开关开启时才应用客户端伪装 Header（仅测试面板使用）。
 	if req.Protocol == "anthropic" && targetKey != "" {
 		if spoofClaude {
 			proxy.ApplyClaudeCodeTestHeaders(httpReq.Header, true, claudeIdentity.SessionID)
@@ -2209,7 +2209,7 @@ func (h *AdminHandler) testUpstreamAPIKey(w http.ResponseWriter, r *http.Request
 	jsonOK(w, result)
 }
 
-// --- Upstream Model Patterns ---
+// --- 上游模型模式 ---
 
 // getAllUpstreamModelPatterns 返回所有上游的模型模式，供管理页批量渲染。
 func (h *AdminHandler) getAllUpstreamModelPatterns(w http.ResponseWriter, r *http.Request) {
@@ -2304,7 +2304,7 @@ func (h *AdminHandler) setUpstreamModelPatterns(w http.ResponseWriter, r *http.R
 	jsonOK(w, map[string]interface{}{"status": "updated", "patterns": cleaned})
 }
 
-// --- Upstream Declared Models ---
+// --- 上游声明模型 ---
 
 func (h *AdminHandler) getAllUpstreamDeclaredModels(w http.ResponseWriter, r *http.Request) {
 	models, err := h.store.GetAllUpstreamDeclaredModels()
@@ -2437,15 +2437,15 @@ func (h *AdminHandler) updateSettings(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]interface{}{"status": "updated"})
 }
 
-// getHeaderCapture returns capture enabled flag + recent snapshots (newest first).
-// Each item is annotated with client_family: claude_code | codex | other.
+// getHeaderCapture 返回抓取启用标志 + 最近的快照（最新的排在前面）。
+// 每一项都标注了 client_family：claude_code | codex | other。
 func (h *AdminHandler) getHeaderCapture(w http.ResponseWriter, r *http.Request) {
 	if h.headerCapture == nil {
 		jsonOK(w, map[string]interface{}{"enabled": false, "captures": []interface{}{}})
 		return
 	}
 	enabled, items := h.headerCapture.Snapshot()
-	// Enrich for UI badges without mutating the middleware store.
+	// 为 UI 徽标补充信息，不修改 middleware 层的存储。
 	type captureView struct {
 		middleware.CapturedHeaderRequest
 		ClientFamily string `json:"client_family"`
@@ -2464,7 +2464,7 @@ func (h *AdminHandler) getHeaderCapture(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-// updateHeaderCapture enables or disables capture: {"enabled": true}.
+// updateHeaderCapture 启用或禁用抓取：{"enabled": true}。
 func (h *AdminHandler) updateHeaderCapture(w http.ResponseWriter, r *http.Request) {
 	if h.headerCapture == nil {
 		jsonError(w, http.StatusServiceUnavailable, "header capture not available")
@@ -2486,7 +2486,7 @@ func (h *AdminHandler) updateHeaderCapture(w http.ResponseWriter, r *http.Reques
 	jsonOK(w, map[string]interface{}{"enabled": *body.Enabled})
 }
 
-// clearHeaderCapture drops stored snapshots (does not change enabled flag).
+// clearHeaderCapture 清空已存储的快照（不改变启用标志）。
 func (h *AdminHandler) clearHeaderCapture(w http.ResponseWriter, r *http.Request) {
 	if h.headerCapture == nil {
 		jsonError(w, http.StatusServiceUnavailable, "header capture not available")

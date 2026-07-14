@@ -6,8 +6,7 @@ import (
 	"github.com/Instawork/llm-proxy/internal/proxy"
 )
 
-// AuthRewriteMiddleware replaces the downstream API key in auth headers with
-// the active upstream's key before forwarding.
+// AuthRewriteMiddleware 在转发前，用当前活跃上游的 Key 替换鉴权头中的下游 API Key。
 func AuthRewriteMiddleware(dp *proxy.DynamicProxy) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -16,7 +16,7 @@ import (
 	"sync/atomic"
 )
 
-// hopByHopHeaders are HTTP headers that must not be forwarded by proxies.
+// hopByHopHeaders 是不能被代理转发的 HTTP 逐跳头。
 var hopByHopHeaders = map[string]bool{
 	"Connection":          true,
 	"Keep-Alive":          true,
@@ -28,8 +28,8 @@ var hopByHopHeaders = map[string]bool{
 	"Upgrade":             true,
 }
 
-// sensitiveUpstreamHeaders are upstream response headers that should not be
-// leaked to downstream clients as they expose internal infrastructure details.
+// sensitiveUpstreamHeaders 是不应泄漏给下游客户端的上游响应头，
+// 因为它们会暴露内部基础设施细节。
 var sensitiveUpstreamHeaders = map[string]bool{
 	"Server":              true,
 	"X-Powered-By":        true,
@@ -43,8 +43,8 @@ var sensitiveUpstreamHeaders = map[string]bool{
 	"X-Openai-Request-Id": true,
 }
 
-// untrustedRequestHeaders are client-provided headers that should be stripped
-// before forwarding to the upstream to prevent identity spoofing.
+// untrustedRequestHeaders 是客户端提供的、转发给上游前应剥离的请求头，
+// 以防止身份伪造。
 var untrustedRequestHeaders = []string{
 	"X-Forwarded-For",
 	"X-Forwarded-Proto",
@@ -77,31 +77,31 @@ func ContextWithAllowedUpstreamIDs(ctx context.Context, ids []int64) context.Con
 	return context.WithValue(ctx, allowedUpstreamIDsKey{}, ids)
 }
 
-// AllowedUpstreamIDsFromContext reads the upstream access whitelist.
+// AllowedUpstreamIDsFromContext 读取上游访问白名单。
 func AllowedUpstreamIDsFromContext(ctx context.Context) []int64 {
 	v, _ := ctx.Value(allowedUpstreamIDsKey{}).([]int64)
 	return v
 }
 
 // ---------------------------------------------------------------------------
-// Per-Key Model Override context helpers
+// Per-Key 模型覆盖的 context helper
 // ---------------------------------------------------------------------------
 
 type keyModelOverridesKey struct{}
 
-// KeyModelOverrideRule is a runtime override rule.
-// One ModelPattern can map to multiple UpstreamIDs (failover list).
+// KeyModelOverrideRule 是一条运行时覆盖规则。
+// 一个 ModelPattern 可以映射到多个 UpstreamIDs（故障切换列表）。
 type KeyModelOverrideRule struct {
 	ModelPattern string
 	UpstreamIDs  []int64
 }
 
-// ContextWithKeyModelOverrides writes per-key model routing overrides to context.
+// ContextWithKeyModelOverrides 把 per-key 模型路由覆盖写入 context。
 func ContextWithKeyModelOverrides(ctx context.Context, overrides []KeyModelOverrideRule) context.Context {
 	return context.WithValue(ctx, keyModelOverridesKey{}, overrides)
 }
 
-// KeyModelOverridesFromContext reads per-key model routing overrides.
+// KeyModelOverridesFromContext 读取 per-key 模型路由覆盖。
 func KeyModelOverridesFromContext(ctx context.Context) []KeyModelOverrideRule {
 	v, _ := ctx.Value(keyModelOverridesKey{}).([]KeyModelOverrideRule)
 	return v
@@ -128,7 +128,7 @@ type ActiveUpstream struct {
 	fillKeyFailed bool   // fill 模式当前 Key 是否已失败
 
 	// 失败追踪：记录每个 Key 的连续失败次数，用于自动禁用。
-	keyFailures map[int]int64 // keyRowID -> consecutive failures
+	keyFailures map[int]int64 // keyRowID -> 连续失败次数
 }
 
 // NextAPIKey 返回下一个 API Key、其在列表中的索引（0-based）和对应的数据库行 ID。
@@ -187,22 +187,22 @@ func (u *ActiveUpstream) MarkKeyFailed() {
 	u.keyMu.Unlock()
 }
 
-// DynamicProxy is a reverse proxy with multi-upstream failover.
-// Healthy upstreams are tried in priority order. On auth (401/403), rate-limit
-// or quota (429), or gateway errors (502/503/504), the next upstream is tried.
-// Auth/quota/rate-limit failures increment key consecutive_failures; 5xx does not.
+// DynamicProxy 是支持多上游故障切换的反向代理。
+// 健康的上游按优先级顺序依次尝试。遇到鉴权错误（401/403）、限流或额度耗尽
+// （429）、网关错误（502/503/504）时会尝试下一个上游。
+// 鉴权/额度/限流失败会使 Key 的连续失败计数递增；5xx 不会。
 // 每个上游通过 BuildTransport 获取对应代理的 *http.Transport，相同代理复用连接池。
 type DynamicProxy struct {
-	allUpstreams    atomic.Value // stores []*ActiveUpstream
+	allUpstreams    atomic.Value // 存储 []*ActiveUpstream
 	activeRequests atomic.Int64
 
 	// AutoDisableThreshold 连续 429 达到此值立即禁用 Key，0 表示禁用此功能。
 	// 使用 atomic 读写，支持运行时动态修改。
 	AutoDisableThreshold atomic.Int64
 
-	// WhitelistMatcher checks if a model is in the global whitelist.
-	// Injected from main.go to avoid proxy->middleware circular dependency.
-	// Returns true if model is allowed; nil means no whitelist enforcement.
+	// WhitelistMatcher 检查某个模型是否在全局白名单中。
+	// 由 main.go 注入，以避免 proxy->middleware 的循环依赖。
+	// 返回 true 表示允许该模型；nil 表示不启用白名单校验。
 	WhitelistMatcher func(model string) bool
 
 	// KeyFailCallback 在 API Key 请求失败时调用（429 或连接错误）。
@@ -214,14 +214,14 @@ type DynamicProxy struct {
 	KeySuccessCallback func(upstreamID, keyRowID int64)
 }
 
-// NewDynamicProxy creates a DynamicProxy.
+// NewDynamicProxy 创建一个 DynamicProxy。
 func NewDynamicProxy() *DynamicProxy {
 	return &DynamicProxy{}
 }
 
-// SetAllUpstreams atomically replaces the full list of upstreams (sorted by
-// priority, highest-priority first). Key scheduling cursors (RR/fill index)
-// are preserved across prober rebuilds when the same upstream ID remains.
+// SetAllUpstreams 原子地替换整个上游列表（已按优先级排序，最高优先级在前）。
+// 当相同的上游 ID 仍然存在时，Key 调度游标（RR/fill 索引）会在探测器重建列表
+// 时被保留下来。
 func (dp *DynamicProxy) SetAllUpstreams(upstreams []*ActiveUpstream) {
 	prev := dp.GetAllUpstreams()
 	if len(prev) > 0 && len(upstreams) > 0 {
@@ -249,18 +249,18 @@ func (dp *DynamicProxy) SetAllUpstreams(upstreams []*ActiveUpstream) {
 	dp.allUpstreams.Store(upstreams)
 }
 
-// SetActiveUpstream is a convenience method that sets a single-element upstream
-// list. Kept for backward compatibility with existing callers.
+// SetActiveUpstream 是一个便捷方法，设置只含单个元素的上游列表。
+// 保留此方法是为了兼容现有调用方。
 func (dp *DynamicProxy) SetActiveUpstream(baseURL *url.URL, apiKey, name string) {
 	dp.SetAllUpstreams([]*ActiveUpstream{{BaseURL: baseURL, APIKeys: []string{apiKey}, Name: name}})
 }
 
-// ClearActiveUpstream removes all upstreams so the proxy returns 503.
+// ClearActiveUpstream 移除所有上游，使代理返回 503。
 func (dp *DynamicProxy) ClearActiveUpstream() {
 	dp.allUpstreams.Store(([]*ActiveUpstream)(nil))
 }
 
-// GetActiveUpstream returns the first (highest-priority) upstream, or nil.
+// GetActiveUpstream 返回第一个（最高优先级）上游，若无则返回 nil。
 func (dp *DynamicProxy) GetActiveUpstream() *ActiveUpstream {
 	all := dp.GetAllUpstreams()
 	if len(all) == 0 {
@@ -269,7 +269,7 @@ func (dp *DynamicProxy) GetActiveUpstream() *ActiveUpstream {
 	return all[0]
 }
 
-// GetAllUpstreams returns all currently configured upstreams.
+// GetAllUpstreams 返回当前配置的所有上游。
 func (dp *DynamicProxy) GetAllUpstreams() []*ActiveUpstream {
 	v := dp.allUpstreams.Load()
 	if v == nil {
@@ -312,12 +312,12 @@ func (dp *DynamicProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		upstreams = filtered
 	}
 
-	// Detect provider style for auth rewriting.
+	// 检测客户端使用的 provider 风格，用于鉴权头重写。
 	style := DetectProviderStyle(r)
 
-	// Buffer request body for potential retries across upstreams.
-	// Limit to 32MB to prevent memory exhaustion; LLM API payloads are
-	// typically small JSON messages.
+	// 缓冲请求体，以便在多个上游间重试时复用。
+	// 限制为 32MB 以防止内存耗尽；LLM API 的请求体
+	// 通常都是较小的 JSON 消息。
 	const maxBodySize = 32 << 20 // 32 MB
 	bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, maxBodySize+1))
 	r.Body.Close()
@@ -410,7 +410,7 @@ func (dp *DynamicProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	for i, active := range upstreams {
 		isLast := i == len(upstreams)-1
 
-		// Build outgoing request.
+		// 构建外发请求。
 		outReq := r.Clone(r.Context())
 		outReq.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 		outReq.ContentLength = int64(len(bodyBytes))
@@ -418,25 +418,25 @@ func (dp *DynamicProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		outReq.URL.Host = active.BaseURL.Host
 		outReq.Host = active.BaseURL.Host
 
-		// Prepend any path prefix from the upstream base URL.
+		// 拼接上游 base URL 中可能存在的路径前缀。
 		if active.BaseURL.Path != "" && active.BaseURL.Path != "/" {
 			outReq.URL.Path = strings.TrimRight(active.BaseURL.Path, "/") + outReq.URL.Path
 		}
 
-		// Rewrite auth headers for this specific upstream (round-robin key).
+		// 为当前这个具体上游重写鉴权头（round-robin 选取 Key）。
 		apiKey, keyIdx, keyRowID := active.NextAPIKey()
 		RewriteAuthHeaders(outReq, style, apiKey, active.AuthMode)
 
-		// Strip untrusted proxy/identity headers to prevent downstream
-		// clients from spoofing their identity at the upstream.
+		// 剥离不可信的代理/身份相关请求头，防止下游客户端
+		// 在上游面前伪造自己的身份。
 		for _, h := range untrustedRequestHeaders {
 			outReq.Header.Del(h)
 		}
-		// RFC 7230 hop-by-hop headers (including Connection token list).
+		// RFC 7230 逐跳头（包括 Connection 头列出的 token 列表）。
 		stripRequestHopByHop(outReq.Header)
 
-		// Remove Accept-Encoding so upstreams typically send plain text
-		// (DisableCompression is also set on Transport). Needed for model filter.
+		// 移除 Accept-Encoding，使上游通常返回纯文本
+		//（Transport 上也设置了 DisableCompression）。模型过滤逻辑需要这样做。
 		outReq.Header.Del("Accept-Encoding")
 
 		// 按上游代理配置获取对应 transport。
@@ -471,8 +471,8 @@ func (dp *DynamicProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					"upstream", active.Name, "error", err)
 				continue
 			}
-			// Last upstream also errored — return generic 502 to client.
-			// Full error details are logged server-side only.
+			// 最后一个上游也出错了 —— 向客户端返回通用 502。
+			// 详细错误信息只记录在服务端日志中。
 			slog.Error("proxy error", "error", err, "path", r.URL.Path)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadGateway)
@@ -480,11 +480,11 @@ func (dp *DynamicProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Failover: auth / rate-limit / quota / gateway errors on non-last upstream.
+		// 故障切换：非最后一个上游遇到鉴权/限流/额度/网关错误。
 		if shouldFailoverStatus(resp.StatusCode) && !isLast {
 			var peek []byte
 			if resp.StatusCode == http.StatusTooManyRequests {
-				// Peek a small body for quota vs transient RL; preserve Closer.
+				// 窥探一小段响应体以区分额度耗尽和临时限流；保留 Closer。
 				peek = peekResponseBody(resp, 8<<10)
 			}
 			kind := classifyUpstreamFailure(resp.StatusCode, resp.Header, peek)
@@ -499,13 +499,13 @@ func (dp *DynamicProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		// Forward response to client.
+		// 把响应转发给客户端。
 		if resp.StatusCode < 400 {
 			if dp.KeySuccessCallback != nil && keyRowID > 0 {
 				dp.KeySuccessCallback(active.ID, keyRowID)
 			}
 		} else if shouldFailoverStatus(resp.StatusCode) {
-			// Last upstream (or non-failover code path): still track key health.
+			// 最后一个上游（或非故障切换的代码路径）：仍然要跟踪 Key 健康状态。
 			var peek []byte
 			if resp.StatusCode == http.StatusTooManyRequests {
 				peek = peekResponseBody(resp, 8<<10)
@@ -523,12 +523,12 @@ func (dp *DynamicProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// forwardResponse copies an upstream HTTP response to the downstream client,
-// handling SSE streaming headers and flushing.
+// forwardResponse 把上游的 HTTP 响应拷贝给下游客户端，
+// 处理 SSE 流式响应头及 flush。
 func (dp *DynamicProxy) forwardResponse(w http.ResponseWriter, resp *http.Response, upstreamName string, keyIdx int, proxyURL string) {
 	defer resp.Body.Close()
 
-	// Copy response headers, filtering out hop-by-hop and sensitive headers.
+	// 拷贝响应头，过滤掉逐跳头和敏感头。
 	for k, vv := range resp.Header {
 		if hopByHopHeaders[k] || sensitiveUpstreamHeaders[k] {
 			continue
@@ -538,7 +538,7 @@ func (dp *DynamicProxy) forwardResponse(w http.ResponseWriter, resp *http.Respon
 		}
 	}
 
-	// Handle SSE headers.
+	// 处理 SSE 相关的响应头。
 	ct := resp.Header.Get("Content-Type")
 	if ct == "text/event-stream" || strings.Contains(ct, "text/event-stream") {
 		w.Header().Set("Cache-Control", "no-cache")
@@ -546,9 +546,8 @@ func (dp *DynamicProxy) forwardResponse(w http.ResponseWriter, resp *http.Respon
 		w.Header().Del("Content-Length")
 	}
 
-	// Store upstream name for audit middleware. This header is set BEFORE
-	// WriteHeader and will be read then deleted by the audit middleware
-	// wrapper before the response reaches the client.
+	// 把上游名称存入响应头供审计中间件使用。这个头会在 WriteHeader
+	// 之前设置，审计中间件的 wrapper 会在响应到达客户端之前读取并删除它。
 	w.Header().Set("X-Upstream-Name", upstreamName)
 	w.Header().Set("X-API-Key-Index", strconv.Itoa(keyIdx))
 	w.Header().Set("X-Used-Proxy", proxyURL)
@@ -576,7 +575,7 @@ func (dp *DynamicProxy) forwardResponse(w http.ResponseWriter, resp *http.Respon
 
 	w.WriteHeader(resp.StatusCode)
 
-	// Stream body with flush support for SSE.
+	// 流式写出响应体，支持 SSE 场景下的 flush。
 	if f, ok := w.(http.Flusher); ok {
 		bufp := streamBufPool.Get().(*[]byte)
 		buf := *bufp

@@ -13,27 +13,27 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// Store provides access to the SQLite database.
+// Store 提供对 SQLite 数据库的访问。
 type Store struct {
 	db            *sql.DB
 	encryptionKey []byte
 }
 
-// NewStore opens the SQLite database at dbPath, applies PRAGMAs, and runs migrations.
-// encryptionKey must be exactly 32 bytes.
+// NewStore 打开 dbPath 处的 SQLite 数据库，应用 PRAGMA 设置并运行迁移。
+// encryptionKey 必须正好是 32 字节。
 func NewStore(dbPath string, encryptionKey []byte) (*Store, error) {
 	if len(encryptionKey) != 32 {
 		return nil, fmt.Errorf("encryption key must be 32 bytes, got %d", len(encryptionKey))
 	}
 
-	// Use DSN parameters to ensure PRAGMAs apply to every connection in the pool.
+	// 使用 DSN 参数确保 PRAGMA 设置应用到连接池中的每个连接。
 	dsn := dbPath + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
-	// Single connection serializes all access through one WAL snapshot,
-	// preventing stale-read races in write-then-read sequences.
+	// 单连接通过一个 WAL 快照序列化所有访问，
+	// 防止写后读场景中出现脏读竞争。
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 
@@ -45,19 +45,19 @@ func NewStore(dbPath string, encryptionKey []byte) (*Store, error) {
 	return &Store{db: db, encryptionKey: encryptionKey}, nil
 }
 
-// Close closes the underlying database connection.
+// Close 关闭底层数据库连接。
 func (s *Store) Close() error {
 	return s.db.Close()
 }
 
 // ---------------------------------------------------------------------------
-// Upstream CRUD
+// 上游 CRUD
 // ---------------------------------------------------------------------------
 
-// CreateUpstream inserts a new upstream provider with one or more API keys.
-// Each key is encrypted before storage in the upstream_api_keys table.
-// URL validation (scheme, SSRF) is the responsibility of the HTTP handler layer;
-// the store accepts any non-empty URL to remain testable with loopback addresses.
+// CreateUpstream 插入一个新的上游 provider，可携带一个或多个 API Key。
+// 每个 Key 在写入 upstream_api_keys 表之前都会被加密。
+// URL 校验（scheme、SSRF）由 HTTP handler 层负责；
+// store 层接受任意非空 URL，以便使用 loopback 地址进行测试。
 func (s *Store) CreateUpstream(name, baseURL string, apiKeys []string, priority int, proxyURL string, keySchedulingMode string, authMode string, remark string) (*UpstreamProvider, error) {
 	if keySchedulingMode == "" {
 		keySchedulingMode = "round-robin"
@@ -131,7 +131,7 @@ func (s *Store) CreateUpstream(name, baseURL string, apiKeys []string, priority 
 	}, nil
 }
 
-// GetUpstream retrieves an upstream provider by ID, decrypting all its API keys.
+// GetUpstream 按 ID 获取一个上游 provider，并解密其所有 API Key。
 func (s *Store) GetUpstream(id int64) (*UpstreamProvider, error) {
 	row := s.db.QueryRow(
 		`SELECT id, name, base_url, priority, enabled, key_scheduling_mode, auth_mode, remark, proxy_url, created_at, updated_at
@@ -155,7 +155,7 @@ func (s *Store) GetUpstream(id int64) (*UpstreamProvider, error) {
 	return &up, nil
 }
 
-// ListUpstreams returns all upstream providers with decrypted API keys.
+// ListUpstreams 返回所有上游 provider，并附带已解密的 API Key。
 func (s *Store) ListUpstreams() ([]UpstreamProvider, error) {
 	rows, err := s.db.Query(
 		`SELECT id, name, base_url, priority, enabled, key_scheduling_mode, auth_mode, remark, proxy_url, created_at, updated_at
@@ -191,8 +191,8 @@ func (s *Store) ListUpstreams() ([]UpstreamProvider, error) {
 	return result, nil
 }
 
-// UpdateUpstream replaces all mutable fields of an upstream provider.
-// If apiKeys is non-nil, fully replaces the upstream's API keys.
+// UpdateUpstream 替换一个上游 provider 的所有可变字段。
+// 如果 apiKeys 非 nil，则全量替换该上游的 API Key。
 func (s *Store) UpdateUpstream(id int64, name, baseURL string, apiKeys []string, priority int, enabled bool, proxyURL string, keySchedulingMode string, authMode string, remark string) (*UpstreamProvider, error) {
 	now := time.Now().UTC()
 	if authMode == "" {
@@ -256,7 +256,7 @@ func (s *Store) UpdateUpstream(id int64, name, baseURL string, apiKeys []string,
 	return s.GetUpstream(id)
 }
 
-// DeleteUpstream removes an upstream provider by ID.
+// DeleteUpstream 按 ID 删除一个上游 provider。
 // CASCADE 外键会自动删除 upstream_api_keys 中的关联 Key。
 func (s *Store) DeleteUpstream(id int64) error {
 	res, err := s.db.Exec(`DELETE FROM upstream_providers WHERE id=?`, id)
@@ -273,7 +273,7 @@ func (s *Store) DeleteUpstream(id int64) error {
 	return nil
 }
 
-// BatchSetUpstreamEnabled sets enabled for multiple upstreams. Returns rows affected.
+// BatchSetUpstreamEnabled 批量设置多个上游的启用状态，返回受影响的行数。
 func (s *Store) BatchSetUpstreamEnabled(ids []int64, enabled bool) (int64, error) {
 	ids = uniquePositiveIDs(ids)
 	if len(ids) == 0 {
@@ -290,8 +290,8 @@ func (s *Store) BatchSetUpstreamEnabled(ids []int64, enabled bool) (int64, error
 	return res.RowsAffected()
 }
 
-// BatchDeleteUpstreams removes multiple upstreams. CASCADE cleans related keys/bindings.
-// Returns number of deleted rows.
+// BatchDeleteUpstreams 批量删除多个上游，CASCADE 会自动清理关联的 Key/绑定。
+// 返回已删除的行数。
 func (s *Store) BatchDeleteUpstreams(ids []int64) (int64, error) {
 	ids = uniquePositiveIDs(ids)
 	if len(ids) == 0 {
@@ -306,7 +306,7 @@ func (s *Store) BatchDeleteUpstreams(ids []int64) (int64, error) {
 	return res.RowsAffected()
 }
 
-// uniquePositiveIDs dedupes and drops non-positive ids.
+// uniquePositiveIDs 去重并丢弃非正数 ID。
 func uniquePositiveIDs(ids []int64) []int64 {
 	if len(ids) == 0 {
 		return nil
@@ -326,7 +326,7 @@ func uniquePositiveIDs(ids []int64) []int64 {
 	return out
 }
 
-// int64InClause builds "?,?,?" placeholders and args for an IN list.
+// int64InClause 为 IN 列表构建 "?,?,?" 占位符和参数。
 func int64InClause(ids []int64) (placeholders string, args []interface{}) {
 	parts := make([]string, len(ids))
 	args = make([]interface{}, len(ids))
@@ -621,11 +621,11 @@ func (s *Store) GetAllUpstreamAPIKeyRowIDs() (map[int64][]int64, error) {
 }
 
 // ---------------------------------------------------------------------------
-// Downstream Key CRUD
+// 下游 Key CRUD
 // ---------------------------------------------------------------------------
 
-// CreateKey generates a new downstream API key, stores its SHA-256 hash, and
-// returns the plaintext key exactly once.
+// CreateKey 生成一个新的下游 API Key，存储其 SHA-256 哈希，
+// 并仅返回一次明文 Key。
 func (s *Store) CreateKey(name string, rpmLimit int) (plaintext string, key *DownstreamKey, err error) {
 	raw := make([]byte, 32)
 	if _, err = rand.Read(raw); err != nil {
@@ -633,7 +633,7 @@ func (s *Store) CreateKey(name string, rpmLimit int) (plaintext string, key *Dow
 	}
 
 	plaintext = "sk-" + hex.EncodeToString(raw)
-	prefix := plaintext[:len("sk-")+8] // "sk-" + first 8 hex chars
+	prefix := plaintext[:len("sk-")+8] // "sk-" + 前 8 位十六进制字符
 
 	hashBytes := sha256.Sum256([]byte(plaintext))
 	keyHash := hex.EncodeToString(hashBytes[:])
@@ -693,7 +693,7 @@ func (s *Store) GetKeyPlaintext(id int64) (string, error) {
 	return plain, nil
 }
 
-// LookupKeyByHash retrieves a downstream key by its SHA-256 hash.
+// LookupKeyByHash 按 SHA-256 哈希获取下游 Key。
 func (s *Store) LookupKeyByHash(hash string) (*DownstreamKey, error) {
 	row := s.db.QueryRow(
 		`SELECT id, key_hash, key_prefix, name, rpm_limit, enabled, created_at, updated_at
@@ -710,7 +710,7 @@ func (s *Store) LookupKeyByHash(hash string) (*DownstreamKey, error) {
 	return &dk, nil
 }
 
-// LookupKeyByID retrieves a downstream key by its ID.
+// LookupKeyByID 按 ID 获取下游 Key。
 func (s *Store) LookupKeyByID(id int64) (*DownstreamKey, error) {
 	row := s.db.QueryRow(
 		`SELECT id, key_hash, key_prefix, name, rpm_limit, enabled, created_at, updated_at
@@ -726,7 +726,7 @@ func (s *Store) LookupKeyByID(id int64) (*DownstreamKey, error) {
 	return &dk, nil
 }
 
-// ListKeys returns all downstream keys ordered by creation time.
+// ListKeys 按创建时间返回所有下游 Key。
 func (s *Store) ListKeys() ([]DownstreamKey, error) {
 	return s.queryKeys(
 		`SELECT id, key_hash, key_prefix, name, rpm_limit, enabled, created_at, updated_at
@@ -734,12 +734,12 @@ func (s *Store) ListKeys() ([]DownstreamKey, error) {
 	)
 }
 
-// GetAllKeys returns all downstream keys (equivalent to ListKeys; provided for snapshot loading).
+// GetAllKeys 返回所有下游 Key（等价于 ListKeys；用于快照加载）。
 func (s *Store) GetAllKeys() ([]DownstreamKey, error) {
 	return s.ListKeys()
 }
 
-// UpdateKey updates mutable fields of a downstream key.
+// UpdateKey 更新下游 Key 的可变字段。
 func (s *Store) UpdateKey(id int64, name string, rpmLimit int, enabled bool) (*DownstreamKey, error) {
 	now := time.Now().UTC()
 	res, err := s.db.Exec(
@@ -768,7 +768,7 @@ func (s *Store) UpdateKey(id int64, name string, rpmLimit int, enabled bool) (*D
 	return &dk, nil
 }
 
-// DeleteKey removes a downstream key by ID.
+// DeleteKey 按 ID 删除下游 Key。
 func (s *Store) DeleteKey(id int64) error {
 	res, err := s.db.Exec(`DELETE FROM downstream_keys WHERE id=?`, id)
 	if err != nil {
@@ -784,7 +784,7 @@ func (s *Store) DeleteKey(id int64) error {
 	return nil
 }
 
-// queryKeys is a helper that runs a SELECT query and scans DownstreamKey rows.
+// queryKeys 是一个辅助函数，执行 SELECT 查询并扫描 DownstreamKey 行。
 func (s *Store) queryKeys(query string, args ...interface{}) ([]DownstreamKey, error) {
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
@@ -807,10 +807,10 @@ func (s *Store) queryKeys(query string, args ...interface{}) ([]DownstreamKey, e
 }
 
 // ---------------------------------------------------------------------------
-// Request Log
+// 请求日志
 // ---------------------------------------------------------------------------
 
-// InsertRequestLogBatch inserts a batch of request logs in a single transaction.
+// InsertRequestLogBatch 在单个事务中批量插入请求日志。
 func (s *Store) InsertRequestLogBatch(logs []RequestLog) error {
 	if len(logs) == 0 {
 		return nil
@@ -848,7 +848,7 @@ func (s *Store) InsertRequestLogBatch(logs []RequestLog) error {
 	return nil
 }
 
-// DeleteLogsOlderThan removes request logs older than the given duration from now.
+// DeleteLogsOlderThan 删除早于给定时长（从现在算起）的请求日志。
 func (s *Store) DeleteLogsOlderThan(d time.Duration) error {
 	cutoff := time.Now().UTC().Add(-d)
 	if _, err := s.db.Exec(`DELETE FROM request_logs WHERE created_at < ?`, cutoff); err != nil {
@@ -857,8 +857,8 @@ func (s *Store) DeleteLogsOlderThan(d time.Duration) error {
 	return nil
 }
 
-// QueryLogs retrieves request logs for a given key within a time range.
-// Pass keyID=0 to query across all keys. limit<=0 means no limit.
+// QueryLogs 获取指定 Key 在给定时间范围内的请求日志。
+// keyID 传 0 表示查询所有 Key。limit<=0 表示不限制条数。
 func (s *Store) QueryLogs(keyID int64, from, to time.Time, limit int) ([]RequestLog, error) {
 	query := `SELECT id, downstream_key_id, upstream_name, upstream_key_idx, model, used_proxy, client_ip, ip_region, provider_style, path, status_code, latency_ms, created_at
 	          FROM request_logs WHERE created_at >= ? AND created_at <= ?`
@@ -954,9 +954,9 @@ func (s *Store) CountKeys() (int, error) {
 	return count, nil
 }
 
-// ---- Model Whitelist ----
+// ---- 模型白名单 ----
 
-// ListModelWhitelist returns all whitelist patterns.
+// ListModelWhitelist 返回所有白名单模式。
 func (s *Store) ListModelWhitelist() ([]ModelWhitelistEntry, error) {
 	rows, err := s.db.Query(`SELECT id, pattern, created_at FROM model_whitelist ORDER BY pattern`)
 	if err != nil {
@@ -975,7 +975,7 @@ func (s *Store) ListModelWhitelist() ([]ModelWhitelistEntry, error) {
 	return result, rows.Err()
 }
 
-// AddModelWhitelist inserts a new pattern into the whitelist.
+// AddModelWhitelist 向白名单插入一个新模式。
 func (s *Store) AddModelWhitelist(pattern string) (ModelWhitelistEntry, error) {
 	now := time.Now().UTC()
 	res, err := s.db.Exec(
@@ -989,7 +989,7 @@ func (s *Store) AddModelWhitelist(pattern string) (ModelWhitelistEntry, error) {
 	return ModelWhitelistEntry{ID: id, Pattern: pattern, CreatedAt: now}, nil
 }
 
-// DeleteModelWhitelist removes a pattern by ID.
+// DeleteModelWhitelist 按 ID 删除一个模式。
 func (s *Store) DeleteModelWhitelist(id int64) error {
 	res, err := s.db.Exec(`DELETE FROM model_whitelist WHERE id = ?`, id)
 	if err != nil {
@@ -1022,7 +1022,7 @@ func (s *Store) BatchDeleteModelWhitelist(ids []int64) (int64, error) {
 }
 
 // ---------------------------------------------------------------------------
-// Key ↔ Upstream Bindings
+// Key ↔ 上游绑定关系
 // ---------------------------------------------------------------------------
 
 // SetKeyUpstreams 以“全量覆盖”方式更新某个下游 Key 的上游绑定。
@@ -1111,7 +1111,7 @@ func (s *Store) GetAllKeyBindings() (map[int64][]int64, error) {
 }
 
 // ---------------------------------------------------------------------------
-// Upstream Model Patterns
+// 上游模型模式
 // ---------------------------------------------------------------------------
 
 // SetUpstreamModelPatterns 以全量覆盖方式更新某个上游的模型模式列表。
@@ -1194,7 +1194,7 @@ func (s *Store) GetAllUpstreamModelPatterns() (map[int64][]string, error) {
 }
 
 // ---------------------------------------------------------------------------
-// Upstream Declared Models
+// 上游声明模型
 // ---------------------------------------------------------------------------
 
 // SetUpstreamDeclaredModels 以全量覆盖方式更新某个上游的声明模型列表。
@@ -1276,7 +1276,7 @@ func (s *Store) GetAllUpstreamDeclaredModels() (map[int64][]string, error) {
 }
 
 // ---------------------------------------------------------------------------
-// Key Model Overrides
+// Key 模型路由覆盖
 // ---------------------------------------------------------------------------
 
 // KeyModelOverrideInput 是写入覆盖规则时使用的输入结构。
@@ -1367,7 +1367,7 @@ func (s *Store) GetAllKeyModelOverrides() (map[int64][]KeyModelOverride, error) 
 }
 
 // ---------------------------------------------------------------------------
-// Test Models
+// 测试模型
 // ---------------------------------------------------------------------------
 
 // ListTestModels 返回所有测试模型，可选按协议过滤。

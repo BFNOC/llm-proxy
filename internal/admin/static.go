@@ -6,16 +6,16 @@ import (
 	"net/http"
 )
 
-// Static dashboard assets (HTML/CSS/JS). Kept as separate files under static/
-// so the admin UI is editable without a multi-thousand-line Go string literal.
+// Dashboard 静态资源（HTML/CSS/JS）。保留为 static/ 下的独立文件，
+// 这样 admin UI 可以编辑，而不需要写成数千行的 Go 字符串字面量。
 //
 //go:embed static/*
 var embeddedStatic embed.FS
 
-// dashboardHTML is the main admin page shell (loads CSS/JS from /admin/assets/).
+// dashboardHTML 是主 admin 页面壳层（从 /admin/assets/ 加载 CSS/JS）。
 var dashboardHTML []byte
 
-// staticAssets is the filesystem rooted at static/ for HTTP serving.
+// staticAssets 是以 static/ 为根目录的文件系统，供 HTTP 服务使用。
 var staticAssets fs.FS
 
 func init() {
@@ -31,8 +31,8 @@ func init() {
 	dashboardHTML = b
 }
 
-// assetsHandler serves /admin/assets/* from the embedded static directory.
-// no-cache so admin UI updates ship immediately after binary redeploy.
+// assetsHandler 从内嵌的静态目录提供 /admin/assets/* 服务。
+// 使用 no-cache，让 admin UI 更新在二进制重新部署后立即生效。
 func assetsHandler() http.Handler {
 	files := http.FileServer(http.FS(staticAssets))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

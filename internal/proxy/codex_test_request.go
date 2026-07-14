@@ -7,43 +7,43 @@ import (
 	"time"
 )
 
-// Codex client fingerprints for admin-panel KEY TESTS only (protocol=responses + client_spoof).
-// Live Codex → proxy traffic is reverse-proxied as-is; these helpers never run on that path.
+// Codex 客户端指纹，仅用于 admin 面板的 KEY 测试（protocol=responses + client_spoof）。
+// 真实的 Codex → proxy 流量按原样反向代理；这些辅助函数从不在那条路径上运行。
 //
-// Header/body shape aligned with a real codex-tui → llm-proxy capture (2026-07-11):
+// 请求头/请求体结构对齐一次真实 codex-tui → llm-proxy 的抓包（2026-07-11）：
 //   UA: codex-tui/0.144.1 (Mac OS 15.7.3; arm64) …
 //   Originator: codex-tui
-//   Session-Id / Thread-Id / X-Client-Request-Id share one UUID
+//   Session-Id / Thread-Id / X-Client-Request-Id 共用一个 UUID
 //   X-Codex-Window-Id: {session}:0
 //   X-Codex-Turn-Metadata + body.client_metadata / prompt_cache_key
-// Session / installation / turn IDs are freshly random per test — never reuse a live capture.
+// Session / installation / turn ID 每次测试都全新随机生成 —— 绝不复用真实抓包中的值。
 const (
-	// CodexCLIUserAgent matches real codex-tui on macOS arm64 (ghostty terminal).
+	// CodexCLIUserAgent 对应 macOS arm64（ghostty 终端）上真实的 codex-tui。
 	CodexCLIUserAgent = "codex-tui/0.144.1 (Mac OS 15.7.3; arm64) ghostty/1.3.2 (codex-tui; 0.144.1)"
 
-	// CodexOriginator must pair with User-Agent product (codex-tui).
+	// CodexOriginator 必须与 User-Agent 中的产品名（codex-tui）配对。
 	CodexOriginator = "codex-tui"
 
-	// CodexBetaFeatures from real X-Codex-Beta-Features header.
+	// CodexBetaFeatures 来自真实的 X-Codex-Beta-Features 请求头。
 	CodexBetaFeatures = "memories,remote_compaction_v2"
 
-	// DefaultCodexTestModel matches observed desktop Codex traffic.
+	// DefaultCodexTestModel 与观测到的桌面版 Codex 流量一致。
 	DefaultCodexTestModel = "gpt-5.5"
 
-	// Short system prompt for connectivity probes (real CLI ships a huge instructions blob).
+	// 用于连通性探测的简短系统提示词（真实 CLI 会携带一个巨大的 instructions blob）。
 	codexTestInstructions = "You are Codex, a coding agent based on GPT-5."
 )
 
-// CodexTestIdentity holds per-test randomized Codex session fields.
-// Real client ties Session-Id, Thread-Id, prompt_cache_key, and X-Client-Request-Id together.
+// CodexTestIdentity 保存单次测试中随机生成的 Codex session 字段。
+// 真实客户端会把 Session-Id、Thread-Id、prompt_cache_key 和 X-Client-Request-Id 绑定在一起。
 type CodexTestIdentity struct {
 	SessionID      string // UUID → Session-Id, Thread-Id, prompt_cache_key, X-Client-Request-Id
-	InstallationID string // UUID → client_metadata + turn metadata
-	TurnID         string // UUID → per-request turn
+	InstallationID string // UUID → client_metadata + turn metadata 中使用
+	TurnID         string // UUID → 每次请求的 turn
 	WindowID       string // "{session}:0"
 }
 
-// NewCodexTestIdentity generates fresh ids for one admin test.
+// NewCodexTestIdentity 为单次 admin 测试生成全新的 id。
 func NewCodexTestIdentity() CodexTestIdentity {
 	session := newClaudeCodeSessionID()
 	return CodexTestIdentity{
@@ -54,9 +54,9 @@ func NewCodexTestIdentity() CodexTestIdentity {
 	}
 }
 
-// codexTestToolsSubset is a tiny tool list shaped like real codex-tui traffic.
-// Full CLI dumps ship 14+ tools with multi-KB schemas; probes only need a few
-// distinctive names/types so upstream fingerprinting still sees "Codex".
+// codexTestToolsSubset 是一个结构类似真实 codex-tui 流量的极简工具列表。
+// 完整的 CLI 会携带 14+ 个工具、多 KB 大小的 schema；探测请求只需要几个
+// 有代表性的名称/类型，就足以让上游的指纹识别仍然判定为 "Codex"。
 func codexTestToolsSubset() []map[string]any {
 	return []map[string]any{
 		{
@@ -75,7 +75,7 @@ func codexTestToolsSubset() []map[string]any {
 			},
 		},
 		{
-			// Freeform patch tool is a strong Codex fingerprint (type=custom).
+			// 自由格式的 patch 工具是一个很强的 Codex 指纹特征（type=custom）。
 			"type":        "custom",
 			"name":        "apply_patch",
 			"description": "Use the apply_patch tool to edit files.",
@@ -122,7 +122,7 @@ func codexTestToolsSubset() []map[string]any {
 			},
 		},
 		{
-			// Present in real codex-tui dumps; keeps the tool_choice surface non-empty.
+			// 出现在真实的 codex-tui 抓包中；用于让 tool_choice 的候选面不为空。
 			"type":                 "web_search",
 			"external_web_access":  false,
 			"search_content_types": []string{"text", "image"},
@@ -130,9 +130,9 @@ func codexTestToolsSubset() []map[string]any {
 	}
 }
 
-// BuildCodexResponsesTestPayload builds a Codex-shaped /v1/responses body for admin tests.
-// Includes identity fields + a small tools subset; omits the full multi-KB CLI dump.
-// stream=false keeps admin reply parsing simple.
+// BuildCodexResponsesTestPayload 构建一个符合 Codex 格式的 /v1/responses 请求体，
+// 供 admin 测试使用。包含 identity 字段 + 一小部分工具子集；省略了完整的多 KB
+// CLI 数据。stream=false 使 admin 端解析响应更简单。
 func BuildCodexResponsesTestPayload(model, prompt string) (body []byte, id CodexTestIdentity, err error) {
 	if model == "" {
 		model = DefaultCodexTestModel
@@ -160,7 +160,8 @@ func BuildCodexResponsesTestPayload(model, prompt string) (body []byte, id Codex
 
 	payload := map[string]any{
 		"model": model,
-		// Real codex-tui wraps messages as {type:"message", role, content:[{type:input_text,text}]}.
+		// 真实的 codex-tui 会把消息包装为
+		// {type:"message", role, content:[{type:input_text,text}]}。
 		"input": []map[string]any{
 			{
 				"type": "message",
@@ -199,8 +200,8 @@ func BuildCodexResponsesTestPayload(model, prompt string) (body []byte, id Codex
 	return body, id, nil
 }
 
-// ApplyCodexTestHeaders sets codex-tui-like headers for an outbound responses test.
-// Identity must come from BuildCodexResponsesTestPayload so header/body IDs match.
+// ApplyCodexTestHeaders 为外发的 responses 测试请求设置类似 codex-tui 的请求头。
+// identity 必须来自 BuildCodexResponsesTestPayload，以确保请求头和请求体的 ID 一致。
 func ApplyCodexTestHeaders(h http.Header, id CodexTestIdentity) {
 	if h == nil {
 		return
@@ -232,22 +233,22 @@ func ApplyCodexTestHeaders(h http.Header, id CodexTestIdentity) {
 	})
 
 	h.Set("Content-Type", "application/json")
-	// Real capture uses text/event-stream with stream:true; we use non-stream for easy parsing.
+	// 真实抓包使用 text/event-stream + stream:true；我们为了便于解析使用非流式。
 	h.Set("Accept", "application/json")
 	h.Set("User-Agent", CodexCLIUserAgent)
 	h.Set("Originator", CodexOriginator)
-	// Real wire names (hyphenated) from codex-tui capture.
+	// 来自 codex-tui 抓包的真实请求头名称（带连字符）。
 	h.Set("Session-Id", id.SessionID)
 	h.Set("Thread-Id", id.SessionID)
-	// Real client reuses session UUID for x-client-request-id on the first turn.
+	// 真实客户端在第一轮对话中会把 session UUID 复用为 x-client-request-id。
 	h.Set("X-Client-Request-Id", id.SessionID)
 	h.Set("X-Codex-Beta-Features", CodexBetaFeatures)
 	h.Set("X-Codex-Window-Id", id.WindowID)
 	h.Set("X-Codex-Turn-Metadata", string(turnMeta))
 }
 
-// DetectInboundClientFamily classifies a captured /v1 request for admin UI badges.
-// Returns "claude_code", "codex", or "other".
+// DetectInboundClientFamily 对捕获到的 /v1 请求进行分类，供 admin UI 徽标使用。
+// 返回 "claude_code"、"codex" 或 "other"。
 func DetectInboundClientFamily(path string, flatHeaders map[string]string) string {
 	ua := ""
 	originator := ""
@@ -266,7 +267,7 @@ func DetectInboundClientFamily(path string, flatHeaders map[string]string) strin
 	origLower := strings.ToLower(originator)
 	pathLower := strings.ToLower(path)
 
-	// Codex signals (codex-tui / codex_cli_rs / vscode)
+	// Codex 信号（codex-tui / codex_cli_rs / vscode）
 	if strings.HasPrefix(uaLower, "codex_cli_rs/") ||
 		strings.HasPrefix(uaLower, "codex-tui/") ||
 		strings.HasPrefix(uaLower, "codex_vscode/") ||
@@ -280,14 +281,14 @@ func DetectInboundClientFamily(path string, flatHeaders map[string]string) strin
 		flatHas(flatHeaders, "x-codex-beta-features") {
 		return "codex"
 	}
-	// Claude Code signals
+	// Claude Code 信号
 	if strings.HasPrefix(uaLower, "claude-cli/") ||
 		strings.Contains(uaLower, "claude-cli/") ||
 		flatHas(flatHeaders, "x-claude-code-session-id") ||
 		flatHas(flatHeaders, "anthropic-beta") && strings.Contains(strings.ToLower(flatGet(flatHeaders, "anthropic-beta")), "claude-code") {
 		return "claude_code"
 	}
-	// Path-only soft hint
+	// 仅凭路径的弱提示
 	if strings.Contains(pathLower, "/responses") && (flatHas(flatHeaders, "openai-beta") || flatHas(flatHeaders, "session-id")) {
 		return "codex"
 	}

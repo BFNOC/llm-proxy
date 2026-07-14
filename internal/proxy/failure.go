@@ -8,19 +8,18 @@ import (
 	"strings"
 )
 
-// FailureKind classifies an upstream error for failover and key auto-disable.
+// FailureKind 对上游错误进行分类，用于故障切换和 Key 自动禁用。
 type FailureKind string
 
 const (
 	FailureNone        FailureKind = ""
 	FailureAuth        FailureKind = "auth"         // 401/403
-	FailureRateLimit   FailureKind = "rate_limit"   // transient 429
-	FailureQuota       FailureKind = "quota"        // billing / insufficient_quota 429
+	FailureRateLimit   FailureKind = "rate_limit"   // 临时性 429
+	FailureQuota       FailureKind = "quota"        // 账单 / insufficient_quota 429
 	FailureServerError FailureKind = "server_error" // 502/503/504
 )
 
-// shouldFailoverStatus reports whether a non-final upstream response should
-// trigger trying the next upstream.
+// shouldFailoverStatus 报告非最终上游的响应是否应该触发尝试下一个上游。
 func shouldFailoverStatus(code int) bool {
 	switch code {
 	case http.StatusUnauthorized, // 401
@@ -35,9 +34,9 @@ func shouldFailoverStatus(code int) bool {
 	}
 }
 
-// shouldCountKeyFailure reports whether this failure should increment
-// consecutive_failures (and potentially auto-disable the key).
-// Transient server errors do not burn keys; auth/quota/rate-limit do.
+// shouldCountKeyFailure 报告此次失败是否应该使 consecutive_failures 递增
+//（并可能触发 Key 自动禁用）。
+// 临时性的服务端错误不会消耗 Key 的失败计数；鉴权/额度/限流错误会。
 func shouldCountKeyFailure(kind FailureKind) bool {
 	switch kind {
 	case FailureAuth, FailureRateLimit, FailureQuota:
@@ -47,7 +46,7 @@ func shouldCountKeyFailure(kind FailureKind) bool {
 	}
 }
 
-// classifyUpstreamFailure inspects status, headers, and optional body snippet.
+// classifyUpstreamFailure 检查状态码、响应头以及可选的响应体片段。
 func classifyUpstreamFailure(status int, hdr http.Header, body []byte) FailureKind {
 	switch status {
 	case http.StatusUnauthorized, http.StatusForbidden:
@@ -64,22 +63,22 @@ func classifyUpstreamFailure(status int, hdr http.Header, body []byte) FailureKi
 	}
 }
 
-// isQuotaExhausted detects account/billing exhaustion vs temporary rate limits.
+// isQuotaExhausted 判断是账户/账单额度耗尽，还是临时性限流。
 func isQuotaExhausted(hdr http.Header, body []byte) bool {
-	// OpenAI often omits Retry-After / rate-limit headers on billing 429s.
-	// Presence of Retry-After or remaining-rate headers suggests transient RL.
+	// OpenAI 在账单类 429 上经常省略 Retry-After / rate-limit 相关的响应头。
+	// 存在 Retry-After 或 remaining-rate 头通常意味着是临时性限流。
 	if hdr != nil {
 		if strings.TrimSpace(hdr.Get("Retry-After")) != "" {
-			// Still check body — some providers send both.
+			// 仍然要检查响应体 —— 有些服务商两者都会发送。
 		}
 		if hdr.Get("x-ratelimit-remaining-requests") != "" ||
 			hdr.Get("x-ratelimit-remaining-tokens") != "" ||
 			hdr.Get("X-RateLimit-Remaining") != "" {
-			// Has rate-limit window metadata → treat as rate limit unless body says quota.
+			// 存在限流窗口的元数据 → 视为限流，除非响应体明确指出是额度问题。
 		}
 	}
 	if len(body) == 0 {
-		// No body: if no Retry-After and no rate-limit remaining headers, lean quota.
+		// 无响应体：如果既没有 Retry-After 也没有限流剩余量的头，倾向判定为额度问题。
 		if hdr == nil {
 			return true
 		}
@@ -107,7 +106,7 @@ func isQuotaExhausted(hdr http.Header, body []byte) bool {
 			return true
 		}
 	}
-	// Structured OpenAI error code
+	// 结构化的 OpenAI 错误码
 	var envelope struct {
 		Error struct {
 			Code    string `json:"code"`
@@ -128,8 +127,8 @@ func isQuotaExhausted(hdr http.Header, body []byte) bool {
 	return false
 }
 
-// peekResponseBody reads up to limit bytes for classification, then restores
-// resp.Body so the original Closer is preserved (avoids connection leaks).
+// peekResponseBody 读取最多 limit 字节用于分类判断，随后恢复 resp.Body，
+// 保留原始 Closer（避免连接泄漏）。
 func peekResponseBody(resp *http.Response, limit int64) []byte {
 	if resp == nil || resp.Body == nil || limit <= 0 {
 		return nil
@@ -139,7 +138,7 @@ func peekResponseBody(resp *http.Response, limit int64) []byte {
 	if err != nil && len(buf) == 0 {
 		return nil
 	}
-	// Restore: peeked prefix + unread remainder, keep original Closer.
+	// 恢复：已窥探的前缀 + 尚未读取的剩余部分，保留原始 Closer。
 	orig := resp.Body
 	resp.Body = struct {
 		io.Reader
@@ -151,8 +150,8 @@ func peekResponseBody(resp *http.Response, limit int64) []byte {
 	return buf
 }
 
-// stripRequestHopByHop removes hop-by-hop headers from an outbound request,
-// including names listed in the Connection header (RFC 7230).
+// stripRequestHopByHop 移除外发请求中的逐跳头，
+// 包括 Connection 头中列出的名称（RFC 7230）。
 func stripRequestHopByHop(h http.Header) {
 	if h == nil {
 		return

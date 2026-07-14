@@ -14,15 +14,15 @@ import (
 	"github.com/Instawork/llm-proxy/internal/store"
 )
 
-// ModelFilter holds compiled whitelist patterns and declared models, providing
-// model filtering and synthetic /v1/models response injection.
+// ModelFilter 持有已编译的白名单 pattern 和声明模型，
+// 提供模型过滤及合成 /v1/models 响应注入的能力。
 type ModelFilter struct {
-	patterns       atomic.Value // stores []string
-	declaredModels atomic.Value // stores map[int64][]string (upstream_id -> model IDs)
+	patterns       atomic.Value // 存储 []string
+	declaredModels atomic.Value // 存储 map[int64][]string（upstream_id -> model IDs）
 	store          *store.Store
 }
 
-// NewModelFilter creates a ModelFilter and loads patterns + declared models from the store.
+// NewModelFilter 创建 ModelFilter 并从 store 加载 pattern 和声明模型。
 func NewModelFilter(s *store.Store) *ModelFilter {
 	mf := &ModelFilter{store: s}
 	mf.Reload()
@@ -30,7 +30,7 @@ func NewModelFilter(s *store.Store) *ModelFilter {
 	return mf
 }
 
-// Reload refreshes whitelist patterns from the database.
+// Reload 从数据库刷新白名单 pattern。
 func (mf *ModelFilter) Reload() {
 	entries, err := mf.store.ListModelWhitelist()
 	if err != nil {
@@ -45,7 +45,7 @@ func (mf *ModelFilter) Reload() {
 	slog.Info("model filter: loaded whitelist", "count", len(patterns))
 }
 
-// ReloadDeclaredModels refreshes declared models from the database.
+// ReloadDeclaredModels 从数据库刷新声明模型。
 func (mf *ModelFilter) ReloadDeclaredModels() {
 	models, err := mf.store.GetAllUpstreamDeclaredModels()
 	if err != nil {
@@ -72,8 +72,8 @@ func (mf *ModelFilter) getDeclaredModels() map[int64][]string {
 	return v.(map[int64][]string)
 }
 
-// MatchModel checks if a model ID matches any whitelist pattern.
-// Returns true if the whitelist is empty (allow all).
+// MatchModel 检查某个模型 ID 是否匹配任意白名单 pattern。
+// 白名单为空时返回 true（全部允许）。
 func (mf *ModelFilter) MatchModel(modelID string) bool {
 	patterns := mf.getPatterns()
 	if len(patterns) == 0 {
@@ -93,14 +93,14 @@ func (mf *ModelFilter) MatchModel(modelID string) bool {
 	return false
 }
 
-// openAIModelsResponse is the structure of /v1/models responses.
+// openAIModelsResponse 是 /v1/models 响应的结构体。
 type openAIModelsResponse struct {
 	Object string                   `json:"object"`
 	Data   []map[string]interface{} `json:"data"`
 }
 
-// ModelFilterMiddleware intercepts GET /v1/models responses, injects declared
-// models from bound upstreams, and filters them against the whitelist.
+// ModelFilterMiddleware 拦截 GET /v1/models 响应，注入已绑定上游的声明模型，
+// 并按白名单进行过滤。
 func ModelFilterMiddleware(mf *ModelFilter) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -109,7 +109,7 @@ func ModelFilterMiddleware(mf *ModelFilter) func(http.Handler) http.Handler {
 				return
 			}
 
-			// Capture the upstream response.
+			// 捕获上游响应。
 			capture := &responseCapture{
 				header:     make(http.Header),
 				statusCode: http.StatusOK,
@@ -117,7 +117,7 @@ func ModelFilterMiddleware(mf *ModelFilter) func(http.Handler) http.Handler {
 			}
 			next.ServeHTTP(capture, r)
 
-			// Collect declared models for the bound upstreams.
+			// 收集已绑定上游的声明模型。
 			declaredModels := mf.getDeclaredModels()
 			var injected []map[string]interface{}
 			if len(declaredModels) > 0 {
@@ -125,9 +125,9 @@ func ModelFilterMiddleware(mf *ModelFilter) func(http.Handler) http.Handler {
 				injected = buildDeclaredModelEntries(declaredModels, allowedIDs)
 			}
 
-			// If upstream returned non-200, decide whether to build synthetic response.
-			// Only synthesize for 404/502 (upstream doesn't support /v1/models).
-			// Pass through 403/503/429 (proxy-layer auth/rate errors) unchanged.
+			// 若上游返回非 200，决定是否构建合成响应。
+			// 只对 404/502（上游不支持 /v1/models）做合成。
+			// 403/503/429（代理层鉴权/限流错误）原样透传。
 			if capture.statusCode != http.StatusOK {
 				if len(injected) > 0 && canSynthesizeResponse(capture.statusCode) {
 					filtered := applyWhitelist(mf, deduplicateEntries(injected))
@@ -138,7 +138,7 @@ func ModelFilterMiddleware(mf *ModelFilter) func(http.Handler) http.Handler {
 				return
 			}
 
-			// Parse upstream response.
+			// 解析上游响应。
 			var modelsResp openAIModelsResponse
 			if err := json.Unmarshal(capture.body.Bytes(), &modelsResp); err != nil {
 				if len(injected) > 0 {
@@ -150,8 +150,8 @@ func ModelFilterMiddleware(mf *ModelFilter) func(http.Handler) http.Handler {
 				return
 			}
 
-			// Merge: upstream models + declared models (deduplicate by ID).
-			// Count injections before mutating seen.
+			// 合并：上游模型 + 声明模型（按 ID 去重）。
+			// 在改动 seen 之前先统计注入数量。
 			seen := make(map[string]bool, len(modelsResp.Data))
 			for _, model := range modelsResp.Data {
 				if id, ok := model["id"].(string); ok {
@@ -167,7 +167,7 @@ func ModelFilterMiddleware(mf *ModelFilter) func(http.Handler) http.Handler {
 				}
 			}
 
-			// Apply whitelist filter.
+			// 应用白名单过滤。
 			patterns := mf.getPatterns()
 			if len(patterns) > 0 {
 				var filtered []map[string]interface{}
@@ -196,17 +196,17 @@ func ModelFilterMiddleware(mf *ModelFilter) func(http.Handler) http.Handler {
 	}
 }
 
-// canSynthesizeResponse returns true for status codes that indicate the upstream
-// genuinely doesn't support /v1/models (404, 502, connection errors surfaced as 502).
-// Auth/rate errors (403, 429, 503) are passed through unchanged.
+// canSynthesizeResponse 对表明上游确实不支持 /v1/models 的状态码返回 true
+// （404、502，以及以 502 呈现的连接错误）。
+// 鉴权/限流错误（403、429、503）会原样透传。
 func canSynthesizeResponse(statusCode int) bool {
 	return statusCode == http.StatusNotFound ||
 		statusCode == http.StatusBadGateway ||
 		statusCode == http.StatusNotImplemented
 }
 
-// buildDeclaredModelEntries builds OpenAI-style model entries from declared models.
-// If allowedIDs is empty, all declared models are included (key has no explicit binding).
+// buildDeclaredModelEntries 从声明模型构建 OpenAI 风格的模型条目。
+// 若 allowedIDs 为空，则包含全部声明模型（表示该 Key 没有显式绑定）。
 func buildDeclaredModelEntries(declaredModels map[int64][]string, allowedIDs []int64) []map[string]interface{} {
 	now := time.Now().Unix()
 	var entries []map[string]interface{}
@@ -244,7 +244,7 @@ func buildDeclaredModelEntries(declaredModels map[int64][]string, allowedIDs []i
 	return entries
 }
 
-// deduplicateEntries removes duplicate model IDs from entries.
+// deduplicateEntries 移除 entries 中重复的模型 ID。
 func deduplicateEntries(entries []map[string]interface{}) []map[string]interface{} {
 	seen := make(map[string]bool, len(entries))
 	var result []map[string]interface{}
@@ -297,7 +297,7 @@ func isModelsPath(path string) bool {
 	return path == "/v1/models" || path == "/v1/models/"
 }
 
-// responseCapture fully captures an HTTP response.
+// responseCapture 完整捕获一个 HTTP 响应。
 type responseCapture struct {
 	header     http.Header
 	statusCode int

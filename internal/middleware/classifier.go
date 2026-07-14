@@ -8,9 +8,8 @@ import (
 	"github.com/Instawork/llm-proxy/internal/proxy"
 )
 
-// RequestClassifierMiddleware detects the provider style and extracts the
-// downstream API key, storing both in the request context. Requests with no
-// API key are rejected with 401.
+// RequestClassifierMiddleware 探测 provider 风格并提取下游 API Key，
+// 将两者都写入请求上下文。没有 API Key 的请求会被 401 拒绝。
 func RequestClassifierMiddleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

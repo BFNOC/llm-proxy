@@ -15,7 +15,7 @@ import (
 // 用 atomic.Value 存储完整快照，admin 修改后调用 Reload 刷新，
 // 避免每个请求都查询 SQLite。
 type ModelOverrideCache struct {
-	data  atomic.Value // stores map[int64][]proxy.KeyModelOverrideRule
+	data  atomic.Value // 存储 map[int64][]proxy.KeyModelOverrideRule
 	store *store.Store
 }
 
@@ -120,4 +120,3 @@ func UpstreamBindingMiddleware(bindingCache *BindingCache, overrideCache *ModelO
 		})
 	}
 }
-

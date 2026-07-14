@@ -10,7 +10,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// YAMLConfig represents the new simplified configuration.
+// YAMLConfig 表示新的简化配置结构。
 type YAMLConfig struct {
 	Server    ServerConfig    `yaml:"server"`
 	Storage   StorageConfig   `yaml:"storage"`
@@ -51,7 +51,7 @@ type LoggingConfig struct {
 	Format string `yaml:"format"`
 }
 
-// TransportConfig holds tunable parameters for outbound HTTP transports.
+// TransportConfig 保存出站 HTTP transport 的可调参数。
 type TransportConfig struct {
 	DialTimeout         time.Duration `yaml:"dial_timeout"`
 	KeepAlive           time.Duration `yaml:"keepalive"`
@@ -61,8 +61,8 @@ type TransportConfig struct {
 	MaxIdleConnsPerHost int           `yaml:"max_idle_conns_per_host"`
 }
 
-// DefaultTransportConfig returns a TransportConfig with the same defaults
-// that were previously hardcoded in proxy.newBaseTransport.
+// DefaultTransportConfig 返回一个 TransportConfig，其默认值
+// 与之前硬编码在 proxy.newBaseTransport 中的值相同。
 func DefaultTransportConfig() *TransportConfig {
 	return &TransportConfig{
 		DialTimeout:         30 * time.Second,
@@ -74,7 +74,7 @@ func DefaultTransportConfig() *TransportConfig {
 	}
 }
 
-// Validate validates the configuration and fills in defaults.
+// Validate 校验配置并填充默认值。
 func (c *YAMLConfig) Validate() error {
 	if c.Server.Port <= 0 {
 		c.Server.Port = 9002
@@ -127,7 +127,7 @@ func (c *YAMLConfig) Validate() error {
 	return nil
 }
 
-// GetDefaultYAMLConfig returns a default configuration.
+// GetDefaultYAMLConfig 返回一份默认配置。
 func GetDefaultYAMLConfig() *YAMLConfig {
 	cfg := &YAMLConfig{
 		Server:  ServerConfig{Port: 9002},
@@ -153,7 +153,7 @@ func GetDefaultYAMLConfig() *YAMLConfig {
 	return cfg
 }
 
-// LoadYAMLConfig loads configuration from a YAML file.
+// LoadYAMLConfig 从 YAML 文件加载配置。
 func LoadYAMLConfig(filename string) (*YAMLConfig, error) {
 	if _, err := os.Stat(filename); os.IsNotExist(err) {
 		return GetDefaultYAMLConfig(), nil
@@ -176,8 +176,8 @@ func LoadYAMLConfig(filename string) (*YAMLConfig, error) {
 	return &config, nil
 }
 
-// LoadEnvironmentConfig loads base configuration and overlays environment-specific
-// configuration based on the ENVIRONMENT variable (defaults to "dev").
+// LoadEnvironmentConfig 加载基础配置，并根据 ENVIRONMENT 环境变量
+// （默认为 "dev"）叠加对应环境的配置。
 func LoadEnvironmentConfig() (*YAMLConfig, error) {
 	configDir := "configs"
 
@@ -202,7 +202,7 @@ func LoadEnvironmentConfig() (*YAMLConfig, error) {
 		return nil, fmt.Errorf("failed to read env config %s: %w", envConfigPath, err)
 	}
 
-	// Unmarshal env overlay on top of base
+	// 将环境覆盖配置反序列化到基础配置之上
 	if err := yaml.Unmarshal(data, baseConfig); err != nil {
 		return nil, fmt.Errorf("failed to parse env config: %w", err)
 	}
@@ -214,7 +214,7 @@ func LoadEnvironmentConfig() (*YAMLConfig, error) {
 	return baseConfig, nil
 }
 
-// LogConfiguration logs the configuration summary.
+// LogConfiguration 记录配置摘要日志。
 func (c *YAMLConfig) LogConfiguration(logger *slog.Logger) {
 	logger.Info("Configuration",
 		"port", c.Server.Port,

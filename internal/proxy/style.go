@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// ProviderStyle represents the API style used by a downstream client.
+// ProviderStyle 表示下游客户端使用的 API 风格。
 type ProviderStyle string
 
 const (
@@ -13,12 +13,11 @@ const (
 	StyleAnthropic ProviderStyle = "anthropic"
 )
 
-// DetectProviderStyle infers which provider API style the incoming request is
-// using.  Detection order:
-//  1. Path starts with /v1/messages -> Anthropic
-//  2. Header x-api-key present      -> Anthropic
-//  3. Header anthropic-version present -> Anthropic
-//  4. Default                        -> OpenAI
+// DetectProviderStyle 推断传入请求使用的是哪种服务商 API 风格。检测顺序：
+//  1. 路径以 /v1/messages 开头 -> Anthropic
+//  2. 存在 x-api-key 请求头   -> Anthropic
+//  3. 存在 anthropic-version 请求头 -> Anthropic
+//  4. 默认                    -> OpenAI
 func DetectProviderStyle(r *http.Request) ProviderStyle {
 	if strings.HasPrefix(r.URL.Path, "/v1/messages") {
 		return StyleAnthropic

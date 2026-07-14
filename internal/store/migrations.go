@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-// migration represents a single schema migration step.
+// migration 表示单个 schema 迁移步骤。
 type migration struct {
 	version int
 	up      string
@@ -268,15 +268,15 @@ ALTER TABLE upstream_providers ADD COLUMN auth_mode TEXT NOT NULL DEFAULT 'api_k
 	},
 }
 
-// RunMigrations applies all pending schema migrations in order.
+// RunMigrations 按顺序应用所有待执行的 schema 迁移。
 func RunMigrations(db *sql.DB) error {
-	// Ensure _meta table exists so we can read the current version.
+	// 确保 _meta 表存在，以便读取当前版本号。
 	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS _meta (schema_version INTEGER NOT NULL DEFAULT 0)`)
 	if err != nil {
 		return fmt.Errorf("create _meta table: %w", err)
 	}
 
-	// Seed the row if absent.
+	// 若行不存在则写入初始行。
 	_, err = db.Exec(`INSERT INTO _meta (schema_version) SELECT 0 WHERE NOT EXISTS (SELECT 1 FROM _meta)`)
 	if err != nil {
 		return fmt.Errorf("seed _meta row: %w", err)

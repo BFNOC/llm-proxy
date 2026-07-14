@@ -6,14 +6,14 @@ type UpstreamProvider struct {
 	ID                 int64
 	Name               string
 	BaseURL            string
-	APIKeys            []string // decrypted at read time; stored encrypted in upstream_api_keys table
+	APIKeys            []string // 读取时解密；在 upstream_api_keys 表中加密存储
 	ProxyURL           string   // 可选代理地址，支持 http/https/socks5，空表示继承环境代理
 	Priority           int
-	Enabled            bool   // persisted; disabled upstreams are skipped by the prober
-	KeySchedulingMode  string // "round-robin" (default) or "fill"
-	AuthMode           string // "api_key" (default, x-api-key) or "oauth" (Authorization: Bearer)
+	Enabled            bool   // 持久化字段；禁用的上游会被 prober 跳过
+	KeySchedulingMode  string // "round-robin"（默认）或 "fill"
+	AuthMode           string // "api_key"（默认，x-api-key）或 "oauth"（Authorization: Bearer）
 	Remark             string // 管理员备注（Key 来源、用途等）
-	Healthy            bool   // runtime only, not persisted
+	Healthy            bool   // 仅运行时使用，不持久化
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
 }
@@ -53,10 +53,9 @@ type RequestLog struct {
 	CreatedAt       time.Time
 }
 
-// ModelWhitelistEntry is a glob pattern for filtering /v1/models responses.
-// If the whitelist is non-empty, only models matching at least one pattern are
-// returned. Patterns support * wildcards (e.g. "claude-sonnet*"); patterns
-// without wildcards match as substrings.
+// ModelWhitelistEntry 是用于过滤 /v1/models 响应的 glob 模式。
+// 如果白名单非空，只返回匹配至少一个模式的模型。模式支持 * 通配符
+// （例如 "claude-sonnet*"）；不带通配符的模式按子串匹配。
 type ModelWhitelistEntry struct {
 	ID        int64
 	Pattern   string

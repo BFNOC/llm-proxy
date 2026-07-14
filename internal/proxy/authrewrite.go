@@ -7,31 +7,31 @@ import (
 	"strings"
 )
 
-// AuthMode values for Anthropic credential header selection.
+// AuthMode 取值，用于选择 Anthropic 鉴权凭据所在的请求头。
 const (
-	AuthModeAPIKey = "api_key" // x-api-key (default)
-	AuthModeOAuth  = "oauth"   // Authorization: Bearer (Claude OAuth / sk-ant-oat|oai)
+	AuthModeAPIKey = "api_key" // x-api-key（默认）
+	AuthModeOAuth  = "oauth"   // Authorization: Bearer（Claude OAuth / sk-ant-oat|oai）
 )
 
-// Anthropic OAuth / Claude Code client fingerprints.
+// Anthropic OAuth / Claude Code 客户端指纹。
 //
-// Captured from real Claude Code → llm-proxy traffic (claude-cli/2.1.201).
-// When the upstream uses an OAuth subscription token (sk-ant-oat*), a bare
-// Authorization: Bearer + anthropic-version often lands outside the Claude
-// Code rate-limit pool and returns opaque HTTP 429 rate_limit_error.
+// 采集自真实的 Claude Code → llm-proxy 流量（claude-cli/2.1.201）。
+// 当上游使用 OAuth 订阅令牌（sk-ant-oat*）时，裸的
+// Authorization: Bearer + anthropic-version 组合往往落在 Claude
+// Code 限流池之外，会返回不透明的 HTTP 429 rate_limit_error。
 //
-// Note: inbound Claude Code requests typically do NOT include oauth-2025-04-20
-// (they authenticate to the proxy with a downstream key). That beta is merged
-// only when we attach an OAuth upstream token.
+// 注意：入站的 Claude Code 请求通常不会带 oauth-2025-04-20
+//（它们用下游 Key 向本代理鉴权）。只有在我们附加 OAuth 上游令牌时，
+// 才会合并这个 beta 标记。
 const (
-	// Keep in sync with `claude --version` when possible.
+	// 尽量与 `claude --version` 保持同步。
 	AnthropicOAuthUserAgent = "claude-cli/2.1.201 (external, cli)"
 	AnthropicOAuthXApp      = "cli"
 
 	AnthropicOAuthBetaOAuth      = "oauth-2025-04-20"
 	AnthropicOAuthBetaClaudeCode = "claude-code-20250219"
 
-	// Stainless client fingerprints from Claude Code (Node SDK).
+	// Stainless 客户端指纹，来自 Claude Code（Node SDK）。
 	AnthropicStainlessArch           = "arm64"
 	AnthropicStainlessLang           = "js"
 	AnthropicStainlessOS             = "MacOS"
@@ -41,8 +41,8 @@ const (
 	AnthropicStainlessTimeout        = "600"
 )
 
-// anthropicClaudeCodeBetas is the anthropic-beta list observed on real
-// Claude Code Messages requests (order preserved from capture).
+// anthropicClaudeCodeBetas 是从真实 Claude Code Messages 请求中观察到的
+// anthropic-beta 列表（顺序保持与抓包一致）。
 var anthropicClaudeCodeBetas = []string{
 	"claude-code-20250219",
 	"context-1m-2025-08-07",
@@ -56,21 +56,20 @@ var anthropicClaudeCodeBetas = []string{
 	"fallback-credit-2026-06-01",
 }
 
-// RewriteAuthHeaders rewrites authentication headers on the outgoing request so
-// that the upstream provider receives the correct credential format.
+// RewriteAuthHeaders 重写外发请求的鉴权头，使上游服务商收到正确格式的凭据。
 //
-// OpenAI style:
-//   - Sets "Authorization: Bearer {upstreamKey}"
-//   - Removes "x-api-key"
+// OpenAI 风格：
+//   - 设置 "Authorization: Bearer {upstreamKey}"
+//   - 移除 "x-api-key"
 //
-// Anthropic style (authMode=api_key, default):
-//   - Sets "x-api-key: {upstreamKey}"
-//   - Removes "Authorization"
+// Anthropic 风格（authMode=api_key，默认）：
+//   - 设置 "x-api-key: {upstreamKey}"
+//   - 移除 "Authorization"
 //
-// Anthropic style (authMode=oauth):
-//   - Sets "Authorization: Bearer {upstreamKey}"
-//   - Removes "x-api-key"
-//   - Ensures Claude Code client fingerprints (+ oauth beta for subscription tokens)
+// Anthropic 风格（authMode=oauth）：
+//   - 设置 "Authorization: Bearer {upstreamKey}"
+//   - 移除 "x-api-key"
+//   - 确保带上 Claude Code 客户端指纹（订阅令牌还需附加 oauth beta）
 func RewriteAuthHeaders(r *http.Request, style ProviderStyle, upstreamKey string, authMode string) {
 	if upstreamKey == "" {
 		r.Header.Del("Authorization")
@@ -87,21 +86,21 @@ func RewriteAuthHeaders(r *http.Request, style ProviderStyle, upstreamKey string
 			r.Header.Set("x-api-key", upstreamKey)
 			r.Header.Del("Authorization")
 		}
-	default: // StyleOpenAI
+	default: // StyleOpenAI 风格
 		r.Header.Set("Authorization", "Bearer "+upstreamKey)
 		r.Header.Del("x-api-key")
 	}
 }
 
-// EnsureAnthropicOAuthClientHeaders merges Claude Code client fingerprints.
-// Existing header values from a real client are preserved; only missing pieces
-// are filled. Always ensures oauth-2025-04-20 is present for OAuth upstream keys.
+// EnsureAnthropicOAuthClientHeaders 合并 Claude Code 客户端指纹。
+// 来自真实客户端的已有头值会被保留，仅补齐缺失的部分。
+// 对于 OAuth 上游 Key，始终确保存在 oauth-2025-04-20。
 func EnsureAnthropicOAuthClientHeaders(h http.Header) {
 	if h == nil {
 		return
 	}
 
-	// Beta list: keep client-provided tokens, ensure Claude Code set + oauth beta.
+	// Beta 列表：保留客户端提供的 token，并确保包含 Claude Code 集合 + oauth beta。
 	required := make([]string, 0, len(anthropicClaudeCodeBetas)+1)
 	required = append(required, AnthropicOAuthBetaOAuth)
 	required = append(required, anthropicClaudeCodeBetas...)
@@ -144,7 +143,7 @@ func EnsureAnthropicOAuthClientHeaders(h http.Header) {
 		h.Set("x-claude-code-session-id", newClaudeCodeSessionID())
 	}
 
-	// Stainless fingerprints (only fill if missing so real CC values win).
+	// Stainless 指纹（仅在缺失时填充，确保真实 CC 值优先生效）。
 	setIfEmpty(h, "x-stainless-arch", AnthropicStainlessArch)
 	setIfEmpty(h, "x-stainless-lang", AnthropicStainlessLang)
 	setIfEmpty(h, "x-stainless-os", AnthropicStainlessOS)
@@ -169,7 +168,7 @@ func newClaudeCodeSessionID() string {
 	if _, err := rand.Read(b[:]); err != nil {
 		return "00000000-0000-4000-8000-000000000000"
 	}
-	// UUID v4 bits
+	// UUID v4 标志位
 	b[6] = (b[6] & 0x0f) | 0x40
 	b[8] = (b[8] & 0x3f) | 0x80
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])

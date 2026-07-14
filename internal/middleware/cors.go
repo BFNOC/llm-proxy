@@ -2,8 +2,8 @@ package middleware
 
 import "net/http"
 
-// CORSMiddleware adds CORS headers for the proxy routes.
-// This should only be applied to /v1/ routes, not admin routes.
+// CORSMiddleware 为代理路由添加 CORS 头。
+// 只应作用于 /v1/ 路由，不应用于 admin 路由。
 func CORSMiddleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

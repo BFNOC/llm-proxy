@@ -11,7 +11,7 @@ import (
 // 用 atomic.Value 存储完整快照（map[int64][]int64），admin 修改后调用 Reload 刷新，
 // 避免每个请求都查询 SQLite。
 type BindingCache struct {
-	data  atomic.Value // stores map[int64][]int64
+	data  atomic.Value // 存储 map[int64][]int64
 	store *store.Store
 }
 
