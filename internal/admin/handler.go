@@ -222,7 +222,7 @@ func (h *AdminHandler) listUpstreams(w http.ResponseWriter, r *http.Request) {
 			ID: u.ID, Name: u.Name, BaseURL: u.BaseURL, APIKeys: keys, APIKeyDetails: details,
 			ProxyURL: u.ProxyURL, Priority: u.Priority, Enabled: u.Enabled,
 			KeySchedulingMode: u.KeySchedulingMode, AuthMode: authMode, Remark: u.Remark,
-			CreatedAt: u.CreatedAt, UpdatedAt: u.UpdatedAt,
+			WebSocketEnabled: u.WebSocketEnabled, CreatedAt: u.CreatedAt, UpdatedAt: u.UpdatedAt,
 		}
 	}
 	jsonOK(w, result)
@@ -1550,10 +1550,7 @@ func (h *AdminHandler) testUpstreamWebSocket(w http.ResponseWriter, r *http.Requ
 
 	// 获取第一个启用的 API Key（无鉴权模式下仍尝试无 Key 连接）
 	var authKey string
-	authMode := upstream.AuthMode
-	if authMode == "" {
-		authMode = "api_key"
-	}
+	// Realtime API 始终使用 Bearer 鉴权，无需区分 auth_mode
 	keyInfos, err := h.store.GetUpstreamAllAPIKeys(id)
 	if err == nil {
 		for _, ki := range keyInfos {
@@ -1638,9 +1635,8 @@ func (h *AdminHandler) testUpstreamWebSocket(w http.ResponseWriter, r *http.Requ
 
 	slog.Info("admin: WebSocket 测试成功", "upstream_id", id, "url", wsURL, "latency_ms", latency.Milliseconds())
 
-	// 自动启用 websocket_enabled
-	wsEnabled := true
-	if _, err := h.store.UpdateUpstream(id, upstream.Name, upstream.BaseURL, nil, upstream.Priority, upstream.Enabled, upstream.ProxyURL, upstream.KeySchedulingMode, upstream.AuthMode, upstream.Remark, &wsEnabled); err != nil {
+	// 自动启用 websocket_enabled（仅更新该列，避免覆盖并发修改的其他字段）
+	if err := h.store.SetWebSocketEnabled(id, true); err != nil {
 		slog.Error("admin: 自动启用 websocket_enabled 失败", "error", err)
 	} else {
 		go func() { defer func() { recover() }(); h.prober.ProbeNow() }()

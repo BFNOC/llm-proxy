@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -20,6 +21,9 @@ var wsUpgrader = websocket.Upgrader{
 	WriteBufferSize: 4096,
 	CheckOrigin:     func(r *http.Request) bool { return true },
 }
+
+// maxWSMessageSize 限制单条 WebSocket 消息的最大大小（16 MB）。
+const maxWSMessageSize = 16 << 20
 
 // IsWebSocketUpgrade 检查请求是否为 WebSocket 升级请求。
 func IsWebSocketUpgrade(r *http.Request) bool {
@@ -42,33 +46,47 @@ func WebSocketProxy(w http.ResponseWriter, r *http.Request, upstreamURL string, 
 		return err
 	}
 
-	// —— 2. 拨号上游 ——
+	// 转发客户端请求的子协议（如 OpenAI Realtime 的 "realtime"）
+	dialer.Subprotocols = websocket.Subprotocols(r)
+
+	// —— 2. 拨号上游（需要先获取协商的子协议才能正确升级客户端） ——
 	slog.Info("正在建立上游 WebSocket 连接", "upstream", upstreamURL)
 	upstreamConn, resp, err := dialer.Dial(upstreamURL, upstreamHeaders)
 	if err != nil {
 		slog.Error("拨号上游 WebSocket 失败", "upstream", upstreamURL, "error", err)
 		if resp != nil {
-			// 尝试将上游的 HTTP 错误状态码回写给客户端
-			http.Error(w, "upstream websocket dial failed", resp.StatusCode)
+			code := resp.StatusCode
+			if code < 400 || code > 599 {
+				code = http.StatusBadGateway
+			}
+			http.Error(w, "upstream websocket dial failed", code)
 			resp.Body.Close()
 		} else {
 			http.Error(w, "bad gateway", http.StatusBadGateway)
 		}
 		return err
 	}
-	defer upstreamConn.Close()
 	if resp != nil && resp.Body != nil {
 		resp.Body.Close()
 	}
 
-	// —— 3. 升级下游客户端连接 ——
-	clientConn, err := wsUpgrader.Upgrade(w, r, nil)
+	// —— 3. 升级下游客户端连接，传递上游协商的子协议 ——
+	var upgradeRespHeader http.Header
+	if proto := upstreamConn.Subprotocol(); proto != "" {
+		upgradeRespHeader = http.Header{}
+		upgradeRespHeader.Set("Sec-WebSocket-Protocol", proto)
+	}
+
+	clientConn, err := wsUpgrader.Upgrade(w, r, upgradeRespHeader)
 	if err != nil {
 		slog.Error("升级下游 WebSocket 失败", "error", err)
-		// Upgrade 失败时 gorilla 已向客户端写入了 HTTP 错误，无需再写
+		upstreamConn.Close()
 		return err
 	}
-	defer clientConn.Close()
+
+	// 设置消息大小限制，防止内存耗尽
+	clientConn.SetReadLimit(maxWSMessageSize)
+	upstreamConn.SetReadLimit(maxWSMessageSize)
 
 	slog.Info("WebSocket 双向代理已建立",
 		"upstream", upstreamURL,
@@ -76,11 +94,17 @@ func WebSocketProxy(w http.ResponseWriter, r *http.Request, upstreamURL string, 
 	)
 
 	// —— 4. 启动双向转发 ——
+	// 每个连接用一个 mutex 保护写操作，避免 gorilla/websocket 的并发写竞争。
+	var clientMu, upstreamMu sync.Mutex
 	done := make(chan struct{}, 2)
-	go pumpClientToUpstream(clientConn, upstreamConn, done)
-	go pumpUpstreamToClient(upstreamConn, clientConn, done)
 
-	// —— 5. 等待任一方向结束，清理并返回 ——
+	go pumpMessages(clientConn, upstreamConn, &upstreamMu, &clientMu, done, "client", "upstream")
+	go pumpMessages(upstreamConn, clientConn, &clientMu, &upstreamMu, done, "upstream", "client")
+
+	// —— 5. 等待任一方向结束，关闭两端连接，再等另一方向退出 ——
+	<-done
+	clientConn.Close()
+	upstreamConn.Close()
 	<-done
 
 	slog.Info("WebSocket 连接已关闭",
@@ -94,7 +118,9 @@ func WebSocketProxy(w http.ResponseWriter, r *http.Request, upstreamURL string, 
 // 空字符串表示直连；支持 http/https 和 socks5 代理。
 func buildWSDialer(proxyURL string) (*websocket.Dialer, error) {
 	if proxyURL == "" {
-		return websocket.DefaultDialer, nil
+		return &websocket.Dialer{
+			HandshakeTimeout: 45 * time.Second,
+		}, nil
 	}
 
 	parsed, err := url.Parse(proxyURL)
@@ -114,14 +140,12 @@ func buildWSDialer(proxyURL string) (*websocket.Dialer, error) {
 		if err != nil {
 			return nil, err
 		}
-		// 优先使用 ContextDialer 接口
 		if cd, ok := socks5Dialer.(xproxy.ContextDialer); ok {
 			return &websocket.Dialer{
 				NetDialContext:   cd.DialContext,
 				HandshakeTimeout: 45 * time.Second,
 			}, nil
 		}
-		// 回退到不带 context 的 Dial
 		return &websocket.Dialer{
 			NetDial:          socks5Dialer.Dial,
 			HandshakeTimeout: 45 * time.Second,
@@ -132,72 +156,51 @@ func buildWSDialer(proxyURL string) (*websocket.Dialer, error) {
 	}
 }
 
-// pumpClientToUpstream 从客户端读取消息并转发到上游。
-// 当读取或写入失败时向 done 通道发送信号，并向对端发送关闭帧。
-func pumpClientToUpstream(client, upstream *websocket.Conn, done chan<- struct{}) {
+// pumpMessages 从 src 读取消息并通过 dstMu 保护写入 dst。
+// 读取或写入失败时向对端发送关闭帧（通过对应 mutex 保护），然后通知 done 通道。
+func pumpMessages(src, dst *websocket.Conn, dstMu, srcMu *sync.Mutex, done chan<- struct{}, srcName, dstName string) {
 	defer func() { done <- struct{}{} }()
 
 	for {
-		msgType, msg, err := client.ReadMessage()
-		if err != nil {
-			// 收到正常关闭帧或连接已断开
-			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-				slog.Debug("客户端发送关闭帧", "error", err)
-			} else if !isNetClosedError(err) {
-				slog.Warn("读取客户端消息失败", "error", err)
-			}
-			// 将关闭帧传播到上游
-			code, text := extractCloseCodeText(err)
-			writeClose(upstream, code, text)
-			return
-		}
-
-		if err := upstream.WriteMessage(msgType, msg); err != nil {
-			slog.Warn("写入上游消息失败", "error", err)
-			writeClose(client, websocket.CloseInternalServerErr, "upstream write error")
-			return
-		}
-	}
-}
-
-// pumpUpstreamToClient 从上游读取消息并转发到客户端。
-// 当读取或写入失败时向 done 通道发送信号，并向对端发送关闭帧。
-func pumpUpstreamToClient(upstream, client *websocket.Conn, done chan<- struct{}) {
-	defer func() { done <- struct{}{} }()
-
-	for {
-		msgType, msg, err := upstream.ReadMessage()
+		msgType, msg, err := src.ReadMessage()
 		if err != nil {
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-				slog.Debug("上游发送关闭帧", "error", err)
+				slog.Debug(srcName+"发送关闭帧", "error", err)
 			} else if !isNetClosedError(err) {
-				slog.Warn("读取上游消息失败", "error", err)
+				slog.Warn("读取"+srcName+"消息失败", "error", err)
 			}
-			// 将关闭帧传播到客户端
 			code, text := extractCloseCodeText(err)
-			writeClose(client, code, text)
+			dstMu.Lock()
+			writeClose(dst, code, text)
+			dstMu.Unlock()
 			return
 		}
 
-		if err := client.WriteMessage(msgType, msg); err != nil {
-			slog.Warn("写入客户端消息失败", "error", err)
-			writeClose(upstream, websocket.CloseInternalServerErr, "client write error")
+		dstMu.Lock()
+		writeErr := dst.WriteMessage(msgType, msg)
+		dstMu.Unlock()
+		if writeErr != nil {
+			slog.Warn("写入"+dstName+"消息失败", "error", writeErr)
+			srcMu.Lock()
+			writeClose(src, websocket.CloseInternalServerErr, dstName+" write error")
+			srcMu.Unlock()
 			return
 		}
 	}
 }
 
 // extractCloseCodeText 从 WebSocket 错误中提取关闭码与原因文本。
-// 如果无法解析，返回 CloseNormalClosure 和空字符串。
+// 如果无法解析，返回 CloseInternalServerErr 表示异常断开。
 func extractCloseCodeText(err error) (int, string) {
 	var closeErr *websocket.CloseError
 	if errors.As(err, &closeErr) {
 		return closeErr.Code, closeErr.Text
 	}
-	return websocket.CloseNormalClosure, ""
+	return websocket.CloseInternalServerErr, ""
 }
 
 // writeClose 向连接写入关闭帧。忽略写入错误——对端可能已断开。
+// 调用方必须持有对应连接的写锁。
 func writeClose(conn *websocket.Conn, code int, text string) {
 	msg := websocket.FormatCloseMessage(code, text)
 	deadline := time.Now().Add(5 * time.Second)
@@ -210,14 +213,12 @@ func isNetClosedError(err error) bool {
 	if err == nil {
 		return false
 	}
-	// io.EOF 或 net.ErrClosed
 	if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
 		return true
 	}
-	// 捕获 "use of closed network connection" 等无法 unwrap 的情况
 	var opErr *net.OpError
 	if errors.As(err, &opErr) {
-		return true
+		return errors.Is(opErr.Err, net.ErrClosed)
 	}
 	return false
 }

@@ -335,8 +335,9 @@ func (dp *DynamicProxy) serveWebSocket(w http.ResponseWriter, r *http.Request, u
 		"upstream", active.Name, "key_index", keyIdx,
 		"url", upstreamURL)
 
-	w.Header().Set("X-Upstream-Name", active.Name)
-	w.Header().Set("X-API-Key-Index", fmt.Sprintf("%d", keyIdx))
+	// 不在 w.Header() 上设置 X-Upstream-Name / X-API-Key-Index：
+	// WS 升级会绕过审计中间件的 header 清理逻辑，设置后会泄漏给客户端。
+	// 上游信息已通过 slog 记录，满足可观测性需求。
 
 	if err := WebSocketProxy(w, r, upstreamURL, upstreamHeaders, active.ProxyURL); err != nil {
 		slog.Error("websocket proxy failed", "error", err, "upstream", active.Name)

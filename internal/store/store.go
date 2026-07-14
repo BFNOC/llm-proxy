@@ -266,6 +266,26 @@ func (s *Store) UpdateUpstream(id int64, name, baseURL string, apiKeys []string,
 	return s.GetUpstream(id)
 }
 
+// SetWebSocketEnabled 仅更新指定上游的 websocket_enabled 列，
+// 避免全字段 UpdateUpstream 在并发修改时覆盖其他字段。
+func (s *Store) SetWebSocketEnabled(id int64, enabled bool) error {
+	res, err := s.db.Exec(
+		`UPDATE upstream_providers SET websocket_enabled=?, updated_at=? WHERE id=?`,
+		enabled, time.Now().UTC(), id,
+	)
+	if err != nil {
+		return fmt.Errorf("set websocket_enabled: %w", err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("upstream %d not found", id)
+	}
+	return nil
+}
+
 // DeleteUpstream 按 ID 删除一个上游 provider。
 // CASCADE 外键会自动删除 upstream_api_keys 中的关联 Key。
 func (s *Store) DeleteUpstream(id int64) error {
