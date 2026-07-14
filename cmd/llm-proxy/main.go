@@ -59,10 +59,13 @@ func (h *CustomPrettyHandler) Handle(_ context.Context, r slog.Record) error {
 func (h *CustomPrettyHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
 func (h *CustomPrettyHandler) WithGroup(_ string) slog.Handler      { return h }
 
-const (
-	version     = "2.10.0"
-	defaultPort = "9002"
+var (
+	version   = "dev"
+	buildTime = "unknown"
+	gitCommit = "unknown"
 )
+
+const defaultPort = "9002"
 
 func initLogger() {
 	logLevel := os.Getenv("LOG_LEVEL")

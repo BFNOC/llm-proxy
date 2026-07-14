@@ -16,6 +16,7 @@ MAIN_PATH=./cmd/llm-proxy
 GO_VERSION=$(shell go version | cut -d' ' -f3)
 GIT_COMMIT=$(shell git rev-parse --short HEAD || echo "unknown")
 BUILD_TIME=$(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+APP_VERSION=$(shell cat VERSION 2>/dev/null || echo "dev")
 
 # Colors for output (auto-detect or force with FORCE_COLOR=1)
 ifdef FORCE_COLOR
@@ -113,16 +114,16 @@ help:
 build:
 	@echo "$(BLUE)Building $(BINARY_NAME)...$(NC)"
 	@mkdir -p bin
-	@go build -ldflags="-X main.Version=$(GIT_COMMIT) -X main.BuildTime=$(BUILD_TIME)" -o $(BINARY_PATH) $(MAIN_PATH)
-	@echo "$(GREEN)✓ Build completed: $(BINARY_PATH)$(NC)"
+	@go build -ldflags="-s -w -X main.version=$(APP_VERSION) -X main.buildTime=$(BUILD_TIME) -X main.gitCommit=$(GIT_COMMIT)" -o $(BINARY_PATH) $(MAIN_PATH)
+	@echo "$(GREEN)✓ Build completed: $(BINARY_PATH) (v$(APP_VERSION))$(NC)"
 
 # Cross-compile for Linux amd64
 .PHONY: build-linux
 build-linux:
 	@echo "$(BLUE)Cross-compiling $(BINARY_NAME) for Linux amd64...$(NC)"
 	@mkdir -p bin
-	@CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-X main.Version=$(GIT_COMMIT) -X main.BuildTime=$(BUILD_TIME)" -o ./bin/$(BINARY_NAME)-linux-amd64 $(MAIN_PATH)
-	@echo "$(GREEN)✓ Linux amd64 build completed: ./bin/$(BINARY_NAME)-linux-amd64$(NC)"
+	@CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w -X main.version=$(APP_VERSION) -X main.buildTime=$(BUILD_TIME) -X main.gitCommit=$(GIT_COMMIT)" -o ./bin/$(BINARY_NAME)-linux-amd64 $(MAIN_PATH)
+	@echo "$(GREEN)✓ Linux amd64 build completed: ./bin/$(BINARY_NAME)-linux-amd64 (v$(APP_VERSION))$(NC)"
 
 # Build all binaries
 .PHONY: build-all

@@ -1,0 +1,90 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'VERSION'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read version
+        id: version
+        run: |
+          VERSION=$(cat VERSION | tr -d '[:space:]')
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Check tag exists
+        id: check_tag
+        run: |
+          if git rev-parse "v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Go
+        if: steps.check_tag.outputs.exists == 'false'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Run tests
+        if: steps.check_tag.outputs.exists == 'false'
+        run: go test ./... -short -skip "Integration"
+
+      - name: Build binaries
+        if: steps.check_tag.outputs.exists == 'false'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          CGO_ENABLED: '0'
+        run: |
+          GIT_COMMIT=$(git rev-parse --short HEAD)
+          BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          LDFLAGS="-s -w -X main.version=${VERSION} -X main.buildTime=${BUILD_TIME} -X main.gitCommit=${GIT_COMMIT}"
+
+          GOOS=linux   GOARCH=amd64 go build -ldflags="${LDFLAGS}" -o dist/llm-proxy-linux-amd64      ./cmd/llm-proxy
+          GOOS=linux   GOARCH=arm64 go build -ldflags="${LDFLAGS}" -o dist/llm-proxy-linux-arm64      ./cmd/llm-proxy
+          GOOS=darwin  GOARCH=amd64 go build -ldflags="${LDFLAGS}" -o dist/llm-proxy-darwin-amd64     ./cmd/llm-proxy
+          GOOS=darwin  GOARCH=arm64 go build -ldflags="${LDFLAGS}" -o dist/llm-proxy-darwin-arm64     ./cmd/llm-proxy
+          GOOS=windows GOARCH=amd64 go build -ldflags="${LDFLAGS}" -o dist/llm-proxy-windows-amd64.exe ./cmd/llm-proxy
+
+      - name: Compress binaries
+        if: steps.check_tag.outputs.exists == 'false'
+        run: |
+          cd dist
+          for f in llm-proxy-linux-* llm-proxy-darwin-*; do
+            tar czf "${f}.tar.gz" "${f}" && rm "${f}"
+          done
+          for f in llm-proxy-windows-*; do
+            zip "${f%.exe}.zip" "${f}" && rm "${f}"
+          done
+          sha256sum * > checksums.txt
+
+      - name: Create tag
+        if: steps.check_tag.outputs.exists == 'false'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ steps.version.outputs.tag }}" -m "Release ${{ steps.version.outputs.tag }}"
+          git push origin "${{ steps.version.outputs.tag }}"
+
+      - name: Create GitHub Release
+        if: steps.check_tag.outputs.exists == 'false'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: ${{ steps.version.outputs.tag }}
+          generate_release_notes: true
+          files: dist/*
