@@ -1,6 +1,6 @@
 # Compiled binaries
 bin/
-llm-proxy
+/llm-proxy
 
 # Go build artifacts
 *.exe
