@@ -32,8 +32,10 @@ func NewStore(dbPath string, encryptionKey []byte) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
-	// Single-instance deployment: limit pool to 1 connection for SQLite safety.
+	// Single connection serializes all access through one WAL snapshot,
+	// preventing stale-read races in write-then-read sequences.
 	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 
 	if err = RunMigrations(db); err != nil {
 		_ = db.Close()
@@ -146,7 +148,7 @@ func (s *Store) GetUpstream(id int64) (*UpstreamProvider, error) {
 
 	keys, err := s.getUpstreamAPIKeys(id)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("get upstream api keys for %d: %w", id, err)
 	}
 	up.APIKeys = keys
 	up.Healthy = true
@@ -180,7 +182,7 @@ func (s *Store) ListUpstreams() ([]UpstreamProvider, error) {
 	// 批量加载所有上游的 API Keys，避免 N+1 查询
 	allKeys, err := s.getAllUpstreamAPIKeys()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("get all upstream api keys: %w", err)
 	}
 	for i := range result {
 		result[i].APIKeys = allKeys[result[i].ID]
@@ -556,7 +558,10 @@ func (s *Store) ResetKeyFailures(upstreamID, keyRowID int64) error {
 		`UPDATE upstream_api_keys SET consecutive_failures = 0 WHERE id = ? AND upstream_id = ?`,
 		keyRowID, upstreamID,
 	)
-	return err
+	if err != nil {
+		return fmt.Errorf("reset key failures (upstream=%d, key=%d): %w", upstreamID, keyRowID, err)
+	}
+	return nil
 }
 
 // AutoDisableFailingKeys 将连续失败次数 >= threshold 的 Key 自动禁用。
@@ -590,7 +595,10 @@ func (s *Store) SetSetting(key, value string) error {
 		`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
 		key, value,
 	)
-	return err
+	if err != nil {
+		return fmt.Errorf("set setting %q: %w", key, err)
+	}
+	return nil
 }
 
 // GetAllUpstreamAPIKeyRowIDs 一次性加载所有上游的已启用 Key 行 ID，供 prober 构建运行时快照。

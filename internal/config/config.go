@@ -5,18 +5,20 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
 
 // YAMLConfig represents the new simplified configuration.
 type YAMLConfig struct {
-	Server   ServerConfig   `yaml:"server"`
-	Storage  StorageConfig  `yaml:"storage"`
-	Admin    AdminConfig    `yaml:"admin"`
-	Upstream UpstreamConfig `yaml:"upstream"`
-	Audit    AuditConfig    `yaml:"audit"`
-	Logging  LoggingConfig  `yaml:"logging"`
+	Server    ServerConfig    `yaml:"server"`
+	Storage   StorageConfig   `yaml:"storage"`
+	Admin     AdminConfig     `yaml:"admin"`
+	Upstream  UpstreamConfig  `yaml:"upstream"`
+	Audit     AuditConfig     `yaml:"audit"`
+	Logging   LoggingConfig   `yaml:"logging"`
+	Transport TransportConfig `yaml:"transport"`
 }
 
 type ServerConfig struct {
@@ -47,6 +49,29 @@ type AuditConfig struct {
 type LoggingConfig struct {
 	Level  string `yaml:"level"`
 	Format string `yaml:"format"`
+}
+
+// TransportConfig holds tunable parameters for outbound HTTP transports.
+type TransportConfig struct {
+	DialTimeout         time.Duration `yaml:"dial_timeout"`
+	KeepAlive           time.Duration `yaml:"keepalive"`
+	IdleConnTimeout     time.Duration `yaml:"idle_conn_timeout"`
+	TLSHandshakeTimeout time.Duration `yaml:"tls_handshake_timeout"`
+	MaxIdleConns        int           `yaml:"max_idle_conns"`
+	MaxIdleConnsPerHost int           `yaml:"max_idle_conns_per_host"`
+}
+
+// DefaultTransportConfig returns a TransportConfig with the same defaults
+// that were previously hardcoded in proxy.newBaseTransport.
+func DefaultTransportConfig() *TransportConfig {
+	return &TransportConfig{
+		DialTimeout:         30 * time.Second,
+		KeepAlive:           30 * time.Second,
+		IdleConnTimeout:     90 * time.Second,
+		TLSHandshakeTimeout: 10 * time.Second,
+		MaxIdleConns:        200,
+		MaxIdleConnsPerHost: 64,
+	}
 }
 
 // Validate validates the configuration and fills in defaults.
@@ -81,6 +106,24 @@ func (c *YAMLConfig) Validate() error {
 	if c.Logging.Format == "" {
 		c.Logging.Format = "text"
 	}
+	if c.Transport.DialTimeout <= 0 {
+		c.Transport.DialTimeout = 30 * time.Second
+	}
+	if c.Transport.KeepAlive <= 0 {
+		c.Transport.KeepAlive = 30 * time.Second
+	}
+	if c.Transport.IdleConnTimeout <= 0 {
+		c.Transport.IdleConnTimeout = 90 * time.Second
+	}
+	if c.Transport.TLSHandshakeTimeout <= 0 {
+		c.Transport.TLSHandshakeTimeout = 10 * time.Second
+	}
+	if c.Transport.MaxIdleConns <= 0 {
+		c.Transport.MaxIdleConns = 200
+	}
+	if c.Transport.MaxIdleConnsPerHost <= 0 {
+		c.Transport.MaxIdleConnsPerHost = 64
+	}
 	return nil
 }
 
@@ -105,6 +148,7 @@ func GetDefaultYAMLConfig() *YAMLConfig {
 			Level:  "info",
 			Format: "text",
 		},
+		Transport: *DefaultTransportConfig(),
 	}
 	return cfg
 }

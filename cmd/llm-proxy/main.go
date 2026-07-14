@@ -280,8 +280,10 @@ func main() {
 	// In-memory capture of inbound /v1 client headers (Claude Code fingerprint debug).
 	headerCapture := middleware.NewHeaderCapture(20)
 
+	bindingCache := middleware.NewBindingCache(db)
+
 	if yamlConfig.Admin.Enabled {
-		adminHandler := admin.NewAdminHandler(db, keyCache, rateLimiter, prober, dynamicProxy, auditLogger, modelFilter, globalCounter, perKeyStats, overrideCache, headerCapture, adminToken, version)
+		adminHandler := admin.NewAdminHandler(db, keyCache, rateLimiter, prober, dynamicProxy, auditLogger, modelFilter, globalCounter, perKeyStats, overrideCache, bindingCache, headerCapture, adminToken, version)
 		adminHandler.RegisterRoutes(r)
 		slog.Info("Admin interface enabled", "dashboard", "/admin/", "api", "/admin/api/")
 	}
@@ -306,7 +308,7 @@ func main() {
 	// per-key 统计放在 KeyResolver 之后，确保只记录已通过鉴权的请求
 	proxyChain = middleware.PerKeyStatsMiddleware(perKeyStats)(proxyChain)
 	// 先做绑定查询再进入后续转发流程，避免存储异常时请求绕过授权边界。
-	proxyChain = middleware.UpstreamBindingMiddleware(db, overrideCache)(proxyChain)
+	proxyChain = middleware.UpstreamBindingMiddleware(bindingCache, overrideCache)(proxyChain)
 	proxyChain = middleware.KeyResolverMiddleware(keyCache)(proxyChain)
 	proxyChain = middleware.RequestClassifierMiddleware()(proxyChain)
 	// 全局 RPM/RPS 统计放在最外层，统计所有到达代理的请求

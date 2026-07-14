@@ -40,3 +40,5 @@ data/
 tmp/
 
 .claude/
+.ccg/
+graphify-out/

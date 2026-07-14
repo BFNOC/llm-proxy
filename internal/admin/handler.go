@@ -2,6 +2,7 @@ package admin
 
 import (
 	"bytes"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -33,6 +34,7 @@ type AdminHandler struct {
 	requestCounter *middleware.GlobalRequestCounter
 	perKeyStats    *middleware.PerKeyStatsCollector
 	overrideCache  *middleware.ModelOverrideCache
+	bindingCache   *middleware.BindingCache
 	headerCapture  *middleware.HeaderCapture
 	adminToken     string
 	version        string
@@ -49,6 +51,7 @@ func NewAdminHandler(
 	rc *middleware.GlobalRequestCounter,
 	pks *middleware.PerKeyStatsCollector,
 	oc *middleware.ModelOverrideCache,
+	bc *middleware.BindingCache,
 	hc *middleware.HeaderCapture,
 	adminToken string,
 	version string,
@@ -64,6 +67,7 @@ func NewAdminHandler(
 		requestCounter: rc,
 		perKeyStats:    pks,
 		overrideCache:  oc,
+		bindingCache:   bc,
 		headerCapture:  hc,
 		adminToken:     adminToken,
 		version:        version,
@@ -152,7 +156,7 @@ func (h *AdminHandler) RegisterRoutes(r *mux.Router) {
 func (h *AdminHandler) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token := r.Header.Get("Authorization")
-		if !strings.HasPrefix(token, "Bearer ") || strings.TrimPrefix(token, "Bearer ") != h.adminToken {
+		if !strings.HasPrefix(token, "Bearer ") || subtle.ConstantTimeCompare([]byte(strings.TrimPrefix(token, "Bearer ")), []byte(h.adminToken)) != 1 {
 			jsonError(w, http.StatusUnauthorized, "invalid admin token")
 			return
 		}
@@ -398,7 +402,10 @@ func (h *AdminHandler) updateUpstream(w http.ResponseWriter, r *http.Request) {
 		h.tryRemoveTransport(existing.ProxyURL, id)
 	}
 	// Trigger re-probe so disabled/enabled change takes effect immediately.
-	go h.prober.ProbeNow()
+	go func() {
+		defer func() { recover() }()
+		h.prober.ProbeNow()
+	}()
 	slog.Info("admin: updated upstream", "id", upstream.ID, "enabled", upstream.Enabled)
 	jsonOK(w, map[string]interface{}{"id": upstream.ID, "name": upstream.Name, "enabled": upstream.Enabled})
 }
@@ -421,10 +428,16 @@ func (h *AdminHandler) deleteUpstream(w http.ResponseWriter, r *http.Request) {
 		h.tryRemoveTransport(existing.ProxyURL, id)
 	}
 	// Trigger immediate probe to update active upstream if needed.
-	go h.prober.ProbeNow()
-	// FK cascade may have removed overrides referencing this upstream
+	go func() {
+		defer func() { recover() }()
+		h.prober.ProbeNow()
+	}()
+	// FK cascade may have removed overrides/bindings referencing this upstream
 	if h.overrideCache != nil {
 		h.overrideCache.Reload()
+	}
+	if h.bindingCache != nil {
+		h.bindingCache.Reload()
 	}
 	if h.modelFilter != nil {
 		h.modelFilter.ReloadDeclaredModels()
@@ -458,7 +471,10 @@ func (h *AdminHandler) batchSetUpstreamEnabled(w http.ResponseWriter, r *http.Re
 		jsonError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	go h.prober.ProbeNow()
+	go func() {
+		defer func() { recover() }()
+		h.prober.ProbeNow()
+	}()
 	slog.Info("admin: batch set upstream enabled", "ids", req.IDs, "enabled", *req.Enabled, "updated", updated)
 	jsonOK(w, map[string]interface{}{
 		"status":  "updated",
@@ -503,9 +519,15 @@ func (h *AdminHandler) batchDeleteUpstreams(w http.ResponseWriter, r *http.Reque
 	for _, ref := range refs {
 		h.tryRemoveTransport(ref.proxyURL, ref.id)
 	}
-	go h.prober.ProbeNow()
+	go func() {
+		defer func() { recover() }()
+		h.prober.ProbeNow()
+	}()
 	if h.overrideCache != nil {
 		h.overrideCache.Reload()
+	}
+	if h.bindingCache != nil {
+		h.bindingCache.Reload()
 	}
 	if h.modelFilter != nil {
 		h.modelFilter.ReloadDeclaredModels()
@@ -653,9 +675,12 @@ func (h *AdminHandler) deleteKey(w http.ResponseWriter, r *http.Request) {
 	if h.perKeyStats != nil {
 		h.perKeyStats.RemoveKey(id)
 	}
-	// FK cascade may have removed overrides for this key
+	// FK cascade may have removed overrides/bindings for this key
 	if h.overrideCache != nil {
 		h.overrideCache.Reload()
+	}
+	if h.bindingCache != nil {
+		h.bindingCache.Reload()
 	}
 
 	slog.Info("admin: deleted key", "id", id)
@@ -926,6 +951,9 @@ func (h *AdminHandler) setKeyUpstreams(w http.ResponseWriter, r *http.Request) {
 		slog.Error("admin: store error", "error", err)
 		jsonError(w, http.StatusInternalServerError, "internal error")
 		return
+	}
+	if h.bindingCache != nil {
+		h.bindingCache.Reload()
 	}
 	slog.Info("admin: updated key upstream bindings", "key_id", id, "upstream_ids", req.UpstreamIDs)
 	jsonOK(w, map[string]interface{}{"status": "updated", "upstream_ids": req.UpstreamIDs})
@@ -1333,7 +1361,7 @@ func validateBaseURL(rawURL string) error {
 		if ip == nil {
 			continue
 		}
-		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
 			return fmt.Errorf("base_url resolves to private/loopback IP %s", ipStr)
 		}
 	}
@@ -1718,7 +1746,10 @@ func (h *AdminHandler) setAPIKeyEnabled(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	// Trigger re-probe so key changes take effect immediately.
-	go h.prober.ProbeNow()
+	go func() {
+		defer func() { recover() }()
+		h.prober.ProbeNow()
+	}()
 	slog.Info("admin: updated api key enabled", "upstream_id", id, "key_id", keyID, "enabled", req.Enabled)
 	jsonOK(w, map[string]interface{}{"upstream_id": id, "key_id": keyID, "enabled": req.Enabled})
 }
@@ -1753,7 +1784,10 @@ func (h *AdminHandler) addUpstreamAPIKeys(w http.ResponseWriter, r *http.Request
 		jsonError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	go h.prober.ProbeNow()
+	go func() {
+		defer func() { recover() }()
+		h.prober.ProbeNow()
+	}()
 	slog.Info("admin: added upstream api keys", "upstream_id", id, "count", len(keys))
 	jsonOK(w, map[string]interface{}{"status": "created", "count": len(keys), "api_keys": added})
 }
@@ -1775,7 +1809,10 @@ func (h *AdminHandler) deleteUpstreamAPIKey(w http.ResponseWriter, r *http.Reque
 		jsonError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	go h.prober.ProbeNow()
+	go func() {
+		defer func() { recover() }()
+		h.prober.ProbeNow()
+	}()
 	slog.Info("admin: deleted upstream api key", "upstream_id", id, "key_id", keyID)
 	jsonOK(w, map[string]interface{}{"status": "deleted", "upstream_id": id, "key_id": keyID})
 }
@@ -2259,7 +2296,10 @@ func (h *AdminHandler) setUpstreamModelPatterns(w http.ResponseWriter, r *http.R
 		return
 	}
 	// 即时触发 prober 刷新，让模型模式立即生效
-	go h.prober.ProbeNow()
+	go func() {
+		defer func() { recover() }()
+		h.prober.ProbeNow()
+	}()
 	slog.Info("admin: updated upstream model patterns", "upstream_id", id, "patterns", cleaned)
 	jsonOK(w, map[string]interface{}{"status": "updated", "patterns": cleaned})
 }

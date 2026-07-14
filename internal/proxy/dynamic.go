@@ -60,6 +60,13 @@ var untrustedRequestHeaders = []string{
 	"X-Cluster-Client-IP",
 }
 
+var streamBufPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, 32*1024)
+		return &b
+	},
+}
+
 // allowedUpstreamIDsKey 使用私有空结构体作为 context key，
 // 避免字符串 key 冲突，也避免外部代码通过同名字符串伪造绑定结果。
 type allowedUpstreamIDsKey struct{}
@@ -571,7 +578,9 @@ func (dp *DynamicProxy) forwardResponse(w http.ResponseWriter, resp *http.Respon
 
 	// Stream body with flush support for SSE.
 	if f, ok := w.(http.Flusher); ok {
-		buf := make([]byte, 32*1024)
+		bufp := streamBufPool.Get().(*[]byte)
+		buf := *bufp
+		defer streamBufPool.Put(bufp)
 		for {
 			n, readErr := resp.Body.Read(buf)
 			if n > 0 {

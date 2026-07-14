@@ -26,6 +26,9 @@ var sanitizeRules = []sanitizeRule{
 	// 1. 令牌标识：匹配已知 API key 前缀（sk/ak/rk/fk）被方括号包裹的形式
 	{regexp.MustCompile(`\[(?:sk|ak|rk|fk)-[^\]]*\]`), "[***]"},
 
+	// 1b. 裸 API key：匹配未被方括号包裹的已知前缀 key（如 sk-ant-xxx、sk-proj-xxx、pk-xxx 等）
+	{regexp.MustCompile(`\b(sk|ak|rk|fk|pk|sk-ant|sk-proj)-[A-Za-z0-9_-]{8,}\b`), "[REDACTED_KEY]"},
+
 	// 2. 请求 ID：匹配 (request id: xxx)，不区分大小写
 	{regexp.MustCompile(`(?i)\(request\s*id\s*:\s*[^)]*\)`), ""},
 

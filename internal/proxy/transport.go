@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Instawork/llm-proxy/internal/config"
 	"github.com/Instawork/llm-proxy/internal/proxy/tlsfingerprint"
 	xproxy "golang.org/x/net/proxy"
 )
@@ -19,19 +21,66 @@ var (
 	utlsTransportCache sync.Map // map[string]*http.Transport — Node/Claude Code TLS fingerprint
 )
 
+// SSRFProtection controls whether BuildTransport applies DNS rebinding
+// protection (safeDialContext) for direct (non-proxy) transports.
+// Defaults to true. Set to false only in test environments where
+// httptest.NewServer listens on loopback addresses.
+var SSRFProtection = true
+
+// safeDialContext wraps a net.Dialer to resolve DNS and validate that none of
+// the resolved IPs are private, loopback, or link-local before dialing.
+// This prevents DNS rebinding SSRF: an attacker-controlled domain may return a
+// public IP at validation time, then switch to a private IP before the proxy dials.
+func safeDialContext(dialer *net.Dialer) func(ctx context.Context, network, addr string) (net.Conn, error) {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid address %q: %w", addr, err)
+		}
+		ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+		if err != nil {
+			return nil, fmt.Errorf("DNS lookup failed for %q: %w", host, err)
+		}
+		for _, ip := range ips {
+			if ip.IP.IsLoopback() || ip.IP.IsPrivate() || ip.IP.IsLinkLocalUnicast() || ip.IP.IsLinkLocalMulticast() || ip.IP.IsUnspecified() {
+				return nil, fmt.Errorf("resolved IP %s is not allowed (private/loopback)", ip.IP)
+			}
+		}
+		// Dial using only validated IPs
+		return dialer.DialContext(ctx, network, net.JoinHostPort(ips[0].IP.String(), port))
+	}
+}
+
 // BuildTransport 根据 proxyURL 创建或返回缓存的 *http.Transport。
 // 空字符串表示使用环境代理（HTTP_PROXY 等）；支持 http/https/socks5 协议。
-func BuildTransport(proxyURL string) (*http.Transport, error) {
+// 可选的 TransportConfig 参数用于覆盖默认的超时与连接池设置；省略时使用默认值。
+func BuildTransport(proxyURL string, cfgs ...*config.TransportConfig) (*http.Transport, error) {
 	// 先查缓存
 	if v, ok := transportCache.Load(proxyURL); ok {
 		return v.(*http.Transport), nil
 	}
 
+	var cfg *config.TransportConfig
+	if len(cfgs) > 0 {
+		cfg = cfgs[0]
+	}
+	if cfg == nil {
+		cfg = config.DefaultTransportConfig()
+	}
+
 	var t *http.Transport
 	if proxyURL == "" {
 		// 空值保留历史行为：从环境变量读取代理配置
-		t = newBaseTransport()
+		t = newBaseTransport(cfg)
 		t.Proxy = http.ProxyFromEnvironment
+		// DNS rebinding SSRF protection: validate resolved IPs before dialing.
+		// Skipped when SSRFProtection is false (test environments with loopback servers).
+		if SSRFProtection {
+			t.DialContext = safeDialContext(&net.Dialer{
+				Timeout:   cfg.DialTimeout,
+				KeepAlive: cfg.KeepAlive,
+			})
+		}
 	} else {
 		parsed, err := url.Parse(proxyURL)
 		if err != nil {
@@ -40,14 +89,14 @@ func BuildTransport(proxyURL string) (*http.Transport, error) {
 
 		switch parsed.Scheme {
 		case "http", "https":
-			t = newBaseTransport()
+			t = newBaseTransport(cfg)
 			t.Proxy = http.ProxyURL(parsed)
 		case "socks5":
 			dialer, err := xproxy.FromURL(parsed, xproxy.Direct)
 			if err != nil {
 				return nil, fmt.Errorf("create SOCKS5 dialer: %w", err)
 			}
-			t = newBaseTransport()
+			t = newBaseTransport(cfg)
 			// SOCKS5 dialer 不支持 DialContext，使用 Dial 回退
 			if cd, ok := dialer.(xproxy.ContextDialer); ok {
 				t.DialContext = cd.DialContext
@@ -75,7 +124,7 @@ func BuildTransportUTLS(proxyURL string) (*http.Transport, error) {
 	}
 
 	profile := tlsfingerprint.NodeClaudeCodeProfile()
-	t := newBaseTransport()
+	t := newBaseTransport(nil)
 	// uTLS ClientHello uses ALPN http/1.1 only; disable automatic HTTP/2 upgrade.
 	t.ForceAttemptHTTP2 = false
 	// DialTLSContext owns TLS; clear Proxy so net/http does not double-wrap TLS.
@@ -141,18 +190,22 @@ func TransportPoolStats() map[string]interface{} {
 
 // newBaseTransport 返回一个预配置的 *http.Transport。
 // MaxIdleConnsPerHost 提高默认 2，避免高并发单上游时连接池瓶颈。
-func newBaseTransport() *http.Transport {
+// cfg 为 nil 时使用 config.DefaultTransportConfig() 默认值。
+func newBaseTransport(cfg *config.TransportConfig) *http.Transport {
+	if cfg == nil {
+		cfg = config.DefaultTransportConfig()
+	}
 	return &http.Transport{
 		DialContext: (&net.Dialer{
-			Timeout:   30 * time.Second,
-			KeepAlive: 30 * time.Second,
+			Timeout:   cfg.DialTimeout,
+			KeepAlive: cfg.KeepAlive,
 		}).DialContext,
 		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          200,
-		MaxIdleConnsPerHost:   64,
+		MaxIdleConns:          cfg.MaxIdleConns,
+		MaxIdleConnsPerHost:   cfg.MaxIdleConnsPerHost,
 		MaxConnsPerHost:       0, // 0 = unlimited concurrent dials
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
+		IdleConnTimeout:       cfg.IdleConnTimeout,
+		TLSHandshakeTimeout:   cfg.TLSHandshakeTimeout,
 		ExpectContinueTimeout: 1 * time.Second,
 		ResponseHeaderTimeout: 5 * time.Minute, // slow TTFB models / large tools
 		DisableCompression:    true,
