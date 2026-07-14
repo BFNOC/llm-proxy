@@ -2387,14 +2387,21 @@ func (h *AdminHandler) setUpstreamDeclaredModels(w http.ResponseWriter, r *http.
 
 func (h *AdminHandler) getSettings(w http.ResponseWriter, r *http.Request) {
 	threshold := h.dynamicProxy.AutoDisableThreshold.Load()
+	retentionStr, _ := h.store.GetSetting("log_retention_days", "15")
+	retentionDays, _ := strconv.Atoi(retentionStr)
+	if retentionDays <= 0 {
+		retentionDays = 15
+	}
 	jsonOK(w, map[string]interface{}{
 		"auto_disable_threshold": threshold,
+		"log_retention_days":     retentionDays,
 	})
 }
 
 func (h *AdminHandler) updateSettings(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		AutoDisableThreshold *int `json:"auto_disable_threshold"`
+		LogRetentionDays     *int `json:"log_retention_days"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid JSON")
@@ -2413,6 +2420,19 @@ func (h *AdminHandler) updateSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		h.dynamicProxy.AutoDisableThreshold.Store(int64(val))
 		slog.Info("admin: updated auto_disable_threshold", "value", val)
+	}
+	if body.LogRetentionDays != nil {
+		val := *body.LogRetentionDays
+		if val < 1 {
+			jsonError(w, http.StatusBadRequest, "log_retention_days must be >= 1")
+			return
+		}
+		if err := h.store.SetSetting("log_retention_days", strconv.Itoa(val)); err != nil {
+			slog.Error("admin: failed to save setting", "error", err)
+			jsonError(w, http.StatusInternalServerError, "failed to save")
+			return
+		}
+		slog.Info("admin: updated log_retention_days", "value", val)
 	}
 	jsonOK(w, map[string]interface{}{"status": "updated"})
 }

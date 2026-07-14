@@ -206,6 +206,34 @@ func main() {
 	go prober.Start(proberCtx)
 	slog.Info("Upstream prober started", "interval", probeInterval)
 
+	// Background log cleanup: delete request_logs older than log_retention_days (default 15).
+	logCleanupCtx, logCleanupCancel := context.WithCancel(context.Background())
+	go func() {
+		const cleanupInterval = 6 * time.Hour
+		const defaultRetentionDays = 15
+		ticker := time.NewTicker(cleanupInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				daysStr, _ := db.GetSetting("log_retention_days", strconv.Itoa(defaultRetentionDays))
+				days, err := strconv.Atoi(daysStr)
+				if err != nil || days <= 0 {
+					days = defaultRetentionDays
+				}
+				retention := time.Duration(days) * 24 * time.Hour
+				if err := db.DeleteLogsOlderThan(retention); err != nil {
+					slog.Error("log cleanup failed", "error", err)
+				} else {
+					slog.Info("log cleanup completed", "retention_days", days)
+				}
+			case <-logCleanupCtx.Done():
+				return
+			}
+		}
+	}()
+	slog.Info("Log cleanup goroutine started", "interval", "6h", "default_retention_days", 15)
+
 	// Create audit logger
 	var auditLogger *middleware.AuditLogger
 	if yamlConfig.Audit.Enabled {
@@ -378,8 +406,9 @@ func main() {
 		slog.Info("HTTP server shut down successfully")
 	}
 
-	// Stop prober
+	// Stop prober and log cleanup
 	proberCancel()
+	logCleanupCancel()
 	slog.Info("Upstream prober stopped")
 
 	// Drain audit logger
