@@ -58,7 +58,7 @@ func (s *Store) Close() error {
 // 每个 Key 在写入 upstream_api_keys 表之前都会被加密。
 // URL 校验（scheme、SSRF）由 HTTP handler 层负责；
 // store 层接受任意非空 URL，以便使用 loopback 地址进行测试。
-func (s *Store) CreateUpstream(name, baseURL string, apiKeys []string, priority int, proxyURL string, keySchedulingMode string, authMode string, remark string) (*UpstreamProvider, error) {
+func (s *Store) CreateUpstream(name, baseURL string, apiKeys []string, priority int, proxyURL string, keySchedulingMode string, authMode string, remark string, websocketEnabled bool) (*UpstreamProvider, error) {
 	if keySchedulingMode == "" {
 		keySchedulingMode = "round-robin"
 	}
@@ -75,9 +75,9 @@ func (s *Store) CreateUpstream(name, baseURL string, apiKeys []string, priority 
 
 	// 旧 api_key 列保留占位值（NOT NULL 约束无法删除）
 	res, err := tx.Exec(
-		`INSERT INTO upstream_providers (name, base_url, api_key, priority, enabled, proxy_url, key_scheduling_mode, auth_mode, remark, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)`,
-		name, baseURL, "_migrated_to_upstream_api_keys", priority, proxyURL, keySchedulingMode, authMode, remark, now, now,
+		`INSERT INTO upstream_providers (name, base_url, api_key, priority, enabled, proxy_url, key_scheduling_mode, auth_mode, remark, websocket_enabled, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)`,
+		name, baseURL, "_migrated_to_upstream_api_keys", priority, proxyURL, keySchedulingMode, authMode, remark, websocketEnabled, now, now,
 	)
 	if err != nil {
 		_ = tx.Rollback()
@@ -125,6 +125,7 @@ func (s *Store) CreateUpstream(name, baseURL string, apiKeys []string, priority 
 		KeySchedulingMode: keySchedulingMode,
 		AuthMode:          authMode,
 		Remark:            remark,
+		WebSocketEnabled:  websocketEnabled,
 		Healthy:           true,
 		CreatedAt:         now,
 		UpdatedAt:         now,
@@ -134,12 +135,12 @@ func (s *Store) CreateUpstream(name, baseURL string, apiKeys []string, priority 
 // GetUpstream 按 ID 获取一个上游 provider，并解密其所有 API Key。
 func (s *Store) GetUpstream(id int64) (*UpstreamProvider, error) {
 	row := s.db.QueryRow(
-		`SELECT id, name, base_url, priority, enabled, key_scheduling_mode, auth_mode, remark, proxy_url, created_at, updated_at
+		`SELECT id, name, base_url, priority, enabled, key_scheduling_mode, auth_mode, remark, websocket_enabled, proxy_url, created_at, updated_at
 		 FROM upstream_providers WHERE id = ?`, id,
 	)
 
 	var up UpstreamProvider
-	if err := row.Scan(&up.ID, &up.Name, &up.BaseURL, &up.Priority, &up.Enabled, &up.KeySchedulingMode, &up.AuthMode, &up.Remark, &up.ProxyURL, &up.CreatedAt, &up.UpdatedAt); err != nil {
+	if err := row.Scan(&up.ID, &up.Name, &up.BaseURL, &up.Priority, &up.Enabled, &up.KeySchedulingMode, &up.AuthMode, &up.Remark, &up.WebSocketEnabled, &up.ProxyURL, &up.CreatedAt, &up.UpdatedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("upstream %d not found", id)
 		}
@@ -158,7 +159,7 @@ func (s *Store) GetUpstream(id int64) (*UpstreamProvider, error) {
 // ListUpstreams 返回所有上游 provider，并附带已解密的 API Key。
 func (s *Store) ListUpstreams() ([]UpstreamProvider, error) {
 	rows, err := s.db.Query(
-		`SELECT id, name, base_url, priority, enabled, key_scheduling_mode, auth_mode, remark, proxy_url, created_at, updated_at
+		`SELECT id, name, base_url, priority, enabled, key_scheduling_mode, auth_mode, remark, websocket_enabled, proxy_url, created_at, updated_at
 		 FROM upstream_providers ORDER BY priority ASC, id ASC`,
 	)
 	if err != nil {
@@ -169,7 +170,7 @@ func (s *Store) ListUpstreams() ([]UpstreamProvider, error) {
 	var result []UpstreamProvider
 	for rows.Next() {
 		var up UpstreamProvider
-		if err := rows.Scan(&up.ID, &up.Name, &up.BaseURL, &up.Priority, &up.Enabled, &up.KeySchedulingMode, &up.AuthMode, &up.Remark, &up.ProxyURL, &up.CreatedAt, &up.UpdatedAt); err != nil {
+		if err := rows.Scan(&up.ID, &up.Name, &up.BaseURL, &up.Priority, &up.Enabled, &up.KeySchedulingMode, &up.AuthMode, &up.Remark, &up.WebSocketEnabled, &up.ProxyURL, &up.CreatedAt, &up.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan upstream row: %w", err)
 		}
 		up.Healthy = true
@@ -193,7 +194,7 @@ func (s *Store) ListUpstreams() ([]UpstreamProvider, error) {
 
 // UpdateUpstream 替换一个上游 provider 的所有可变字段。
 // 如果 apiKeys 非 nil，则全量替换该上游的 API Key。
-func (s *Store) UpdateUpstream(id int64, name, baseURL string, apiKeys []string, priority int, enabled bool, proxyURL string, keySchedulingMode string, authMode string, remark string) (*UpstreamProvider, error) {
+func (s *Store) UpdateUpstream(id int64, name, baseURL string, apiKeys []string, priority int, enabled bool, proxyURL string, keySchedulingMode string, authMode string, remark string, websocketEnabled *bool) (*UpstreamProvider, error) {
 	now := time.Now().UTC()
 	if authMode == "" {
 		authMode = "api_key"
@@ -204,11 +205,20 @@ func (s *Store) UpdateUpstream(id int64, name, baseURL string, apiKeys []string,
 		return nil, fmt.Errorf("begin transaction: %w", err)
 	}
 
-	res, err := tx.Exec(
-		`UPDATE upstream_providers SET name=?, base_url=?, priority=?, enabled=?, proxy_url=?, key_scheduling_mode=?, auth_mode=?, remark=?, updated_at=?
-		 WHERE id=?`,
-		name, baseURL, priority, enabled, proxyURL, keySchedulingMode, authMode, remark, now, id,
-	)
+	// 基础 UPDATE 字段
+	query := `UPDATE upstream_providers SET name=?, base_url=?, priority=?, enabled=?, proxy_url=?, key_scheduling_mode=?, auth_mode=?, remark=?, updated_at=?`
+	args := []interface{}{name, baseURL, priority, enabled, proxyURL, keySchedulingMode, authMode, remark, now}
+
+	// websocketEnabled 为 nil 时不修改该列
+	if websocketEnabled != nil {
+		query += `, websocket_enabled=?`
+		args = append(args, *websocketEnabled)
+	}
+
+	query += ` WHERE id=?`
+	args = append(args, id)
+
+	res, err := tx.Exec(query, args...)
 	if err != nil {
 		_ = tx.Rollback()
 		return nil, fmt.Errorf("update upstream: %w", err)

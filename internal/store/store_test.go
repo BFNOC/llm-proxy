@@ -136,7 +136,7 @@ func TestRunMigrations_Idempotent(t *testing.T) {
 func TestUpstream_CreateAndGet(t *testing.T) {
 	s := newTestStore(t)
 
-	up, err := s.CreateUpstream("openai", "https://api.openai.com", []string{"sk-key123"}, 10, "", "", "", "")
+	up, err := s.CreateUpstream("openai", "https://api.openai.com", []string{"sk-key123"}, 10, "", "", "", "", false)
 	require.NoError(t, err)
 	require.NotNil(t, up)
 	assert.Positive(t, up.ID)
@@ -163,9 +163,9 @@ func TestUpstream_GetNotFound(t *testing.T) {
 func TestUpstream_List(t *testing.T) {
 	s := newTestStore(t)
 
-	_, err := s.CreateUpstream("provider-a", "https://a.example.com", []string{"key-a"}, 5, "", "", "", "")
+	_, err := s.CreateUpstream("provider-a", "https://a.example.com", []string{"key-a"}, 5, "", "", "", "", false)
 	require.NoError(t, err)
-	_, err = s.CreateUpstream("provider-b", "https://b.example.com", []string{"key-b"}, 10, "", "", "", "")
+	_, err = s.CreateUpstream("provider-b", "https://b.example.com", []string{"key-b"}, 10, "", "", "", "", false)
 	require.NoError(t, err)
 
 	list, err := s.ListUpstreams()
@@ -185,10 +185,10 @@ func TestUpstream_List(t *testing.T) {
 func TestUpstream_Update(t *testing.T) {
 	s := newTestStore(t)
 
-	up, err := s.CreateUpstream("old-name", "https://old.example.com", []string{"old-key"}, 1, "", "", "", "")
+	up, err := s.CreateUpstream("old-name", "https://old.example.com", []string{"old-key"}, 1, "", "", "", "", false)
 	require.NoError(t, err)
 
-	updated, err := s.UpdateUpstream(up.ID, "new-name", "https://new.example.com", []string{"new-key"}, 2, true, "", "", "", "")
+	updated, err := s.UpdateUpstream(up.ID, "new-name", "https://new.example.com", []string{"new-key"}, 2, true, "", "", "", "", nil)
 	require.NoError(t, err)
 	assert.Equal(t, up.ID, updated.ID)
 	assert.Equal(t, "new-name", updated.Name)
@@ -199,7 +199,7 @@ func TestUpstream_Update(t *testing.T) {
 
 func TestUpstream_UpdateNotFound(t *testing.T) {
 	s := newTestStore(t)
-	_, err := s.UpdateUpstream(9999, "name", "https://example.com", []string{"key"}, 0, true, "", "", "", "")
+	_, err := s.UpdateUpstream(9999, "name", "https://example.com", []string{"key"}, 0, true, "", "", "", "", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
 }
@@ -207,7 +207,7 @@ func TestUpstream_UpdateNotFound(t *testing.T) {
 func TestUpstream_Delete(t *testing.T) {
 	s := newTestStore(t)
 
-	up, err := s.CreateUpstream("to-delete", "https://example.com", []string{"key"}, 0, "", "", "", "")
+	up, err := s.CreateUpstream("to-delete", "https://example.com", []string{"key"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
 	err = s.DeleteUpstream(up.ID)
@@ -227,11 +227,11 @@ func TestUpstream_DeleteNotFound(t *testing.T) {
 
 func TestUpstream_BatchSetEnabledAndDelete(t *testing.T) {
 	s := newTestStore(t)
-	u1, err := s.CreateUpstream("batch-a", "https://a.example.com", []string{"k1"}, 0, "", "", "", "")
+	u1, err := s.CreateUpstream("batch-a", "https://a.example.com", []string{"k1"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
-	u2, err := s.CreateUpstream("batch-b", "https://b.example.com", []string{"k2"}, 0, "", "", "", "")
+	u2, err := s.CreateUpstream("batch-b", "https://b.example.com", []string{"k2"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
-	u3, err := s.CreateUpstream("batch-c", "https://c.example.com", []string{"k3"}, 0, "", "", "", "")
+	u3, err := s.CreateUpstream("batch-c", "https://c.example.com", []string{"k3"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
 	// All created enabled by default.
@@ -277,7 +277,7 @@ func TestUpstream_APIKeyNotStoredAsPlaintext(t *testing.T) {
 	s := newTestStore(t)
 	plainKey := "sk-plaintext-secret-key"
 
-	up, err := s.CreateUpstream("test", "https://example.com", []string{plainKey}, 0, "", "", "", "")
+	up, err := s.CreateUpstream("test", "https://example.com", []string{plainKey}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
 	// Read the raw api_key column from the upstream_api_keys table directly.
@@ -291,7 +291,7 @@ func TestUpstream_APIKeyNotStoredAsPlaintext(t *testing.T) {
 
 func TestUpstream_AddAndDeleteAPIKey(t *testing.T) {
 	s := newTestStore(t)
-	up, err := s.CreateUpstream("up", "https://example.com", []string{"key-a"}, 0, "", "", "", "")
+	up, err := s.CreateUpstream("up", "https://example.com", []string{"key-a"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
 	keys, err := s.AddUpstreamAPIKeys(up.ID, []string{"key-b", "key-c"})
@@ -312,7 +312,7 @@ func TestUpstream_AddAndDeleteAPIKey(t *testing.T) {
 
 func TestUpstream_DeleteAPIKeyNotFound(t *testing.T) {
 	s := newTestStore(t)
-	up, err := s.CreateUpstream("up", "https://example.com", []string{"key"}, 0, "", "", "", "")
+	up, err := s.CreateUpstream("up", "https://example.com", []string{"key"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
 	err = s.DeleteUpstreamAPIKey(up.ID, 9999)
@@ -582,9 +582,9 @@ func TestKeyUpstreamBinding_SetAndGet(t *testing.T) {
 
 	_, dk, err := s.CreateKey("bound-key", 0)
 	require.NoError(t, err)
-	u1, err := s.CreateUpstream("upstream-1", "https://a.example.com", []string{"key-a"}, 0, "", "", "", "")
+	u1, err := s.CreateUpstream("upstream-1", "https://a.example.com", []string{"key-a"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
-	u2, err := s.CreateUpstream("upstream-2", "https://b.example.com", []string{"key-b"}, 0, "", "", "", "")
+	u2, err := s.CreateUpstream("upstream-2", "https://b.example.com", []string{"key-b"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
 	err = s.SetKeyUpstreams(dk.ID, []int64{u1.ID, u2.ID})
@@ -602,9 +602,9 @@ func TestKeyUpstreamBinding_ReplaceExisting(t *testing.T) {
 
 	_, dk, err := s.CreateKey("replace-key", 0)
 	require.NoError(t, err)
-	u1, err := s.CreateUpstream("up-1", "https://a.example.com", []string{"key-a"}, 0, "", "", "", "")
+	u1, err := s.CreateUpstream("up-1", "https://a.example.com", []string{"key-a"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
-	u2, err := s.CreateUpstream("up-2", "https://b.example.com", []string{"key-b"}, 0, "", "", "", "")
+	u2, err := s.CreateUpstream("up-2", "https://b.example.com", []string{"key-b"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
 	err = s.SetKeyUpstreams(dk.ID, []int64{u1.ID})
@@ -636,7 +636,7 @@ func TestKeyUpstreamBinding_ClearBindings(t *testing.T) {
 
 	_, dk, err := s.CreateKey("clear-key", 0)
 	require.NoError(t, err)
-	u1, err := s.CreateUpstream("up-c", "https://c.example.com", []string{"key-c"}, 0, "", "", "", "")
+	u1, err := s.CreateUpstream("up-c", "https://c.example.com", []string{"key-c"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
 	err = s.SetKeyUpstreams(dk.ID, []int64{u1.ID})
@@ -656,7 +656,7 @@ func TestKeyUpstreamBinding_CascadeDeleteKey(t *testing.T) {
 
 	_, dk, err := s.CreateKey("cascade-key", 0)
 	require.NoError(t, err)
-	u1, err := s.CreateUpstream("up-d", "https://d.example.com", []string{"key-d"}, 0, "", "", "", "")
+	u1, err := s.CreateUpstream("up-d", "https://d.example.com", []string{"key-d"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
 	err = s.SetKeyUpstreams(dk.ID, []int64{u1.ID})
@@ -677,9 +677,9 @@ func TestKeyUpstreamBinding_CascadeDeleteUpstream(t *testing.T) {
 
 	_, dk, err := s.CreateKey("cascade-up-key", 0)
 	require.NoError(t, err)
-	u1, err := s.CreateUpstream("up-e", "https://e.example.com", []string{"key-e"}, 0, "", "", "", "")
+	u1, err := s.CreateUpstream("up-e", "https://e.example.com", []string{"key-e"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
-	u2, err := s.CreateUpstream("up-f", "https://f.example.com", []string{"key-f"}, 0, "", "", "", "")
+	u2, err := s.CreateUpstream("up-f", "https://f.example.com", []string{"key-f"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
 	err = s.SetKeyUpstreams(dk.ID, []int64{u1.ID, u2.ID})
@@ -791,9 +791,9 @@ func TestGetAllKeyBindings_GroupedAndSorted(t *testing.T) {
 	s := newTestStore(t)
 	_, dk1, _ := s.CreateKey("k1", 0)
 	_, dk2, _ := s.CreateKey("k2", 0)
-	u1, _ := s.CreateUpstream("u1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "")
-	u2, _ := s.CreateUpstream("u2", "https://b.example.com", []string{"kb"}, 0, "", "", "", "")
-	u3, _ := s.CreateUpstream("u3", "https://c.example.com", []string{"kc"}, 0, "", "", "", "")
+	u1, _ := s.CreateUpstream("u1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "", false)
+	u2, _ := s.CreateUpstream("u2", "https://b.example.com", []string{"kb"}, 0, "", "", "", "", false)
+	u3, _ := s.CreateUpstream("u3", "https://c.example.com", []string{"kc"}, 0, "", "", "", "", false)
 
 	require.NoError(t, s.SetKeyUpstreams(dk1.ID, []int64{u2.ID, u1.ID})) // insert out of order
 	require.NoError(t, s.SetKeyUpstreams(dk2.ID, []int64{u3.ID}))
@@ -820,8 +820,8 @@ func TestGetAllKeyBindings_UnboundKeysAbsent(t *testing.T) {
 func TestGetAllKeyBindings_AfterReplaceAndClear(t *testing.T) {
 	s := newTestStore(t)
 	_, dk, _ := s.CreateKey("replace-key", 0)
-	u1, _ := s.CreateUpstream("u1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "")
-	u2, _ := s.CreateUpstream("u2", "https://b.example.com", []string{"kb"}, 0, "", "", "", "")
+	u1, _ := s.CreateUpstream("u1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "", false)
+	u2, _ := s.CreateUpstream("u2", "https://b.example.com", []string{"kb"}, 0, "", "", "", "", false)
 
 	require.NoError(t, s.SetKeyUpstreams(dk.ID, []int64{u1.ID}))
 	require.NoError(t, s.SetKeyUpstreams(dk.ID, []int64{u2.ID})) // Replace
@@ -843,7 +843,7 @@ func TestGetAllKeyBindings_AfterReplaceAndClear(t *testing.T) {
 
 func TestUpstreamModelPatterns_SetAndGet(t *testing.T) {
 	s := newTestStore(t)
-	u, err := s.CreateUpstream("test-up", "https://a.example.com", []string{"key-a"}, 0, "", "", "", "")
+	u, err := s.CreateUpstream("test-up", "https://a.example.com", []string{"key-a"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
 	err = s.SetUpstreamModelPatterns(u.ID, []string{"claude-*", "gpt-4o"})
@@ -858,7 +858,7 @@ func TestUpstreamModelPatterns_SetAndGet(t *testing.T) {
 
 func TestUpstreamModelPatterns_Overwrite(t *testing.T) {
 	s := newTestStore(t)
-	u, err := s.CreateUpstream("up", "https://a.example.com", []string{"key"}, 0, "", "", "", "")
+	u, err := s.CreateUpstream("up", "https://a.example.com", []string{"key"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
 	err = s.SetUpstreamModelPatterns(u.ID, []string{"claude-*"})
@@ -875,7 +875,7 @@ func TestUpstreamModelPatterns_Overwrite(t *testing.T) {
 
 func TestUpstreamModelPatterns_ClearPatterns(t *testing.T) {
 	s := newTestStore(t)
-	u, err := s.CreateUpstream("up", "https://a.example.com", []string{"key"}, 0, "", "", "", "")
+	u, err := s.CreateUpstream("up", "https://a.example.com", []string{"key"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
 	err = s.SetUpstreamModelPatterns(u.ID, []string{"claude-*"})
@@ -891,7 +891,7 @@ func TestUpstreamModelPatterns_ClearPatterns(t *testing.T) {
 
 func TestUpstreamModelPatterns_CascadeDeleteUpstream(t *testing.T) {
 	s := newTestStore(t)
-	u, err := s.CreateUpstream("up", "https://a.example.com", []string{"key"}, 0, "", "", "", "")
+	u, err := s.CreateUpstream("up", "https://a.example.com", []string{"key"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
 	err = s.SetUpstreamModelPatterns(u.ID, []string{"claude-*", "gpt-*"})
@@ -907,8 +907,8 @@ func TestUpstreamModelPatterns_CascadeDeleteUpstream(t *testing.T) {
 
 func TestUpstreamModelPatterns_GetAll(t *testing.T) {
 	s := newTestStore(t)
-	u1, _ := s.CreateUpstream("up1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "")
-	u2, _ := s.CreateUpstream("up2", "https://b.example.com", []string{"kb"}, 0, "", "", "", "")
+	u1, _ := s.CreateUpstream("up1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "", false)
+	u2, _ := s.CreateUpstream("up2", "https://b.example.com", []string{"kb"}, 0, "", "", "", "", false)
 
 	require.NoError(t, s.SetUpstreamModelPatterns(u1.ID, []string{"claude-*"}))
 	require.NoError(t, s.SetUpstreamModelPatterns(u2.ID, []string{"gpt-*", "o1-*"}))
@@ -922,7 +922,7 @@ func TestUpstreamModelPatterns_GetAll(t *testing.T) {
 
 func TestUpstreamModelPatterns_EmptyByDefault(t *testing.T) {
 	s := newTestStore(t)
-	u, _ := s.CreateUpstream("up", "https://a.example.com", []string{"key"}, 0, "", "", "", "")
+	u, _ := s.CreateUpstream("up", "https://a.example.com", []string{"key"}, 0, "", "", "", "", false)
 
 	patterns, err := s.GetUpstreamModelPatterns(u.ID)
 	require.NoError(t, err)
@@ -935,7 +935,7 @@ func TestUpstreamModelPatterns_EmptyByDefault(t *testing.T) {
 
 func TestResetKeyFailures_AfterIncrement(t *testing.T) {
 	s := newTestStore(t)
-	up, err := s.CreateUpstream("up", "https://a.example.com", []string{"key-a"}, 0, "", "", "", "")
+	up, err := s.CreateUpstream("up", "https://a.example.com", []string{"key-a"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
 	keys, err := s.GetUpstreamAllAPIKeys(up.ID)
@@ -972,7 +972,7 @@ func TestResetKeyFailures_NonExistentKey(t *testing.T) {
 
 func TestResetKeyFailures_AlreadyZero(t *testing.T) {
 	s := newTestStore(t)
-	up, err := s.CreateUpstream("up", "https://a.example.com", []string{"key"}, 0, "", "", "", "")
+	up, err := s.CreateUpstream("up", "https://a.example.com", []string{"key"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
 	keys, err := s.GetUpstreamAllAPIKeys(up.ID)
@@ -1056,7 +1056,7 @@ func TestSetting_MultipleKeys(t *testing.T) {
 
 func TestAutoDisableFailingKeys_DisablesAboveThreshold(t *testing.T) {
 	s := newTestStore(t)
-	up, err := s.CreateUpstream("up", "https://a.example.com", []string{"key-a", "key-b", "key-c"}, 0, "", "", "", "")
+	up, err := s.CreateUpstream("up", "https://a.example.com", []string{"key-a", "key-b", "key-c"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
 	keys, err := s.GetUpstreamAllAPIKeys(up.ID)
@@ -1091,7 +1091,7 @@ func TestAutoDisableFailingKeys_DisablesAboveThreshold(t *testing.T) {
 
 func TestAutoDisableFailingKeys_NoKeysAboveThreshold(t *testing.T) {
 	s := newTestStore(t)
-	up, err := s.CreateUpstream("up", "https://a.example.com", []string{"key"}, 0, "", "", "", "")
+	up, err := s.CreateUpstream("up", "https://a.example.com", []string{"key"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
 	keys, err := s.GetUpstreamAllAPIKeys(up.ID)
@@ -1108,7 +1108,7 @@ func TestAutoDisableFailingKeys_NoKeysAboveThreshold(t *testing.T) {
 
 func TestAutoDisableFailingKeys_AlreadyDisabledNotCounted(t *testing.T) {
 	s := newTestStore(t)
-	up, err := s.CreateUpstream("up", "https://a.example.com", []string{"key-a"}, 0, "", "", "", "")
+	up, err := s.CreateUpstream("up", "https://a.example.com", []string{"key-a"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
 	keys, err := s.GetUpstreamAllAPIKeys(up.ID)
@@ -1241,9 +1241,9 @@ func TestKeyModelOverrides_SetAndGet(t *testing.T) {
 	s := newTestStore(t)
 	_, dk, err := s.CreateKey("override-key", 0)
 	require.NoError(t, err)
-	u1, err := s.CreateUpstream("up1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "")
+	u1, err := s.CreateUpstream("up1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
-	u2, err := s.CreateUpstream("up2", "https://b.example.com", []string{"kb"}, 0, "", "", "", "")
+	u2, err := s.CreateUpstream("up2", "https://b.example.com", []string{"kb"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
 	overrides := []KeyModelOverrideInput{
@@ -1269,9 +1269,9 @@ func TestKeyModelOverrides_Overwrite(t *testing.T) {
 	s := newTestStore(t)
 	_, dk, err := s.CreateKey("ow-key", 0)
 	require.NoError(t, err)
-	u1, err := s.CreateUpstream("u1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "")
+	u1, err := s.CreateUpstream("u1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
-	u2, err := s.CreateUpstream("u2", "https://b.example.com", []string{"kb"}, 0, "", "", "", "")
+	u2, err := s.CreateUpstream("u2", "https://b.example.com", []string{"kb"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
 	err = s.SetKeyModelOverrides(dk.ID, []KeyModelOverrideInput{
@@ -1296,7 +1296,7 @@ func TestKeyModelOverrides_Clear(t *testing.T) {
 	s := newTestStore(t)
 	_, dk, err := s.CreateKey("clear-key", 0)
 	require.NoError(t, err)
-	u1, err := s.CreateUpstream("u1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "")
+	u1, err := s.CreateUpstream("u1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
 	err = s.SetKeyModelOverrides(dk.ID, []KeyModelOverrideInput{
@@ -1327,9 +1327,9 @@ func TestKeyModelOverrides_MultipleUpstreamsForSamePattern(t *testing.T) {
 	s := newTestStore(t)
 	_, dk, err := s.CreateKey("multi-key", 0)
 	require.NoError(t, err)
-	u1, err := s.CreateUpstream("u1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "")
+	u1, err := s.CreateUpstream("u1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
-	u2, err := s.CreateUpstream("u2", "https://b.example.com", []string{"kb"}, 0, "", "", "", "")
+	u2, err := s.CreateUpstream("u2", "https://b.example.com", []string{"kb"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
 	// Same model pattern, two upstreams (for failover)
@@ -1352,7 +1352,7 @@ func TestGetAllKeyModelOverrides(t *testing.T) {
 	require.NoError(t, err)
 	_, dk2, err := s.CreateKey("k2", 0)
 	require.NoError(t, err)
-	u1, err := s.CreateUpstream("u1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "")
+	u1, err := s.CreateUpstream("u1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
 	require.NoError(t, s.SetKeyModelOverrides(dk1.ID, []KeyModelOverrideInput{
@@ -1444,7 +1444,7 @@ func TestInsertRequestLogBatch_ZeroCreatedAt(t *testing.T) {
 
 func TestIncrKeyFailures_ReturnsNewCount(t *testing.T) {
 	s := newTestStore(t)
-	up, err := s.CreateUpstream("up", "https://a.example.com", []string{"key-a"}, 0, "", "", "", "")
+	up, err := s.CreateUpstream("up", "https://a.example.com", []string{"key-a"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
 	keys, err := s.GetUpstreamAllAPIKeys(up.ID)
@@ -1467,7 +1467,7 @@ func TestIncrKeyFailures_ReturnsNewCount(t *testing.T) {
 
 func TestIncrKeyFailures_AutoDisableAtThreshold(t *testing.T) {
 	s := newTestStore(t)
-	up, err := s.CreateUpstream("up", "https://a.example.com", []string{"key-a"}, 0, "", "", "", "")
+	up, err := s.CreateUpstream("up", "https://a.example.com", []string{"key-a"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
 	keys, err := s.GetUpstreamAllAPIKeys(up.ID)
@@ -1516,9 +1516,9 @@ func TestGetAllUpstreamAPIKeyRowIDs_Empty(t *testing.T) {
 
 func TestGetAllUpstreamAPIKeyRowIDs_MultipleUpstreams(t *testing.T) {
 	s := newTestStore(t)
-	u1, err := s.CreateUpstream("up1", "https://a.example.com", []string{"k1", "k2"}, 0, "", "", "", "")
+	u1, err := s.CreateUpstream("up1", "https://a.example.com", []string{"k1", "k2"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
-	u2, err := s.CreateUpstream("up2", "https://b.example.com", []string{"k3"}, 0, "", "", "", "")
+	u2, err := s.CreateUpstream("up2", "https://b.example.com", []string{"k3"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
 	result, err := s.GetAllUpstreamAPIKeyRowIDs()
@@ -1535,7 +1535,7 @@ func TestGetAllUpstreamAPIKeyRowIDs_MultipleUpstreams(t *testing.T) {
 
 func TestGetAllUpstreamAPIKeyRowIDs_ExcludesDisabled(t *testing.T) {
 	s := newTestStore(t)
-	up, err := s.CreateUpstream("up", "https://a.example.com", []string{"k1", "k2"}, 0, "", "", "", "")
+	up, err := s.CreateUpstream("up", "https://a.example.com", []string{"k1", "k2"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
 	keys, err := s.GetUpstreamAllAPIKeys(up.ID)
@@ -1641,7 +1641,7 @@ func TestLookupKeyByID_DisabledKey(t *testing.T) {
 
 func TestUpstreamDeclaredModels_SetAndGet(t *testing.T) {
 	s := newTestStore(t)
-	u, err := s.CreateUpstream("up", "https://a.example.com", []string{"key"}, 0, "", "", "", "")
+	u, err := s.CreateUpstream("up", "https://a.example.com", []string{"key"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
 	err = s.SetUpstreamDeclaredModels(u.ID, []string{"gpt-4o", "gpt-4o-mini", "claude-sonnet-4-20250514"})
@@ -1658,7 +1658,7 @@ func TestUpstreamDeclaredModels_SetAndGet(t *testing.T) {
 
 func TestUpstreamDeclaredModels_Overwrite(t *testing.T) {
 	s := newTestStore(t)
-	u, err := s.CreateUpstream("up", "https://a.example.com", []string{"key"}, 0, "", "", "", "")
+	u, err := s.CreateUpstream("up", "https://a.example.com", []string{"key"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
 	err = s.SetUpstreamDeclaredModels(u.ID, []string{"gpt-4o"})
@@ -1676,7 +1676,7 @@ func TestUpstreamDeclaredModels_Overwrite(t *testing.T) {
 
 func TestUpstreamDeclaredModels_ClearModels(t *testing.T) {
 	s := newTestStore(t)
-	u, err := s.CreateUpstream("up", "https://a.example.com", []string{"key"}, 0, "", "", "", "")
+	u, err := s.CreateUpstream("up", "https://a.example.com", []string{"key"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
 	err = s.SetUpstreamDeclaredModels(u.ID, []string{"gpt-4o"})
@@ -1692,7 +1692,7 @@ func TestUpstreamDeclaredModels_ClearModels(t *testing.T) {
 
 func TestUpstreamDeclaredModels_EmptyByDefault(t *testing.T) {
 	s := newTestStore(t)
-	u, err := s.CreateUpstream("up", "https://a.example.com", []string{"key"}, 0, "", "", "", "")
+	u, err := s.CreateUpstream("up", "https://a.example.com", []string{"key"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
 	models, err := s.GetUpstreamDeclaredModels(u.ID)
@@ -1702,7 +1702,7 @@ func TestUpstreamDeclaredModels_EmptyByDefault(t *testing.T) {
 
 func TestUpstreamDeclaredModels_CascadeDeleteUpstream(t *testing.T) {
 	s := newTestStore(t)
-	u, err := s.CreateUpstream("up", "https://a.example.com", []string{"key"}, 0, "", "", "", "")
+	u, err := s.CreateUpstream("up", "https://a.example.com", []string{"key"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
 	err = s.SetUpstreamDeclaredModels(u.ID, []string{"gpt-4o", "gpt-4o-mini"})
@@ -1725,9 +1725,9 @@ func TestGetAllUpstreamDeclaredModels_Empty(t *testing.T) {
 
 func TestGetAllUpstreamDeclaredModels_MultipleUpstreams(t *testing.T) {
 	s := newTestStore(t)
-	u1, err := s.CreateUpstream("up1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "")
+	u1, err := s.CreateUpstream("up1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
-	u2, err := s.CreateUpstream("up2", "https://b.example.com", []string{"kb"}, 0, "", "", "", "")
+	u2, err := s.CreateUpstream("up2", "https://b.example.com", []string{"kb"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
 	require.NoError(t, s.SetUpstreamDeclaredModels(u1.ID, []string{"gpt-4o"}))
@@ -1742,16 +1742,16 @@ func TestGetAllUpstreamDeclaredModels_MultipleUpstreams(t *testing.T) {
 
 func TestGetAllUpstreamDeclaredModels_ExcludesDisabledUpstream(t *testing.T) {
 	s := newTestStore(t)
-	u1, err := s.CreateUpstream("up1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "")
+	u1, err := s.CreateUpstream("up1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
-	u2, err := s.CreateUpstream("up2", "https://b.example.com", []string{"kb"}, 0, "", "", "", "")
+	u2, err := s.CreateUpstream("up2", "https://b.example.com", []string{"kb"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
 	require.NoError(t, s.SetUpstreamDeclaredModels(u1.ID, []string{"gpt-4o"}))
 	require.NoError(t, s.SetUpstreamDeclaredModels(u2.ID, []string{"claude-sonnet-4-20250514"}))
 
 	// Disable u1
-	_, err = s.UpdateUpstream(u1.ID, "up1", "https://a.example.com", nil, 0, false, "", "", "", "")
+	_, err = s.UpdateUpstream(u1.ID, "up1", "https://a.example.com", nil, 0, false, "", "", "", "", nil)
 	require.NoError(t, err)
 
 	all, err := s.GetAllUpstreamDeclaredModels()
@@ -1868,7 +1868,7 @@ func TestKeyModelOverrides_CascadeDeleteKey(t *testing.T) {
 	s := newTestStore(t)
 	_, dk, err := s.CreateKey("cascade-override-key", 0)
 	require.NoError(t, err)
-	u1, err := s.CreateUpstream("u1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "")
+	u1, err := s.CreateUpstream("u1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
 	err = s.SetKeyModelOverrides(dk.ID, []KeyModelOverrideInput{
@@ -1889,9 +1889,9 @@ func TestKeyModelOverrides_CascadeDeleteUpstream(t *testing.T) {
 	s := newTestStore(t)
 	_, dk, err := s.CreateKey("cascade-up-override-key", 0)
 	require.NoError(t, err)
-	u1, err := s.CreateUpstream("u1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "")
+	u1, err := s.CreateUpstream("u1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
-	u2, err := s.CreateUpstream("u2", "https://b.example.com", []string{"kb"}, 0, "", "", "", "")
+	u2, err := s.CreateUpstream("u2", "https://b.example.com", []string{"kb"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
 	err = s.SetKeyModelOverrides(dk.ID, []KeyModelOverrideInput{
@@ -1922,7 +1922,7 @@ func TestKeyModelOverrides_CascadeDeleteUpstream(t *testing.T) {
 func TestCreateUpstream_EmptyAPIKeys_PublicUpstream(t *testing.T) {
 	s := newTestStore(t)
 
-	up, err := s.CreateUpstream("public", "https://public.example.com", []string{}, 5, "", "", "", "")
+	up, err := s.CreateUpstream("public", "https://public.example.com", []string{}, 5, "", "", "", "", false)
 	require.NoError(t, err)
 	assert.Empty(t, up.APIKeys, "public upstream should have no API keys")
 	assert.Equal(t, 5, up.Priority)
@@ -1936,7 +1936,7 @@ func TestCreateUpstream_EmptyAPIKeys_PublicUpstream(t *testing.T) {
 func TestCreateUpstream_NilAPIKeys_PublicUpstream(t *testing.T) {
 	s := newTestStore(t)
 
-	up, err := s.CreateUpstream("nil-keys", "https://nil.example.com", nil, 0, "", "", "", "")
+	up, err := s.CreateUpstream("nil-keys", "https://nil.example.com", nil, 0, "", "", "", "", false)
 	require.NoError(t, err)
 	assert.Empty(t, up.APIKeys)
 }
@@ -1945,7 +1945,7 @@ func TestCreateUpstream_MultipleAPIKeys(t *testing.T) {
 	s := newTestStore(t)
 
 	keys := []string{"sk-key1", "sk-key2", "sk-key3"}
-	up, err := s.CreateUpstream("multi-key", "https://multi.example.com", keys, 0, "", "", "", "")
+	up, err := s.CreateUpstream("multi-key", "https://multi.example.com", keys, 0, "", "", "", "", false)
 	require.NoError(t, err)
 	assert.Equal(t, keys, up.APIKeys)
 
@@ -1957,7 +1957,7 @@ func TestCreateUpstream_MultipleAPIKeys(t *testing.T) {
 func TestCreateUpstream_WithRemark(t *testing.T) {
 	s := newTestStore(t)
 
-	up, err := s.CreateUpstream("remarked", "https://r.example.com", []string{"k"}, 0, "", "", "", "donated by Alice")
+	up, err := s.CreateUpstream("remarked", "https://r.example.com", []string{"k"}, 0, "", "", "", "donated by Alice", false)
 	require.NoError(t, err)
 	assert.Equal(t, "donated by Alice", up.Remark)
 
@@ -1969,7 +1969,7 @@ func TestCreateUpstream_WithRemark(t *testing.T) {
 func TestCreateUpstream_WithProxyURL(t *testing.T) {
 	s := newTestStore(t)
 
-	up, err := s.CreateUpstream("proxied", "https://p.example.com", []string{"k"}, 0, "http://proxy:8080", "", "", "")
+	up, err := s.CreateUpstream("proxied", "https://p.example.com", []string{"k"}, 0, "http://proxy:8080", "", "", "", false)
 	require.NoError(t, err)
 	assert.Equal(t, "http://proxy:8080", up.ProxyURL)
 
@@ -1982,17 +1982,17 @@ func TestCreateUpstream_AllAuthModes(t *testing.T) {
 	s := newTestStore(t)
 
 	// Default (empty string should become "api_key")
-	up1, err := s.CreateUpstream("default-auth", "https://a.example.com", []string{"k"}, 0, "", "", "", "")
+	up1, err := s.CreateUpstream("default-auth", "https://a.example.com", []string{"k"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 	assert.Equal(t, "api_key", up1.AuthMode)
 
 	// Explicit api_key
-	up2, err := s.CreateUpstream("api-key-auth", "https://b.example.com", []string{"k"}, 0, "", "", "api_key", "")
+	up2, err := s.CreateUpstream("api-key-auth", "https://b.example.com", []string{"k"}, 0, "", "", "api_key", "", false)
 	require.NoError(t, err)
 	assert.Equal(t, "api_key", up2.AuthMode)
 
 	// OAuth
-	up3, err := s.CreateUpstream("oauth-auth", "https://c.example.com", []string{"k"}, 0, "", "", "oauth", "")
+	up3, err := s.CreateUpstream("oauth-auth", "https://c.example.com", []string{"k"}, 0, "", "", "oauth", "", false)
 	require.NoError(t, err)
 	assert.Equal(t, "oauth", up3.AuthMode)
 
@@ -2004,11 +2004,11 @@ func TestCreateUpstream_AllAuthModes(t *testing.T) {
 func TestCreateUpstream_DefaultKeySchedulingMode(t *testing.T) {
 	s := newTestStore(t)
 
-	up, err := s.CreateUpstream("sched-default", "https://s.example.com", []string{"k"}, 0, "", "", "", "")
+	up, err := s.CreateUpstream("sched-default", "https://s.example.com", []string{"k"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 	assert.Equal(t, "round-robin", up.KeySchedulingMode)
 
-	up2, err := s.CreateUpstream("sched-fill", "https://s2.example.com", []string{"k"}, 0, "", "fill", "", "")
+	up2, err := s.CreateUpstream("sched-fill", "https://s2.example.com", []string{"k"}, 0, "", "fill", "", "", false)
 	require.NoError(t, err)
 	assert.Equal(t, "fill", up2.KeySchedulingMode)
 }
@@ -2020,10 +2020,10 @@ func TestCreateUpstream_DefaultKeySchedulingMode(t *testing.T) {
 func TestUpdateUpstream_UpdateBaseURL(t *testing.T) {
 	s := newTestStore(t)
 
-	up, err := s.CreateUpstream("up", "https://old.example.com", []string{"k"}, 0, "", "", "", "")
+	up, err := s.CreateUpstream("up", "https://old.example.com", []string{"k"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
-	updated, err := s.UpdateUpstream(up.ID, "up", "https://new.example.com", nil, 0, true, "", "", "", "")
+	updated, err := s.UpdateUpstream(up.ID, "up", "https://new.example.com", nil, 0, true, "", "", "", "", nil)
 	require.NoError(t, err)
 	assert.Equal(t, "https://new.example.com", updated.BaseURL)
 	// apiKeys=nil means keep existing keys
@@ -2033,10 +2033,10 @@ func TestUpdateUpstream_UpdateBaseURL(t *testing.T) {
 func TestUpdateUpstream_UpdateProxyURL(t *testing.T) {
 	s := newTestStore(t)
 
-	up, err := s.CreateUpstream("up", "https://u.example.com", []string{"k"}, 0, "", "", "", "")
+	up, err := s.CreateUpstream("up", "https://u.example.com", []string{"k"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
-	updated, err := s.UpdateUpstream(up.ID, "up", "https://u.example.com", nil, 0, true, "socks5://proxy:1080", "", "", "")
+	updated, err := s.UpdateUpstream(up.ID, "up", "https://u.example.com", nil, 0, true, "socks5://proxy:1080", "", "", "", nil)
 	require.NoError(t, err)
 	assert.Equal(t, "socks5://proxy:1080", updated.ProxyURL)
 }
@@ -2044,10 +2044,10 @@ func TestUpdateUpstream_UpdateProxyURL(t *testing.T) {
 func TestUpdateUpstream_ClearProxyURL(t *testing.T) {
 	s := newTestStore(t)
 
-	up, err := s.CreateUpstream("up", "https://u.example.com", []string{"k"}, 0, "http://proxy:8080", "", "", "")
+	up, err := s.CreateUpstream("up", "https://u.example.com", []string{"k"}, 0, "http://proxy:8080", "", "", "", false)
 	require.NoError(t, err)
 
-	updated, err := s.UpdateUpstream(up.ID, "up", "https://u.example.com", nil, 0, true, "", "", "", "")
+	updated, err := s.UpdateUpstream(up.ID, "up", "https://u.example.com", nil, 0, true, "", "", "", "", nil)
 	require.NoError(t, err)
 	assert.Equal(t, "", updated.ProxyURL, "proxy_url should be cleared")
 }
@@ -2055,10 +2055,10 @@ func TestUpdateUpstream_ClearProxyURL(t *testing.T) {
 func TestUpdateUpstream_UpdateRemark(t *testing.T) {
 	s := newTestStore(t)
 
-	up, err := s.CreateUpstream("up", "https://u.example.com", []string{"k"}, 0, "", "", "", "old remark")
+	up, err := s.CreateUpstream("up", "https://u.example.com", []string{"k"}, 0, "", "", "", "old remark", false)
 	require.NoError(t, err)
 
-	updated, err := s.UpdateUpstream(up.ID, "up", "https://u.example.com", nil, 0, true, "", "", "", "new remark")
+	updated, err := s.UpdateUpstream(up.ID, "up", "https://u.example.com", nil, 0, true, "", "", "", "new remark", nil)
 	require.NoError(t, err)
 	assert.Equal(t, "new remark", updated.Remark)
 }
@@ -2066,10 +2066,10 @@ func TestUpdateUpstream_UpdateRemark(t *testing.T) {
 func TestUpdateUpstream_UpdatePriority(t *testing.T) {
 	s := newTestStore(t)
 
-	up, err := s.CreateUpstream("up", "https://u.example.com", []string{"k"}, 1, "", "", "", "")
+	up, err := s.CreateUpstream("up", "https://u.example.com", []string{"k"}, 1, "", "", "", "", false)
 	require.NoError(t, err)
 
-	updated, err := s.UpdateUpstream(up.ID, "up", "https://u.example.com", nil, 99, true, "", "", "", "")
+	updated, err := s.UpdateUpstream(up.ID, "up", "https://u.example.com", nil, 99, true, "", "", "", "", nil)
 	require.NoError(t, err)
 	assert.Equal(t, 99, updated.Priority)
 }
@@ -2077,13 +2077,13 @@ func TestUpdateUpstream_UpdatePriority(t *testing.T) {
 func TestUpdateUpstream_UpdateModelPatterns_ViaUpdate(t *testing.T) {
 	s := newTestStore(t)
 
-	up, err := s.CreateUpstream("up", "https://u.example.com", []string{"k"}, 0, "", "", "", "")
+	up, err := s.CreateUpstream("up", "https://u.example.com", []string{"k"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
 	// Set patterns separately then update upstream metadata
 	require.NoError(t, s.SetUpstreamModelPatterns(up.ID, []string{"gpt-*"}))
 
-	updated, err := s.UpdateUpstream(up.ID, "renamed", "https://u.example.com", nil, 5, true, "", "", "", "")
+	updated, err := s.UpdateUpstream(up.ID, "renamed", "https://u.example.com", nil, 5, true, "", "", "", "", nil)
 	require.NoError(t, err)
 	assert.Equal(t, "renamed", updated.Name)
 
@@ -2096,10 +2096,10 @@ func TestUpdateUpstream_UpdateModelPatterns_ViaUpdate(t *testing.T) {
 func TestUpdateUpstream_NilAPIKeysKeepsExisting(t *testing.T) {
 	s := newTestStore(t)
 
-	up, err := s.CreateUpstream("up", "https://u.example.com", []string{"key-a", "key-b"}, 0, "", "", "", "")
+	up, err := s.CreateUpstream("up", "https://u.example.com", []string{"key-a", "key-b"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
-	updated, err := s.UpdateUpstream(up.ID, "up", "https://u.example.com", nil, 0, true, "", "", "", "")
+	updated, err := s.UpdateUpstream(up.ID, "up", "https://u.example.com", nil, 0, true, "", "", "", "", nil)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"key-a", "key-b"}, updated.APIKeys, "nil apiKeys should preserve existing keys")
 }
@@ -2111,7 +2111,7 @@ func TestUpdateUpstream_NilAPIKeysKeepsExisting(t *testing.T) {
 func TestAddUpstreamAPIKeys_EmptyKeyList(t *testing.T) {
 	s := newTestStore(t)
 
-	up, err := s.CreateUpstream("up", "https://u.example.com", []string{"existing-key"}, 0, "", "", "", "")
+	up, err := s.CreateUpstream("up", "https://u.example.com", []string{"existing-key"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
 	keys, err := s.AddUpstreamAPIKeys(up.ID, []string{})
@@ -2123,7 +2123,7 @@ func TestAddUpstreamAPIKeys_EmptyKeyList(t *testing.T) {
 func TestAddUpstreamAPIKeys_AddToUpstreamWithExistingKeys(t *testing.T) {
 	s := newTestStore(t)
 
-	up, err := s.CreateUpstream("up", "https://u.example.com", []string{"k1", "k2"}, 0, "", "", "", "")
+	up, err := s.CreateUpstream("up", "https://u.example.com", []string{"k1", "k2"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
 	keys, err := s.AddUpstreamAPIKeys(up.ID, []string{"k3", "k4"})
@@ -2144,7 +2144,7 @@ func TestAddUpstreamAPIKeys_AddToUpstreamWithExistingKeys(t *testing.T) {
 func TestSetAPIKeyEnabled_EnableDisable(t *testing.T) {
 	s := newTestStore(t)
 
-	up, err := s.CreateUpstream("up", "https://u.example.com", []string{"k"}, 0, "", "", "", "")
+	up, err := s.CreateUpstream("up", "https://u.example.com", []string{"k"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
 	keys, err := s.GetUpstreamAllAPIKeys(up.ID)
@@ -2191,7 +2191,7 @@ func TestSetAPIKeyEnabled_NonExistentKey(t *testing.T) {
 func TestDeleteUpstreamAPIKey_NonExistentKey(t *testing.T) {
 	s := newTestStore(t)
 
-	up, err := s.CreateUpstream("up", "https://u.example.com", []string{"k"}, 0, "", "", "", "")
+	up, err := s.CreateUpstream("up", "https://u.example.com", []string{"k"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
 	err = s.DeleteUpstreamAPIKey(up.ID, 9999)
@@ -2202,7 +2202,7 @@ func TestDeleteUpstreamAPIKey_NonExistentKey(t *testing.T) {
 func TestDeleteUpstreamAPIKey_WrongUpstreamID(t *testing.T) {
 	s := newTestStore(t)
 
-	up, err := s.CreateUpstream("up", "https://u.example.com", []string{"k"}, 0, "", "", "", "")
+	up, err := s.CreateUpstream("up", "https://u.example.com", []string{"k"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
 	keys, err := s.GetUpstreamAllAPIKeys(up.ID)
@@ -2223,9 +2223,9 @@ func TestSetKeyUpstreams_SetMultiple(t *testing.T) {
 
 	_, dk, err := s.CreateKey("k", 0)
 	require.NoError(t, err)
-	u1, _ := s.CreateUpstream("u1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "")
-	u2, _ := s.CreateUpstream("u2", "https://b.example.com", []string{"kb"}, 0, "", "", "", "")
-	u3, _ := s.CreateUpstream("u3", "https://c.example.com", []string{"kc"}, 0, "", "", "", "")
+	u1, _ := s.CreateUpstream("u1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "", false)
+	u2, _ := s.CreateUpstream("u2", "https://b.example.com", []string{"kb"}, 0, "", "", "", "", false)
+	u3, _ := s.CreateUpstream("u3", "https://c.example.com", []string{"kc"}, 0, "", "", "", "", false)
 
 	err = s.SetKeyUpstreams(dk.ID, []int64{u1.ID, u2.ID, u3.ID})
 	require.NoError(t, err)
@@ -2238,7 +2238,7 @@ func TestSetKeyUpstreams_SetMultiple(t *testing.T) {
 func TestSetKeyUpstreams_SetForNonExistentKey(t *testing.T) {
 	s := newTestStore(t)
 
-	u1, _ := s.CreateUpstream("u1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "")
+	u1, _ := s.CreateUpstream("u1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "", false)
 
 	// FK constraint on downstream_key_id should cause an error
 	err := s.SetKeyUpstreams(9999, []int64{u1.ID})
@@ -2277,9 +2277,9 @@ func TestSetKeyModelOverrides_MultipleOverridesSamePatternFailover(t *testing.T)
 
 	_, dk, err := s.CreateKey("k", 0)
 	require.NoError(t, err)
-	u1, _ := s.CreateUpstream("u1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "")
-	u2, _ := s.CreateUpstream("u2", "https://b.example.com", []string{"kb"}, 0, "", "", "", "")
-	u3, _ := s.CreateUpstream("u3", "https://c.example.com", []string{"kc"}, 0, "", "", "", "")
+	u1, _ := s.CreateUpstream("u1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "", false)
+	u2, _ := s.CreateUpstream("u2", "https://b.example.com", []string{"kb"}, 0, "", "", "", "", false)
+	u3, _ := s.CreateUpstream("u3", "https://c.example.com", []string{"kc"}, 0, "", "", "", "", false)
 
 	// Three upstreams for the same pattern (failover chain)
 	err = s.SetKeyModelOverrides(dk.ID, []KeyModelOverrideInput{
@@ -2302,7 +2302,7 @@ func TestSetKeyModelOverrides_ClearOverrides(t *testing.T) {
 
 	_, dk, err := s.CreateKey("k", 0)
 	require.NoError(t, err)
-	u1, _ := s.CreateUpstream("u1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "")
+	u1, _ := s.CreateUpstream("u1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "", false)
 
 	err = s.SetKeyModelOverrides(dk.ID, []KeyModelOverrideInput{
 		{ModelPattern: "claude-*", UpstreamID: u1.ID},
@@ -2453,7 +2453,7 @@ func TestRunMigrations_AllTablesExist(t *testing.T) {
 	var version int
 	err = db.QueryRow(`SELECT schema_version FROM _meta`).Scan(&version)
 	require.NoError(t, err)
-	assert.Equal(t, 21, version, "schema version should be at latest migration")
+	assert.Equal(t, 22, version, "schema version should be at latest migration")
 }
 
 // ---------------------------------------------------------------------------

@@ -132,7 +132,7 @@ func TestModelFilter_ReloadDeclaredModels(t *testing.T) {
 	assert.Empty(t, dm)
 
 	// Create an upstream so we can insert declared models.
-	up, err := s.CreateUpstream("test-up", "https://api.example.com", []string{"sk-test"}, 0, "", "", "", "")
+	up, err := s.CreateUpstream("test-up", "https://api.example.com", []string{"sk-test"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
 	// Use the store's SetUpstreamDeclaredModels method.
@@ -290,7 +290,7 @@ func TestModelFilterMiddleware_Upstream404WithDeclaredModels_Synthesizes(t *test
 	s := newModelFilterStore(t)
 
 	// Create upstream and set declared models.
-	up, err := s.CreateUpstream("synth-up", "https://api.example.com", []string{"sk-test"}, 0, "", "", "", "")
+	up, err := s.CreateUpstream("synth-up", "https://api.example.com", []string{"sk-test"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 	err = s.SetUpstreamDeclaredModels(up.ID, []string{"custom-model-1"})
 	require.NoError(t, err)

@@ -19,6 +19,8 @@ import (
 	"github.com/Instawork/llm-proxy/internal/proxy"
 	"github.com/Instawork/llm-proxy/internal/store"
 	"github.com/gorilla/mux"
+	"github.com/gorilla/websocket"
+	xproxy "golang.org/x/net/proxy"
 )
 
 var startTime = time.Now()
@@ -90,6 +92,7 @@ func (h *AdminHandler) RegisterRoutes(r *mux.Router) {
 	api.HandleFunc("/upstreams/{id}", h.updateUpstream).Methods("PUT")
 	api.HandleFunc("/upstreams/{id}", h.deleteUpstream).Methods("DELETE")
 	api.HandleFunc("/upstreams/{id}/test-proxy", h.testUpstreamProxy).Methods("POST")
+	api.HandleFunc("/upstreams/{id}/test-websocket", h.testUpstreamWebSocket).Methods("POST")
 	api.HandleFunc("/upstreams/{id}/check-quota", h.checkUpstreamQuota).Methods("POST")
 	api.HandleFunc("/upstreams/{id}/models", h.getUpstreamModelPatterns).Methods("GET")
 	api.HandleFunc("/upstreams/{id}/models", h.setUpstreamModelPatterns).Methods("PUT")
@@ -191,6 +194,7 @@ func (h *AdminHandler) listUpstreams(w http.ResponseWriter, r *http.Request) {
 		KeySchedulingMode string       `json:"key_scheduling_mode"`
 		AuthMode          string       `json:"auth_mode"`
 		Remark            string       `json:"remark"`
+		WebSocketEnabled  bool         `json:"websocket_enabled"`
 		CreatedAt         time.Time    `json:"created_at"`
 		UpdatedAt         time.Time    `json:"updated_at"`
 	}
@@ -232,9 +236,10 @@ func (h *AdminHandler) createUpstream(w http.ResponseWriter, r *http.Request) {
 		APIKeys           []string `json:"api_keys"` // 新多 Key 字段
 		ProxyURL          string   `json:"proxy_url"`
 		Priority          int      `json:"priority"`
-		KeySchedulingMode string   `json:"key_scheduling_mode"`
-		AuthMode          string   `json:"auth_mode"`
-		Remark            string   `json:"remark"`
+		KeySchedulingMode  string   `json:"key_scheduling_mode"`
+		AuthMode           string   `json:"auth_mode"`
+		Remark             string   `json:"remark"`
+		WebSocketEnabled   bool     `json:"websocket_enabled"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid JSON")
@@ -284,7 +289,7 @@ func (h *AdminHandler) createUpstream(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	upstream, err := h.store.CreateUpstream(req.Name, req.BaseURL, apiKeys, req.Priority, req.ProxyURL, schedulingMode, authMode, req.Remark)
+	upstream, err := h.store.CreateUpstream(req.Name, req.BaseURL, apiKeys, req.Priority, req.ProxyURL, schedulingMode, authMode, req.Remark, req.WebSocketEnabled)
 	if err != nil {
 		slog.Error("admin: store error", "error", err)
 		jsonError(w, http.StatusInternalServerError, "internal error")
@@ -317,9 +322,10 @@ func (h *AdminHandler) updateUpstream(w http.ResponseWriter, r *http.Request) {
 		ProxyURL          *string   `json:"proxy_url"`
 		Priority          *int      `json:"priority"`
 		Enabled           *bool     `json:"enabled"`
-		KeySchedulingMode *string   `json:"key_scheduling_mode"`
-		AuthMode          *string   `json:"auth_mode"`
-		Remark            *string   `json:"remark"`
+		KeySchedulingMode  *string   `json:"key_scheduling_mode"`
+		AuthMode           *string   `json:"auth_mode"`
+		Remark             *string   `json:"remark"`
+		WebSocketEnabled   *bool     `json:"websocket_enabled"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid JSON")
@@ -391,7 +397,7 @@ func (h *AdminHandler) updateUpstream(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	upstream, err := h.store.UpdateUpstream(id, name, baseURL, apiKeys, priority, enabled, proxyURL, schedulingMode, authMode, remark)
+	upstream, err := h.store.UpdateUpstream(id, name, baseURL, apiKeys, priority, enabled, proxyURL, schedulingMode, authMode, remark, req.WebSocketEnabled)
 	if err != nil {
 		slog.Error("admin: store error", "error", err)
 		jsonError(w, http.StatusInternalServerError, "internal error")
@@ -1515,6 +1521,135 @@ func (h *AdminHandler) testUpstreamProxy(w http.ResponseWriter, r *http.Request)
 		"status_code": resp.StatusCode,
 		"latency_ms":  latency.Milliseconds(),
 		"models":      models,
+	})
+}
+
+// testUpstreamWebSocket 通过 WebSocket 握手探测上游是否支持 Realtime API。
+// 成功连接后立即发送关闭帧并断开，不产生实际对话流量。
+func (h *AdminHandler) testUpstreamWebSocket(w http.ResponseWriter, r *http.Request) {
+	id, err := parseID(r)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	upstream, err := h.store.GetUpstream(id)
+	if err != nil {
+		jsonError(w, http.StatusNotFound, fmt.Sprintf("upstream %d not found", id))
+		return
+	}
+
+	// 将 http(s):// 替换为 ws(s)://，拼接 Realtime API 路径
+	wsURL := strings.TrimRight(upstream.BaseURL, "/")
+	if strings.HasPrefix(wsURL, "https://") {
+		wsURL = "wss://" + strings.TrimPrefix(wsURL, "https://")
+	} else if strings.HasPrefix(wsURL, "http://") {
+		wsURL = "ws://" + strings.TrimPrefix(wsURL, "http://")
+	}
+	wsURL += "/v1/realtime?model=gpt-4o-realtime-preview"
+
+	// 获取第一个启用的 API Key（无鉴权模式下仍尝试无 Key 连接）
+	var authKey string
+	authMode := upstream.AuthMode
+	if authMode == "" {
+		authMode = "api_key"
+	}
+	keyInfos, err := h.store.GetUpstreamAllAPIKeys(id)
+	if err == nil {
+		for _, ki := range keyInfos {
+			if ki.Enabled {
+				authKey = ki.Key
+				break
+			}
+		}
+	}
+
+	// 构造 WebSocket Dialer，支持上游代理（http/https/socks5）
+	dialer := websocket.Dialer{
+		HandshakeTimeout: 10 * time.Second,
+	}
+	if upstream.ProxyURL != "" {
+		parsed, pErr := url.Parse(upstream.ProxyURL)
+		if pErr != nil {
+			jsonOK(w, map[string]interface{}{
+				"websocket_supported": false,
+				"message":             fmt.Sprintf("代理 URL 解析失败: %v", pErr),
+			})
+			return
+		}
+		switch parsed.Scheme {
+		case "http", "https":
+			dialer.Proxy = http.ProxyURL(parsed)
+		case "socks5":
+			socksDialer, sErr := xproxy.FromURL(parsed, xproxy.Direct)
+			if sErr != nil {
+				jsonOK(w, map[string]interface{}{
+					"websocket_supported": false,
+					"message":             fmt.Sprintf("SOCKS5 代理创建失败: %v", sErr),
+				})
+				return
+			}
+			if cd, ok := socksDialer.(xproxy.ContextDialer); ok {
+				dialer.NetDialContext = cd.DialContext
+			} else {
+				dialer.NetDial = socksDialer.Dial
+			}
+		}
+	}
+
+	// 构造请求头
+	reqHeader := http.Header{}
+	if authKey != "" {
+		reqHeader.Set("Authorization", "Bearer "+authKey)
+	}
+
+	// 尝试 WebSocket 握手
+	start := time.Now()
+	conn, resp, dialErr := dialer.Dial(wsURL, reqHeader)
+	latency := time.Since(start)
+
+	// gorilla/websocket 在握手失败时也可能返回非 nil resp，需关闭其 Body
+	if resp != nil && resp.Body != nil {
+		defer resp.Body.Close()
+	}
+
+	if dialErr != nil {
+		statusCode := 0
+		if resp != nil {
+			statusCode = resp.StatusCode
+		}
+		slog.Info("admin: WebSocket 测试失败", "upstream_id", id, "error", dialErr)
+		result := map[string]interface{}{
+			"websocket_supported": false,
+			"message":             fmt.Sprintf("WebSocket 连接失败: %v", dialErr),
+			"latency_ms":          latency.Milliseconds(),
+		}
+		if statusCode > 0 {
+			result["status_code"] = statusCode
+		}
+		jsonOK(w, result)
+		return
+	}
+
+	// 连接成功 → 发送关闭帧后断开
+	_ = conn.WriteMessage(websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+	conn.Close()
+
+	slog.Info("admin: WebSocket 测试成功", "upstream_id", id, "url", wsURL, "latency_ms", latency.Milliseconds())
+
+	// 自动启用 websocket_enabled
+	wsEnabled := true
+	if _, err := h.store.UpdateUpstream(id, upstream.Name, upstream.BaseURL, nil, upstream.Priority, upstream.Enabled, upstream.ProxyURL, upstream.KeySchedulingMode, upstream.AuthMode, upstream.Remark, &wsEnabled); err != nil {
+		slog.Error("admin: 自动启用 websocket_enabled 失败", "error", err)
+	} else {
+		go func() { defer func() { recover() }(); h.prober.ProbeNow() }()
+	}
+
+	jsonOK(w, map[string]interface{}{
+		"websocket_supported": true,
+		"message":             "WebSocket 连接成功，已自动启用 WebSocket 代理",
+		"latency_ms":          latency.Milliseconds(),
 	})
 }
 

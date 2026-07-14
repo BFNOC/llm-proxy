@@ -95,13 +95,16 @@ function renderUpstreamsTable() {
         const remarkHtml = u.remark ? '<div style="font-size:0.75rem;color:var(--text-dim);margin-top:2px;" title="'+esc(u.remark)+'">'+esc(u.remark.length>28?u.remark.substring(0,28)+'...':u.remark)+'</div>' : '';
         return '<tr><td class="col-check"><input type="checkbox" class="upstream-cb" value="'+u.id+'" onchange="updateUpstreamBatchBtns()"></td><td class="hide-on-mobile">'+u.id+'</td><td><strong>'+esc(u.name)+'</strong>'+remarkHtml+'</td><td><code class="truncate-url" title="'+esc(u.base_url)+'">'+esc(u.base_url)+'</code></td><td class="hide-on-mobile">'+keyBadge+'</td><td class="hide-on-mobile">'+authBadge+'</td><td class="hide-on-mobile"><span style="font-size:0.75rem;color:'+schedColor+';font-weight:500;white-space:nowrap;">'+schedLabel+'</span></td><td class="hide-on-mobile">'+(u.proxy_url?'<code class="truncate-url" title="'+esc(u.proxy_url)+'">'+esc(u.proxy_url)+'</code>':'<span class="badge badge-muted">环境</span>')+'</td><td class="hide-on-mobile">'+u.priority+'</td><td class="hide-on-mobile"><div class="model-tags">'+modelHtml+'</div></td><td>'+
         (u.enabled?'<span class="badge badge-green">启用</span>':'<span class="badge badge-red">禁用</span>')+
+        (u.websocket_enabled?'<span class="badge badge-purple" title="WebSocket 已启用" style="margin-left:4px;">WS</span>':'')+
         '</td><td class="actions">'+
         '<button class="btn btn-ghost btn-sm" onclick="testProxy(event,'+u.id+')">测试</button>'+
+        '<button class="btn btn-ghost btn-sm" onclick="testWebSocket(event,'+u.id+')" title="测试 WebSocket 连接">WS</button>'+
         '<button class="btn btn-ghost btn-sm" onclick="editUpstream('+u.id+')">编辑</button>'+
         '<div class="action-more"><button class="action-more-btn" onclick="toggleActionMenu(event)">···</button>'+
         '<div class="action-menu">'+
         '<button onclick="checkQuota(event,'+u.id+')">查额</button>'+
         '<button onclick="openCFDialog('+u.id+')" style="'+(getCFConfig(u.id)?'color:var(--green)':'')+'">CF 绕过</button>'+
+        '<button onclick="toggleWebSocket('+u.id+','+(!u.websocket_enabled)+')">'+(u.websocket_enabled?'关闭 WS':'开启 WS')+'</button>'+
         '<button onclick="openModelPatternsDialog('+u.id+')">模型模式</button>'+
         '<button onclick="openDeclaredModelsDialog('+u.id+')">声明模型</button>'+
         '<button onclick="toggleUpstream('+u.id+','+(!u.enabled)+')">'+(u.enabled?'禁用':'启用')+'</button>'+
@@ -480,5 +483,48 @@ function clearCFConfig() {
     document.getElementById('cf-ua').value = '';
     document.getElementById('dlg-cf').close();
     loadUpstreams();
+}
+
+// --- WebSocket 测试与开关 ---
+function testWebSocket(e, id) {
+    const btn = e.target;
+    const row = btn.closest('tr');
+    const existingRow = document.getElementById('ws-row-'+id);
+    if (existingRow) { existingRow.remove(); return; }
+    document.querySelectorAll('[id^="ws-row-"]').forEach(r => r.remove());
+    const origText = btn.textContent;
+    btn.textContent = '...';
+    btn.disabled = true;
+    api('/upstreams/'+id+'/test-websocket', {method:'POST'}).then(d => {
+        btn.textContent = origText;
+        btn.disabled = false;
+        const tr = document.createElement('tr');
+        tr.id = 'ws-row-'+id;
+        const td = document.createElement('td');
+        td.colSpan = 12;
+        td.style.cssText = 'padding:0;border:none;';
+        if (d.websocket_supported) {
+            td.innerHTML = '<div style="background:var(--bg);border:1px solid rgba(16,185,129,0.25);border-radius:var(--radius-sm);padding:14px 18px;margin:8px 16px;display:flex;align-items:center;justify-content:space-between;">'+
+                '<div style="display:flex;align-items:center;gap:8px;"><span style="color:var(--green);font-weight:600;">✓ WebSocket 支持</span><span style="font-size:0.8rem;color:var(--text-dim);">'+esc(d.message||'')+'</span></div>'+
+                '<button class="btn btn-ghost btn-sm" onclick="this.closest(\'tr\').remove()">✕</button></div>';
+            loadUpstreams();
+        } else {
+            td.innerHTML = '<div style="background:var(--bg);border:1px solid rgba(239,68,68,0.25);border-radius:var(--radius-sm);padding:14px 18px;margin:8px 16px;display:flex;align-items:center;justify-content:space-between;">'+
+                '<div style="display:flex;align-items:center;gap:8px;"><span style="color:var(--red);font-weight:600;">✗ WebSocket 不支持</span><span style="font-size:0.8rem;color:var(--text-dim);">'+esc(d.message||d.error||'')+'</span></div>'+
+                '<button class="btn btn-ghost btn-sm" onclick="this.closest(\'tr\').remove()">✕</button></div>';
+        }
+        tr.appendChild(td);
+        row.after(tr);
+    }).catch(err => {
+        btn.textContent = origText;
+        btn.disabled = false;
+        toastErr('WebSocket 测试失败: '+err.message);
+    });
+}
+
+function toggleWebSocket(id, enabled) {
+    api('/upstreams/'+id, {method:'PUT', body: JSON.stringify({websocket_enabled:enabled})}).then(d => {
+        if(d.error) toastErr(d.error); else { loadUpstreams(); toastOk(enabled?'已开启 WebSocket':'已关闭 WebSocket'); }
+    });
 }
 

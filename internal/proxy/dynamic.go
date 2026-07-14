@@ -121,6 +121,8 @@ type ActiveUpstream struct {
 	KeySchedulingMode string
 	// AuthMode 控制 Anthropic 鉴权头：api_key（x-api-key）或 oauth（Authorization: Bearer）。
 	AuthMode string
+	// WebSocketEnabled 表示该上游是否支持 WebSocket（如 OpenAI Realtime API）。
+	WebSocketEnabled bool
 
 	keyMu         sync.Mutex
 	keyIndex      int    // round-robin 索引
@@ -283,6 +285,64 @@ func (dp *DynamicProxy) ActiveRequests() int64 {
 	return dp.activeRequests.Load()
 }
 
+// serveWebSocket 处理 WebSocket 升级请求：选择支持 WS 的上游，重写鉴权头，透明代理。
+func (dp *DynamicProxy) serveWebSocket(w http.ResponseWriter, r *http.Request, upstreams []*ActiveUpstream) {
+	// 筛选支持 WebSocket 的上游
+	var wsUpstreams []*ActiveUpstream
+	for _, u := range upstreams {
+		if u.WebSocketEnabled {
+			wsUpstreams = append(wsUpstreams, u)
+		}
+	}
+	if len(wsUpstreams) == 0 {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "no upstream supports websocket"}) //nolint:errcheck
+		return
+	}
+
+	active := wsUpstreams[0]
+	apiKey, keyIdx, _ := active.NextAPIKey()
+
+	// 构造上游 WebSocket URL：将 http(s) 替换为 ws(s)，保留路径和查询参数
+	scheme := "wss"
+	if active.BaseURL.Scheme == "http" {
+		scheme = "ws"
+	}
+	upstreamURL := scheme + "://" + active.BaseURL.Host + r.URL.Path
+	if r.URL.RawQuery != "" {
+		upstreamURL += "?" + r.URL.RawQuery
+	}
+
+	// 构造上游鉴权头
+	upstreamHeaders := http.Header{}
+	style := DetectProviderStyle(r)
+	if apiKey != "" {
+		if style == StyleAnthropic && active.AuthMode != "oauth" {
+			upstreamHeaders.Set("x-api-key", apiKey)
+		} else {
+			upstreamHeaders.Set("Authorization", "Bearer "+apiKey)
+		}
+	}
+	// 转发 OpenAI-Beta 等协议头
+	for _, h := range []string{"OpenAI-Beta", "Anthropic-Version"} {
+		if v := r.Header.Get(h); v != "" {
+			upstreamHeaders.Set(h, v)
+		}
+	}
+
+	slog.Info("websocket proxy started",
+		"upstream", active.Name, "key_index", keyIdx,
+		"url", upstreamURL)
+
+	w.Header().Set("X-Upstream-Name", active.Name)
+	w.Header().Set("X-API-Key-Index", fmt.Sprintf("%d", keyIdx))
+
+	if err := WebSocketProxy(w, r, upstreamURL, upstreamHeaders, active.ProxyURL); err != nil {
+		slog.Error("websocket proxy failed", "error", err, "upstream", active.Name)
+	}
+}
+
 // ServeHTTP 实现 http.Handler 接口。按优先级顺序尝试上游，
 // 遇到 429 时自动故障切换到下一个。请求体会被缓冲一次用于重试。
 //
@@ -310,6 +370,12 @@ func (dp *DynamicProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		upstreams = filtered
+	}
+
+	// WebSocket 升级请求走独立的代理通道，不经过 body 缓冲和 HTTP 转发。
+	if IsWebSocketUpgrade(r) {
+		dp.serveWebSocket(w, r, upstreams)
+		return
 	}
 
 	// 检测客户端使用的 provider 风格，用于鉴权头重写。

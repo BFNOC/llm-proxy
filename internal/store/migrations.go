@@ -266,6 +266,11 @@ CREATE INDEX IF NOT EXISTS idx_upstream_declared_models_upstream ON upstream_dec
 ALTER TABLE upstream_providers ADD COLUMN auth_mode TEXT NOT NULL DEFAULT 'api_key';
 	`,
 	},
+	{
+		// v22: 上游 WebSocket 支持开关，启用后代理层允许 HTTP Upgrade 透传。
+		version: 22,
+		up: `ALTER TABLE upstream_providers ADD COLUMN websocket_enabled BOOLEAN NOT NULL DEFAULT 0;`,
+	},
 }
 
 // RunMigrations 按顺序应用所有待执行的 schema 迁移。

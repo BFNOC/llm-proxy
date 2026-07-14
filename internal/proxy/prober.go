@@ -141,6 +141,7 @@ func (p *UpstreamProber) probeOnce() {
 			ModelPatterns:     allModelPatterns[u.ID],
 			KeySchedulingMode: u.KeySchedulingMode,
 			AuthMode:          authMode,
+			WebSocketEnabled:  u.WebSocketEnabled,
 			keyFailures:       make(map[int]int64),
 		})
 	}

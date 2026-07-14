@@ -79,7 +79,7 @@ func TestTestUpstreamProxy_Success(t *testing.T) {
 	s, router := setupOutboundTestAdmin(t)
 
 	// Create upstream directly via store (bypasses SSRF URL validation).
-	upstream, err := s.CreateUpstream("test-proxy-ok", fakeUpstream.URL, []string{"sk-test-key"}, 1, "", "round-robin", "api_key", "")
+	upstream, err := s.CreateUpstream("test-proxy-ok", fakeUpstream.URL, []string{"sk-test-key"}, 1, "", "round-robin", "api_key", "", false)
 	require.NoError(t, err)
 
 	path := fmt.Sprintf("/admin/api/upstreams/%d/test-proxy", upstream.ID)
@@ -101,7 +101,7 @@ func TestTestUpstreamProxy_UnreachableURL(t *testing.T) {
 	s, router := setupOutboundTestAdmin(t)
 
 	// Create upstream pointing to a port that nothing listens on.
-	upstream, err := s.CreateUpstream("unreachable", "http://127.0.0.1:1", nil, 1, "", "round-robin", "api_key", "")
+	upstream, err := s.CreateUpstream("unreachable", "http://127.0.0.1:1", nil, 1, "", "round-robin", "api_key", "", false)
 	require.NoError(t, err)
 
 	path := fmt.Sprintf("/admin/api/upstreams/%d/test-proxy", upstream.ID)
@@ -133,7 +133,7 @@ func TestTestUpstreamProxy_Non2xx(t *testing.T) {
 
 	s, router := setupOutboundTestAdmin(t)
 
-	upstream, err := s.CreateUpstream("test-proxy-401", fakeUpstream.URL, []string{"sk-bad"}, 1, "", "round-robin", "api_key", "")
+	upstream, err := s.CreateUpstream("test-proxy-401", fakeUpstream.URL, []string{"sk-bad"}, 1, "", "round-robin", "api_key", "", false)
 	require.NoError(t, err)
 
 	path := fmt.Sprintf("/admin/api/upstreams/%d/test-proxy", upstream.ID)
@@ -158,7 +158,7 @@ func TestTestUpstreamProxy_NoAPIKey(t *testing.T) {
 
 	s, router := setupOutboundTestAdmin(t)
 
-	upstream, err := s.CreateUpstream("public", fakeUpstream.URL, nil, 1, "", "round-robin", "api_key", "")
+	upstream, err := s.CreateUpstream("public", fakeUpstream.URL, nil, 1, "", "round-robin", "api_key", "", false)
 	require.NoError(t, err)
 
 	path := fmt.Sprintf("/admin/api/upstreams/%d/test-proxy", upstream.ID)
@@ -197,7 +197,7 @@ func TestCheckUpstreamQuota_Success(t *testing.T) {
 
 	s, router := setupOutboundTestAdmin(t)
 
-	upstream, err := s.CreateUpstream("quota-ok", fakeUpstream.URL, []string{"sk-quota-key"}, 1, "", "round-robin", "api_key", "")
+	upstream, err := s.CreateUpstream("quota-ok", fakeUpstream.URL, []string{"sk-quota-key"}, 1, "", "round-robin", "api_key", "", false)
 	require.NoError(t, err)
 
 	path := fmt.Sprintf("/admin/api/upstreams/%d/check-quota", upstream.ID)
@@ -228,7 +228,7 @@ func TestCheckUpstreamQuota_NonNewAPI(t *testing.T) {
 
 	s, router := setupOutboundTestAdmin(t)
 
-	upstream, err := s.CreateUpstream("quota-noapi", fakeUpstream.URL, []string{"sk-key"}, 1, "", "round-robin", "api_key", "")
+	upstream, err := s.CreateUpstream("quota-noapi", fakeUpstream.URL, []string{"sk-key"}, 1, "", "round-robin", "api_key", "", false)
 	require.NoError(t, err)
 
 	path := fmt.Sprintf("/admin/api/upstreams/%d/check-quota", upstream.ID)
@@ -259,7 +259,7 @@ func TestCheckUpstreamQuota_UpstreamHTTPError(t *testing.T) {
 
 	s, router := setupOutboundTestAdmin(t)
 
-	upstream, err := s.CreateUpstream("quota-500", fakeUpstream.URL, []string{"sk-key"}, 1, "", "round-robin", "api_key", "")
+	upstream, err := s.CreateUpstream("quota-500", fakeUpstream.URL, []string{"sk-key"}, 1, "", "round-robin", "api_key", "", false)
 	require.NoError(t, err)
 
 	path := fmt.Sprintf("/admin/api/upstreams/%d/check-quota", upstream.ID)
@@ -281,7 +281,7 @@ func TestCheckUpstreamQuota_NonJSONContentType(t *testing.T) {
 
 	s, router := setupOutboundTestAdmin(t)
 
-	upstream, err := s.CreateUpstream("quota-html", fakeUpstream.URL, []string{"sk-key"}, 1, "", "round-robin", "api_key", "")
+	upstream, err := s.CreateUpstream("quota-html", fakeUpstream.URL, []string{"sk-key"}, 1, "", "round-robin", "api_key", "", false)
 	require.NoError(t, err)
 
 	path := fmt.Sprintf("/admin/api/upstreams/%d/check-quota", upstream.ID)
@@ -310,7 +310,7 @@ func TestCheckUpstreamQuota_CodeFalse(t *testing.T) {
 
 	s, router := setupOutboundTestAdmin(t)
 
-	upstream, err := s.CreateUpstream("quota-code-false", fakeUpstream.URL, []string{"sk-key"}, 1, "", "round-robin", "api_key", "")
+	upstream, err := s.CreateUpstream("quota-code-false", fakeUpstream.URL, []string{"sk-key"}, 1, "", "round-robin", "api_key", "", false)
 	require.NoError(t, err)
 
 	path := fmt.Sprintf("/admin/api/upstreams/%d/check-quota", upstream.ID)
@@ -345,7 +345,7 @@ func TestTestUpstreamAPIKey_OpenAI_Success(t *testing.T) {
 
 	s, router := setupOutboundTestAdmin(t)
 
-	upstream, err := s.CreateUpstream("test-key-openai", fakeUpstream.URL, []string{"sk-test-api-key"}, 1, "", "round-robin", "api_key", "")
+	upstream, err := s.CreateUpstream("test-key-openai", fakeUpstream.URL, []string{"sk-test-api-key"}, 1, "", "round-robin", "api_key", "", false)
 	require.NoError(t, err)
 
 	// Look up the API key row ID.
@@ -389,7 +389,7 @@ func TestTestUpstreamAPIKey_Anthropic_Success(t *testing.T) {
 
 	s, router := setupOutboundTestAdmin(t)
 
-	upstream, err := s.CreateUpstream("test-key-anthropic", fakeUpstream.URL, []string{"sk-anthropic-key"}, 1, "", "round-robin", "api_key", "")
+	upstream, err := s.CreateUpstream("test-key-anthropic", fakeUpstream.URL, []string{"sk-anthropic-key"}, 1, "", "round-robin", "api_key", "", false)
 	require.NoError(t, err)
 
 	keys, err := s.GetUpstreamAllAPIKeys(upstream.ID)
@@ -422,7 +422,7 @@ func TestTestUpstreamAPIKey_NotFoundUpstream(t *testing.T) {
 func TestTestUpstreamAPIKey_NotFoundKey(t *testing.T) {
 	s, router := setupOutboundTestAdmin(t)
 
-	upstream, err := s.CreateUpstream("test-key-notfound", "http://127.0.0.1:1", []string{"sk-key"}, 1, "", "round-robin", "api_key", "")
+	upstream, err := s.CreateUpstream("test-key-notfound", "http://127.0.0.1:1", []string{"sk-key"}, 1, "", "round-robin", "api_key", "", false)
 	require.NoError(t, err)
 
 	// Use a non-existent key_id (99999).
@@ -453,7 +453,7 @@ func TestTestUpstreamAPIKey_OpenAI_ErrorResponse(t *testing.T) {
 
 	s, router := setupOutboundTestAdmin(t)
 
-	upstream, err := s.CreateUpstream("test-key-ratelimit", fakeUpstream.URL, []string{"sk-limited"}, 1, "", "round-robin", "api_key", "")
+	upstream, err := s.CreateUpstream("test-key-ratelimit", fakeUpstream.URL, []string{"sk-limited"}, 1, "", "round-robin", "api_key", "", false)
 	require.NoError(t, err)
 
 	keys, err := s.GetUpstreamAllAPIKeys(upstream.ID)
@@ -488,7 +488,7 @@ func TestTestUpstreamAPIKey_DefaultProtocol(t *testing.T) {
 
 	s, router := setupOutboundTestAdmin(t)
 
-	upstream, err := s.CreateUpstream("test-default-proto", fakeUpstream.URL, []string{"sk-key"}, 1, "", "round-robin", "api_key", "")
+	upstream, err := s.CreateUpstream("test-default-proto", fakeUpstream.URL, []string{"sk-key"}, 1, "", "round-robin", "api_key", "", false)
 	require.NoError(t, err)
 
 	keys, err := s.GetUpstreamAllAPIKeys(upstream.ID)
@@ -520,7 +520,7 @@ func TestTestUpstreamAPIKey_NoAuthKey(t *testing.T) {
 
 	s, router := setupOutboundTestAdmin(t)
 
-	upstream, err := s.CreateUpstream("test-no-auth", fakeUpstream.URL, nil, 1, "", "round-robin", "api_key", "")
+	upstream, err := s.CreateUpstream("test-no-auth", fakeUpstream.URL, nil, 1, "", "round-robin", "api_key", "", false)
 	require.NoError(t, err)
 
 	// key_id=0 means "no auth key" in the handler.
@@ -538,7 +538,7 @@ func TestTestUpstreamAPIKey_NoAuthKey(t *testing.T) {
 func TestTestUpstreamAPIKey_Unreachable(t *testing.T) {
 	s, router := setupOutboundTestAdmin(t)
 
-	upstream, err := s.CreateUpstream("test-key-unreachable", "http://127.0.0.1:1", []string{"sk-key"}, 1, "", "round-robin", "api_key", "")
+	upstream, err := s.CreateUpstream("test-key-unreachable", "http://127.0.0.1:1", []string{"sk-key"}, 1, "", "round-robin", "api_key", "", false)
 	require.NoError(t, err)
 
 	keys, err := s.GetUpstreamAllAPIKeys(upstream.ID)

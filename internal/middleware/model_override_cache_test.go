@@ -39,7 +39,7 @@ func TestNewModelOverrideCache_LoadsExistingOverrides(t *testing.T) {
 	s := newOverrideTestStore(t)
 	_, dk, err := s.CreateKey("oc-key", 0)
 	require.NoError(t, err)
-	u1, err := s.CreateUpstream("u1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "")
+	u1, err := s.CreateUpstream("u1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
 	require.NoError(t, s.SetKeyModelOverrides(dk.ID, []store.KeyModelOverrideInput{
@@ -61,7 +61,7 @@ func TestModelOverrideCache_Reload_ReflectsChanges(t *testing.T) {
 	s := newOverrideTestStore(t)
 	_, dk, err := s.CreateKey("reload-key", 0)
 	require.NoError(t, err)
-	u1, err := s.CreateUpstream("u1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "")
+	u1, err := s.CreateUpstream("u1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
 	oc := NewModelOverrideCache(s)
@@ -82,7 +82,7 @@ func TestModelOverrideCache_Reload_KeepsOldSnapshotOnError(t *testing.T) {
 	s := newOverrideTestStore(t)
 	_, dk, err := s.CreateKey("keep-key", 0)
 	require.NoError(t, err)
-	u1, err := s.CreateUpstream("u1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "")
+	u1, err := s.CreateUpstream("u1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
 	require.NoError(t, s.SetKeyModelOverrides(dk.ID, []store.KeyModelOverrideInput{
@@ -205,7 +205,7 @@ func TestBindingMW_WithModelOverrides_SetsContext(t *testing.T) {
 	s := newOverrideTestStore(t)
 	_, dk, err := s.CreateKey("override-key", 0)
 	require.NoError(t, err)
-	u1, err := s.CreateUpstream("u1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "")
+	u1, err := s.CreateUpstream("u1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "", false)
 	require.NoError(t, err)
 
 	require.NoError(t, s.SetKeyModelOverrides(dk.ID, []store.KeyModelOverrideInput{

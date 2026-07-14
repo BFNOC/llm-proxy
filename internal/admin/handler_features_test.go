@@ -92,7 +92,7 @@ func featDecodeSlice(t *testing.T, rec *httptest.ResponseRecorder) []interface{}
 // seedUpstream creates an upstream via the store and returns its ID.
 func seedUpstream(t *testing.T, s *store.Store, name string) int64 {
 	t.Helper()
-	u, err := s.CreateUpstream(name, "https://api.example.com", []string{"sk-test-key"}, 10, "", "round-robin", "api_key", "")
+	u, err := s.CreateUpstream(name, "https://api.example.com", []string{"sk-test-key"}, 10, "", "round-robin", "api_key", "", false)
 	require.NoError(t, err)
 	return u.ID
 }
@@ -704,7 +704,7 @@ func TestGetStatus_WithKeys(t *testing.T) {
 
 func TestListUpstreamAPIKeys_Empty(t *testing.T) {
 	_, router, s := setupTestAdminWithStore(t)
-	u, err := s.CreateUpstream("no-keys", "https://api.example.com", []string{}, 10, "", "round-robin", "api_key", "")
+	u, err := s.CreateUpstream("no-keys", "https://api.example.com", []string{}, 10, "", "round-robin", "api_key", "", false)
 	require.NoError(t, err)
 
 	rec := featDoReq(t, router, "GET", fmt.Sprintf("/admin/api/upstreams/%d/apikeys", u.ID), nil)

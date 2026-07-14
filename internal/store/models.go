@@ -13,6 +13,7 @@ type UpstreamProvider struct {
 	KeySchedulingMode  string // "round-robin"（默认）或 "fill"
 	AuthMode           string // "api_key"（默认，x-api-key）或 "oauth"（Authorization: Bearer）
 	Remark             string // 管理员备注（Key 来源、用途等）
+	WebSocketEnabled   bool   `json:"websocket_enabled"` // 是否允许 WebSocket 透传
 	Healthy            bool   // 仅运行时使用，不持久化
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
