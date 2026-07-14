@@ -60,7 +60,7 @@ func (h *CustomPrettyHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
 func (h *CustomPrettyHandler) WithGroup(_ string) slog.Handler      { return h }
 
 const (
-	version     = "2.9.0"
+	version     = "2.10.0"
 	defaultPort = "9002"
 )
 
@@ -188,6 +188,12 @@ func main() {
 	// 创建模型覆盖缓存（per-key 模型路由覆盖）
 	overrideCache := middleware.NewModelOverrideCache(db)
 
+	// 创建熔断器和上游 RPM 限流器
+	circuitBreaker := middleware.NewCircuitBreaker()
+	upstreamRPMLimiter := middleware.NewUpstreamRPMLimiter()
+	dynamicProxy.CircuitBreaker = circuitBreaker
+	dynamicProxy.UpstreamRPMLimiter = upstreamRPMLimiter
+
 	// 创建上游探活器并启动后台 goroutine
 	probeInterval := time.Duration(yamlConfig.Upstream.ProbeIntervalSeconds) * time.Second
 	probeTimeout := time.Duration(yamlConfig.Upstream.ProbeTimeoutSeconds) * time.Second
@@ -233,6 +239,23 @@ func main() {
 		}
 	}()
 	slog.Info("Log cleanup goroutine started", "interval", "6h", "default_retention_days", 15)
+
+	// 后台清理已软删除的上游：60 秒后物理删除
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if n, err := db.PurgeDeletedUpstreams(60 * time.Second); err == nil && n > 0 {
+					slog.Info("purged soft-deleted upstreams", "count", n)
+					prober.ProbeNow()
+				}
+			case <-proberCtx.Done():
+				return
+			}
+		}
+	}()
 
 	// 创建审计日志器
 	var auditLogger *middleware.AuditLogger
@@ -311,7 +334,7 @@ func main() {
 	bindingCache := middleware.NewBindingCache(db)
 
 	if yamlConfig.Admin.Enabled {
-		adminHandler := admin.NewAdminHandler(db, keyCache, rateLimiter, prober, dynamicProxy, auditLogger, modelFilter, globalCounter, perKeyStats, overrideCache, bindingCache, headerCapture, adminToken, version)
+		adminHandler := admin.NewAdminHandler(db, keyCache, rateLimiter, prober, dynamicProxy, auditLogger, modelFilter, globalCounter, perKeyStats, overrideCache, bindingCache, headerCapture, circuitBreaker, adminToken, version)
 		adminHandler.RegisterRoutes(r)
 		slog.Info("Admin interface enabled", "dashboard", "/admin/", "api", "/admin/api/")
 	}

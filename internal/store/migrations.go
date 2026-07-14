@@ -310,6 +310,46 @@ ALTER TABLE upstream_providers ADD COLUMN auto_discover_models BOOLEAN NOT NULL 
 ALTER TABLE upstream_providers ADD COLUMN last_model_discovery DATETIME;
 `,
 	},
+	{
+		// v27: 上游级别限速 + 熔断器配置。
+		// upstream_rpm_limit: 上游每分钟请求限制，0 表示不限制。
+		// circuit_breaker_threshold: 连续失败多少次后触发熔断。
+		// circuit_breaker_recovery_seconds: 熔断后恢复探测的间隔秒数。
+		version: 27,
+		up: `
+ALTER TABLE upstream_providers ADD COLUMN upstream_rpm_limit INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE upstream_providers ADD COLUMN circuit_breaker_threshold INTEGER NOT NULL DEFAULT 5;
+ALTER TABLE upstream_providers ADD COLUMN circuit_breaker_recovery_seconds INTEGER NOT NULL DEFAULT 30;
+`,
+	},
+	{
+		// v28: 上游速率信息表，从响应头观测到的限速数据。
+		// 用于速率感知路由：优先选择余量充裕的上游，避免触发 429。
+		version: 28,
+		up: `
+CREATE TABLE IF NOT EXISTS upstream_rate_info (
+    upstream_id INTEGER PRIMARY KEY,
+    rpm_limit INTEGER NOT NULL DEFAULT 0,
+    rpm_remaining INTEGER NOT NULL DEFAULT 0,
+    tpm_limit INTEGER NOT NULL DEFAULT 0,
+    tpm_remaining INTEGER NOT NULL DEFAULT 0,
+    reset_at DATETIME,
+    last_429_at DATETIME,
+    consecutive_429s INTEGER NOT NULL DEFAULT 0,
+    updated_at DATETIME NOT NULL,
+    FOREIGN KEY (upstream_id) REFERENCES upstream_providers(id) ON DELETE CASCADE
+);
+`,
+	},
+	{
+		// v29: 上游软删除支持。
+		// deleted_at 非 NULL 表示已软删除，ListUpstreams 默认排除。
+		// 支持撤销删除和定期清理。
+		version: 29,
+		up: `
+ALTER TABLE upstream_providers ADD COLUMN deleted_at DATETIME;
+`,
+	},
 }
 
 // RunMigrations 按顺序应用所有待执行的 schema 迁移。

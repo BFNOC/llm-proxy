@@ -14,7 +14,26 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
+
+// CircuitBreakerChecker 是熔断器的接口抽象，避免 proxy→middleware 的循环依赖。
+// middleware.CircuitBreaker 实现了此接口。
+type CircuitBreakerChecker interface {
+	// IsAvailable 判断上游是否可以接受请求。
+	IsAvailable(upstreamID int64) bool
+	// RecordSuccess 记录成功请求。
+	RecordSuccess(upstreamID int64)
+	// RecordFailure 记录失败请求。
+	RecordFailure(upstreamID int64, threshold, recoverySeconds int)
+}
+
+// UpstreamRPMChecker 是上游 RPM 限流器的接口抽象，避免 proxy→middleware 的循环依赖。
+// middleware.UpstreamRPMLimiter 实现了此接口。
+type UpstreamRPMChecker interface {
+	// Allow 检查上游是否还有 RPM 配额。
+	Allow(upstreamID int64, limit int) bool
+}
 
 // hopByHopHeaders 是不能被代理转发的 HTTP 逐跳头。
 var hopByHopHeaders = map[string]bool{
@@ -124,6 +143,13 @@ type ActiveUpstream struct {
 	// WebSocketEnabled 表示该上游是否支持 WebSocket（如 OpenAI Realtime API）。
 	WebSocketEnabled bool
 
+	// UpstreamRPMLimit 上游每分钟请求限制，0 表示不限制。
+	UpstreamRPMLimit int
+	// CircuitBreakerThreshold 连续失败多少次后触发熔断，0 表示不启用。
+	CircuitBreakerThreshold int
+	// CircuitBreakerRecoverySeconds 熔断后恢复探测的间隔秒数。
+	CircuitBreakerRecoverySeconds int
+
 	keyMu         sync.Mutex
 	keyIndex      int    // round-robin 索引
 	fillKeyIndex  int    // fill 模式当前使用的 Key 索引
@@ -214,6 +240,43 @@ type DynamicProxy struct {
 	// KeySuccessCallback 在 API Key 请求成功时调用。
 	// 参数：upstreamID, keyRowID
 	KeySuccessCallback func(upstreamID, keyRowID int64)
+
+	// CircuitBreaker 每上游熔断器，由 main.go 注入。
+	CircuitBreaker CircuitBreakerChecker
+	// UpstreamRPMLimiter 每上游 RPM 限流器，由 main.go 注入。
+	UpstreamRPMLimiter UpstreamRPMChecker
+}
+
+// RateSnapshot 保存从上游响应头中提取的速率限制快照。
+type RateSnapshot struct {
+	RPMLimit     int    // x-ratelimit-limit-requests
+	RPMUsed      int    // RPMLimit - RPMRemaining（已使用量）
+	RPMRemaining int    // x-ratelimit-remaining-requests
+	TPMLimit     int    // x-ratelimit-limit-tokens
+	TPMRemaining int    // x-ratelimit-remaining-tokens
+	ResetAt      string // x-ratelimit-reset-requests
+}
+
+// rateSnapshots 保存每个上游的速率限制快照，键为上游 ID。
+var rateSnapshots sync.Map // map[int64]*RateSnapshot
+
+// GetRateSnapshot 返回指定上游的速率限制快照（可能为 nil）。
+func GetRateSnapshot(upstreamID int64) *RateSnapshot {
+	v, ok := rateSnapshots.Load(upstreamID)
+	if !ok {
+		return nil
+	}
+	return v.(*RateSnapshot)
+}
+
+// GetAllRateSnapshots 返回所有上游的速率限制快照，用于管理面板展示。
+func GetAllRateSnapshots() map[int64]*RateSnapshot {
+	result := make(map[int64]*RateSnapshot)
+	rateSnapshots.Range(func(key, value any) bool {
+		result[key.(int64)] = value.(*RateSnapshot)
+		return true
+	})
+	return result
 }
 
 // NewDynamicProxy 创建一个 DynamicProxy。
@@ -477,6 +540,36 @@ func (dp *DynamicProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	for i, active := range upstreams {
 		isLast := i == len(upstreams)-1
 
+		// 熔断器检查：如果该上游处于熔断状态，跳过。
+		if dp.CircuitBreaker != nil && !dp.CircuitBreaker.IsAvailable(active.ID) {
+			slog.Debug("proxy: upstream circuit open, skipping",
+				"upstream", active.Name, "upstream_id", active.ID)
+			if isLast {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusServiceUnavailable)
+				json.NewEncoder(w).Encode(map[string]string{"error": "all upstreams circuit-broken"}) //nolint:errcheck
+				return
+			}
+			continue
+		}
+
+		// 上游 RPM 限流检查：如果该上游已达到 RPM 上限，跳过。
+		if active.UpstreamRPMLimit > 0 && dp.UpstreamRPMLimiter != nil {
+			if !dp.UpstreamRPMLimiter.Allow(active.ID, active.UpstreamRPMLimit) {
+				slog.Debug("proxy: upstream RPM limit exceeded, skipping",
+					"upstream", active.Name, "upstream_id", active.ID,
+					"limit", active.UpstreamRPMLimit)
+				if isLast {
+					w.Header().Set("Content-Type", "application/json")
+					w.Header().Set("Retry-After", "5")
+					w.WriteHeader(http.StatusTooManyRequests)
+					json.NewEncoder(w).Encode(map[string]string{"error": "all upstreams rate limited"}) //nolint:errcheck
+					return
+				}
+				continue
+			}
+		}
+
 		// 构建外发请求。
 		outReq := r.Clone(r.Context())
 		outReq.Body = io.NopCloser(bytes.NewReader(bodyBytes))
@@ -529,6 +622,11 @@ func (dp *DynamicProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		resp, err := upTransport.RoundTrip(outReq)
 		if err != nil {
+			// 网络错误：记录熔断器失败
+			if dp.CircuitBreaker != nil {
+				dp.CircuitBreaker.RecordFailure(active.ID,
+					active.CircuitBreakerThreshold, active.CircuitBreakerRecoverySeconds)
+			}
 			if !isLast {
 				active.MarkKeyFailed()
 				if dp.KeyFailCallback != nil && keyRowID > 0 {
@@ -555,7 +653,64 @@ func (dp *DynamicProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				peek = peekResponseBody(resp, 8<<10)
 			}
 			kind := classifyUpstreamFailure(resp.StatusCode, resp.Header, peek)
+
+			// 智能 429 退避：如果 retry-after <= 3 秒，短暂等待后重试同一上游，
+			// 避免不必要的故障切换。
+			if resp.StatusCode == http.StatusTooManyRequests && kind == FailureRateLimit {
+				if retryWait := parseRetryAfter(resp.Header.Get("Retry-After")); retryWait > 0 && retryWait <= 3*time.Second {
+					resp.Body.Close()
+					slog.Info("proxy: 429 with short retry-after, waiting before retry",
+						"upstream", active.Name, "wait", retryWait)
+					select {
+					case <-r.Context().Done():
+						return
+					case <-time.After(retryWait):
+					}
+					// 重建请求并重试同一上游
+					outReq2 := r.Clone(r.Context())
+					outReq2.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+					outReq2.ContentLength = int64(len(bodyBytes))
+					outReq2.URL.Scheme = active.BaseURL.Scheme
+					outReq2.URL.Host = active.BaseURL.Host
+					outReq2.Host = active.BaseURL.Host
+					if active.BaseURL.Path != "" && active.BaseURL.Path != "/" {
+						outReq2.URL.Path = strings.TrimRight(active.BaseURL.Path, "/") + r.URL.Path
+					}
+					RewriteAuthHeaders(outReq2, style, apiKey, active.AuthMode)
+					for _, h := range untrustedRequestHeaders {
+						outReq2.Header.Del(h)
+					}
+					stripRequestHopByHop(outReq2.Header)
+					outReq2.Header.Del("Accept-Encoding")
+
+					retryResp, retryErr := upTransport.RoundTrip(outReq2)
+					if retryErr == nil && !shouldFailoverStatus(retryResp.StatusCode) {
+						// 重试成功，走正常响应转发
+						if dp.KeySuccessCallback != nil && keyRowID > 0 {
+							dp.KeySuccessCallback(active.ID, keyRowID)
+						}
+						if dp.CircuitBreaker != nil {
+							dp.CircuitBreaker.RecordSuccess(active.ID)
+						}
+						dp.forwardResponse(w, retryResp, active.Name, keyIdx, active.ProxyURL, active.ID)
+						return
+					}
+					// 重试仍失败，按正常故障切换流程继续
+					if retryErr == nil {
+						retryResp.Body.Close()
+					} else if dp.CircuitBreaker != nil {
+						dp.CircuitBreaker.RecordFailure(active.ID,
+							active.CircuitBreakerThreshold, active.CircuitBreakerRecoverySeconds)
+					}
+				}
+			}
+
 			resp.Body.Close()
+			// 记录熔断器失败
+			if dp.CircuitBreaker != nil {
+				dp.CircuitBreaker.RecordFailure(active.ID,
+					active.CircuitBreakerThreshold, active.CircuitBreakerRecoverySeconds)
+			}
 			// fill 模式下标记当前 Key 失败，下次调用切换到下一个 Key
 			active.MarkKeyFailed()
 			if shouldCountKeyFailure(kind) && dp.KeyFailCallback != nil && keyRowID > 0 {
@@ -571,6 +726,10 @@ func (dp *DynamicProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if dp.KeySuccessCallback != nil && keyRowID > 0 {
 				dp.KeySuccessCallback(active.ID, keyRowID)
 			}
+			// 成功请求：重置熔断器
+			if dp.CircuitBreaker != nil {
+				dp.CircuitBreaker.RecordSuccess(active.ID)
+			}
 		} else if shouldFailoverStatus(resp.StatusCode) {
 			// 最后一个上游（或非故障切换的代码路径）：仍然要跟踪 Key 健康状态。
 			var peek []byte
@@ -582,18 +741,26 @@ func (dp *DynamicProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if shouldCountKeyFailure(kind) && dp.KeyFailCallback != nil && keyRowID > 0 {
 				dp.KeyFailCallback(active.ID, keyRowID)
 			}
+			// 最后一个上游失败：记录熔断器
+			if dp.CircuitBreaker != nil {
+				dp.CircuitBreaker.RecordFailure(active.ID,
+					active.CircuitBreakerThreshold, active.CircuitBreakerRecoverySeconds)
+			}
 			slog.Info("proxy: upstream error on final candidate",
 				"upstream", active.Name, "status", resp.StatusCode, "failure_kind", string(kind))
 		}
-		dp.forwardResponse(w, resp, active.Name, keyIdx, active.ProxyURL)
+		dp.forwardResponse(w, resp, active.Name, keyIdx, active.ProxyURL, active.ID)
 		return
 	}
 }
 
 // forwardResponse 把上游的 HTTP 响应拷贝给下游客户端，
 // 处理 SSE 流式响应头及 flush。
-func (dp *DynamicProxy) forwardResponse(w http.ResponseWriter, resp *http.Response, upstreamName string, keyIdx int, proxyURL string) {
+func (dp *DynamicProxy) forwardResponse(w http.ResponseWriter, resp *http.Response, upstreamName string, keyIdx int, proxyURL string, upstreamID int64) {
 	defer resp.Body.Close()
+
+	// 提取并缓存上游的速率限制头快照（用于管理面板展示）。
+	captureRateHeaders(resp.Header, upstreamID)
 
 	// 拷贝响应头，过滤掉逐跳头和敏感头。
 	for k, vv := range resp.Header {
@@ -755,4 +922,77 @@ func matchModelOverrides(overrides []KeyModelOverrideRule, model string) []int64
 		}
 	}
 	return bestIDs
+}
+
+// parseRetryAfter 解析 Retry-After 响应头。
+// 支持秒数格式（如 "2"）和 HTTP 日期格式（如 "Wed, 21 Oct 2015 07:28:00 GMT"）。
+// 返回 0 表示头不存在或无法解析。
+func parseRetryAfter(value string) time.Duration {
+	if value == "" {
+		return 0
+	}
+	value = strings.TrimSpace(value)
+
+	// 尝试解析为秒数
+	if seconds, err := strconv.Atoi(value); err == nil && seconds > 0 {
+		return time.Duration(seconds) * time.Second
+	}
+
+	// 尝试解析为 HTTP 日期（RFC 1123）
+	if t, err := time.Parse(time.RFC1123, value); err == nil {
+		d := time.Until(t)
+		if d > 0 {
+			return d
+		}
+		return 0
+	}
+
+	return 0
+}
+
+// captureRateHeaders 从上游响应头中提取速率限制信息并存入内存快照。
+// 仅当响应头中包含速率限制相关的头时才更新。
+func captureRateHeaders(h http.Header, upstreamID int64) {
+	if upstreamID <= 0 {
+		return
+	}
+
+	// 检查是否有任何速率限制头
+	rpmLimit := h.Get("x-ratelimit-limit-requests")
+	rpmRemaining := h.Get("x-ratelimit-remaining-requests")
+	tpmLimit := h.Get("x-ratelimit-limit-tokens")
+	tpmRemaining := h.Get("x-ratelimit-remaining-tokens")
+	resetAt := h.Get("x-ratelimit-reset-requests")
+
+	if rpmLimit == "" && rpmRemaining == "" && tpmLimit == "" && tpmRemaining == "" {
+		return // 没有速率限制头，不更新
+	}
+
+	limit := atoiSafe(rpmLimit)
+	remaining := atoiSafe(rpmRemaining)
+	used := 0
+	if limit > 0 && remaining >= 0 {
+		used = limit - remaining
+		if used < 0 {
+			used = 0
+		}
+	}
+	snap := &RateSnapshot{
+		RPMLimit:     limit,
+		RPMUsed:      used,
+		RPMRemaining: remaining,
+		TPMLimit:     atoiSafe(tpmLimit),
+		TPMRemaining: atoiSafe(tpmRemaining),
+		ResetAt:      resetAt,
+	}
+	rateSnapshots.Store(upstreamID, snap)
+}
+
+// atoiSafe 安全地把字符串转为整数，失败返回 0。
+func atoiSafe(s string) int {
+	if s == "" {
+		return 0
+	}
+	n, _ := strconv.Atoi(s)
+	return n
 }

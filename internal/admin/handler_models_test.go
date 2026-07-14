@@ -43,7 +43,7 @@ func setupModelsTestAdmin(t *testing.T) (*AdminHandler, *mux.Router, *store.Stor
 	bc := middleware.NewBindingCache(s)
 	hc := middleware.NewHeaderCapture(10)
 
-	h := NewAdminHandler(s, kc, rl, prober, dp, nil, mf, rc, pks, oc, bc, hc, testAdminToken, "test")
+	h := NewAdminHandler(s, kc, rl, prober, dp, nil, mf, rc, pks, oc, bc, hc, nil, testAdminToken, "test")
 	r := mux.NewRouter()
 	h.RegisterRoutes(r)
 
@@ -76,7 +76,7 @@ func modelsDecodeMap(t *testing.T, rec *httptest.ResponseRecorder) map[string]in
 // modelsSeedUpstream creates an upstream via the store and returns its ID.
 func modelsSeedUpstream(t *testing.T, s *store.Store, name string) int64 {
 	t.Helper()
-	u, err := s.CreateUpstream(name, "https://api.example.com", []string{"sk-test-key"}, 10, "", "round-robin", "api_key", "", false, false)
+	u, err := s.CreateUpstream(name, "https://api.example.com", []string{"sk-test-key"}, 10, "", "round-robin", "api_key", "", false, false, 0)
 	require.NoError(t, err)
 	return u.ID
 }
@@ -697,7 +697,7 @@ func TestCreateUpstream_ProxyURL_ClearOnUpdate(t *testing.T) {
 	_, router, s := setupModelsTestAdmin(t)
 
 	// Create with a proxy
-	u, err := s.CreateUpstream("proxy-clear-test", "https://api.example.com", []string{"sk-key"}, 10, "http://proxy:8080", "round-robin", "api_key", "", false, false)
+	u, err := s.CreateUpstream("proxy-clear-test", "https://api.example.com", []string{"sk-key"}, 10, "http://proxy:8080", "round-robin", "api_key", "", false, false, 0)
 	require.NoError(t, err)
 
 	// Update to clear proxy (empty string should be accepted)

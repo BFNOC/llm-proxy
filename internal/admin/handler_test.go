@@ -41,7 +41,7 @@ func setupTestAdmin(t *testing.T) (*AdminHandler, *mux.Router) {
 
 	prober := proxy.NewUpstreamProber(s, dp, 30*time.Second, 5*time.Second)
 
-	h := NewAdminHandler(s, keyCache, rateLimiter, prober, dp, nil, modelFilter, globalCounter, perKeyStats, overrideCache, bindingCache, headerCapture, testAdminToken, "test")
+	h := NewAdminHandler(s, keyCache, rateLimiter, prober, dp, nil, modelFilter, globalCounter, perKeyStats, overrideCache, bindingCache, headerCapture, nil, testAdminToken, "test")
 	r := mux.NewRouter()
 	h.RegisterRoutes(r)
 	return h, r

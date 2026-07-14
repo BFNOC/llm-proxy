@@ -43,7 +43,7 @@ func TestGetLatencyStats_WithData(t *testing.T) {
 	h, router := setupTestAdmin(t)
 
 	// 先创建一个上游，然后插入请求日志
-	_, err := h.store.CreateUpstream("test-up", "https://api.openai.com", nil, 1, "", "round-robin", "api_key", "", false, false)
+	_, err := h.store.CreateUpstream("test-up", "https://api.openai.com", nil, 1, "", "round-robin", "api_key", "", false, false, 0)
 	require.NoError(t, err)
 
 	logs := []store.RequestLog{
@@ -104,7 +104,7 @@ func TestGetHealthHistory_Empty(t *testing.T) {
 	h, router := setupTestAdmin(t)
 
 	// 需要先创建上游
-	up, err := h.store.CreateUpstream("health-up", "https://api.openai.com", nil, 1, "", "round-robin", "api_key", "", false, false)
+	up, err := h.store.CreateUpstream("health-up", "https://api.openai.com", nil, 1, "", "round-robin", "api_key", "", false, false, 0)
 	require.NoError(t, err)
 
 	urlPath := fmt.Sprintf("/admin/api/upstreams/%d/health-history", up.ID)
@@ -119,7 +119,7 @@ func TestGetHealthHistory_Empty(t *testing.T) {
 func TestGetHealthHistory_WithData(t *testing.T) {
 	h, router := setupTestAdmin(t)
 
-	up, err := h.store.CreateUpstream("health-up-2", "https://api.openai.com", nil, 1, "", "round-robin", "api_key", "", false, false)
+	up, err := h.store.CreateUpstream("health-up-2", "https://api.openai.com", nil, 1, "", "round-robin", "api_key", "", false, false, 0)
 	require.NoError(t, err)
 
 	// 插入探针记录
@@ -146,7 +146,7 @@ func TestExportConfig(t *testing.T) {
 	h, router := setupTestAdmin(t)
 
 	// 创建上游（含 API Key）
-	_, err := h.store.CreateUpstream("export-up", "https://api.openai.com", []string{"sk-secret-key"}, 1, "", "round-robin", "api_key", "test remark", false, false)
+	_, err := h.store.CreateUpstream("export-up", "https://api.openai.com", []string{"sk-secret-key"}, 1, "", "round-robin", "api_key", "test remark", false, false, 0)
 	require.NoError(t, err)
 
 	// 创建下游 Key

@@ -20,7 +20,7 @@ func TestReplayRequest(t *testing.T) {
 	h, router := setupTestAdmin(t)
 
 	// 先创建上游（InsertRequestLogBatch 需要 upstream_name 对应到已有记录非必须，但保持真实场景）
-	_, err := h.store.CreateUpstream("replay-up", "https://api.openai.com", nil, 1, "", "round-robin", "api_key", "", false, false)
+	_, err := h.store.CreateUpstream("replay-up", "https://api.openai.com", nil, 1, "", "round-robin", "api_key", "", false, false, 0)
 	require.NoError(t, err)
 
 	// 插入一条请求日志
@@ -78,7 +78,7 @@ func TestReplayRequest_NotFound(t *testing.T) {
 func TestSetAutoDiscoverModels_Enable(t *testing.T) {
 	h, router := setupTestAdmin(t)
 
-	up, err := h.store.CreateUpstream("discover-up", "https://api.openai.com", nil, 1, "", "round-robin", "api_key", "", false, false)
+	up, err := h.store.CreateUpstream("discover-up", "https://api.openai.com", nil, 1, "", "round-robin", "api_key", "", false, false, 0)
 	require.NoError(t, err)
 
 	urlPath := fmt.Sprintf("/admin/api/upstreams/%d/auto-discover", up.ID)
@@ -96,7 +96,7 @@ func TestSetAutoDiscoverModels_Enable(t *testing.T) {
 func TestSetAutoDiscoverModels_Disable(t *testing.T) {
 	h, router := setupTestAdmin(t)
 
-	up, err := h.store.CreateUpstream("discover-up-2", "https://api.openai.com", nil, 1, "", "round-robin", "api_key", "", false, false)
+	up, err := h.store.CreateUpstream("discover-up-2", "https://api.openai.com", nil, 1, "", "round-robin", "api_key", "", false, false, 0)
 	require.NoError(t, err)
 
 	urlPath := fmt.Sprintf("/admin/api/upstreams/%d/auto-discover", up.ID)
@@ -126,7 +126,7 @@ func TestReorderUpstreams(t *testing.T) {
 
 	var ids []int64
 	for _, name := range []string{"up-a", "up-b", "up-c"} {
-		up, err := h.store.CreateUpstream(name, "https://api.openai.com", nil, 1, "", "round-robin", "api_key", "", false, false)
+		up, err := h.store.CreateUpstream(name, "https://api.openai.com", nil, 1, "", "round-robin", "api_key", "", false, false, 0)
 		require.NoError(t, err)
 		ids = append(ids, up.ID)
 	}
@@ -174,7 +174,7 @@ func TestPauseAllUpstreams(t *testing.T) {
 	h, router := setupTestAdmin(t)
 
 	for _, name := range []string{"pause-a", "pause-b"} {
-		_, err := h.store.CreateUpstream(name, "https://api.openai.com", nil, 1, "", "round-robin", "api_key", "", false, false)
+		_, err := h.store.CreateUpstream(name, "https://api.openai.com", nil, 1, "", "round-robin", "api_key", "", false, false, 0)
 		require.NoError(t, err)
 	}
 
@@ -199,7 +199,7 @@ func TestResumeAllUpstreams(t *testing.T) {
 	h, router := setupTestAdmin(t)
 
 	for _, name := range []string{"resume-a", "resume-b"} {
-		_, err := h.store.CreateUpstream(name, "https://api.openai.com", nil, 1, "", "round-robin", "api_key", "", false, false)
+		_, err := h.store.CreateUpstream(name, "https://api.openai.com", nil, 1, "", "round-robin", "api_key", "", false, false, 0)
 		require.NoError(t, err)
 	}
 

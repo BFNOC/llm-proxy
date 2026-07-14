@@ -151,9 +151,14 @@ func (p *UpstreamProber) probeOnce() {
 			ModelPatterns:     allModelPatterns[u.ID],
 			KeySchedulingMode: u.KeySchedulingMode,
 			AuthMode:          authMode,
-			WebSocketEnabled:  u.WebSocketEnabled,
-			keyFailures:       make(map[int]int64),
+			WebSocketEnabled:              u.WebSocketEnabled,
+			UpstreamRPMLimit:              u.UpstreamRPMLimit,
+			CircuitBreakerThreshold:       u.CircuitBreakerThreshold,
+			CircuitBreakerRecoverySeconds: u.CircuitBreakerRecoverySeconds,
+			keyFailures:                   make(map[int]int64),
 		})
+		// 健康探活成功后预热 transport 连接池
+		PrewarmTransport(u.BaseURL, u.ProxyURL)
 	}
 
 	if len(healthy) == 0 {

@@ -949,7 +949,7 @@ func TestProbeNow_TriggersProbe(t *testing.T) {
 	dp := NewDynamicProxy()
 
 	healthy := healthyServer(t)
-	_, err := s.CreateUpstream("probe-target", healthy.URL, []string{"pk"}, 0, "", "", "", "", false, false)
+	_, err := s.CreateUpstream("probe-target", healthy.URL, []string{"pk"}, 0, "", "", "", "", false, false, 0)
 	require.NoError(t, err)
 
 	prober := NewUpstreamProber(s, dp, time.Minute, 5*time.Second)
@@ -970,7 +970,7 @@ func TestProbeNow_IncrementalProbes(t *testing.T) {
 	dp := NewDynamicProxy()
 
 	healthy := healthyServer(t)
-	_, err := s.CreateUpstream("first", healthy.URL, []string{"k1"}, 0, "", "", "", "", false, false)
+	_, err := s.CreateUpstream("first", healthy.URL, []string{"k1"}, 0, "", "", "", "", false, false, 0)
 	require.NoError(t, err)
 
 	prober := NewUpstreamProber(s, dp, time.Minute, 5*time.Second)
@@ -979,7 +979,7 @@ func TestProbeNow_IncrementalProbes(t *testing.T) {
 
 	// Add another upstream and re-probe.
 	healthy2 := healthyServer(t)
-	_, err = s.CreateUpstream("second", healthy2.URL, []string{"k2"}, 1, "", "", "", "", false, false)
+	_, err = s.CreateUpstream("second", healthy2.URL, []string{"k2"}, 1, "", "", "", "", false, false, 0)
 	require.NoError(t, err)
 
 	prober.ProbeNow()
@@ -999,7 +999,7 @@ func TestGetCurrentID_ReturnsZero_AfterProbe(t *testing.T) {
 	dp := NewDynamicProxy()
 
 	healthy := healthyServer(t)
-	_, err := s.CreateUpstream("test", healthy.URL, []string{"k"}, 0, "", "", "", "", false, false)
+	_, err := s.CreateUpstream("test", healthy.URL, []string{"k"}, 0, "", "", "", "", false, false, 0)
 	require.NoError(t, err)
 
 	prober := NewUpstreamProber(s, dp, time.Minute, 5*time.Second)
@@ -1088,7 +1088,7 @@ func TestProber_DisabledUpstreamsSkipped(t *testing.T) {
 	dp := NewDynamicProxy()
 
 	healthy := healthyServer(t)
-	up, err := s.CreateUpstream("disabled", healthy.URL, []string{"k"}, 0, "", "", "", "", false, false)
+	up, err := s.CreateUpstream("disabled", healthy.URL, []string{"k"}, 0, "", "", "", "", false, false, 0)
 	require.NoError(t, err)
 	// Disable the upstream via BatchSetUpstreamEnabled.
 	_, err = s.BatchSetUpstreamEnabled([]int64{up.ID}, false)

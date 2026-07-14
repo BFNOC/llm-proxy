@@ -16,6 +16,10 @@ type UpstreamProvider struct {
 	WebSocketEnabled   bool       `json:"websocket_enabled"`            // 是否允许 WebSocket 透传
 	AutoDiscoverModels bool       `json:"auto_discover_models"`          // 是否启用模型自动发现
 	LastModelDiscovery *time.Time `json:"last_model_discovery,omitempty"` // 上次成功发现模型的时间
+	UpstreamRPMLimit              int        `json:"upstream_rpm_limit"`               // 上游每分钟请求限制，0 表示不限制
+	CircuitBreakerThreshold       int        `json:"circuit_breaker_threshold"`        // 连续失败多少次后触发熔断
+	CircuitBreakerRecoverySeconds int        `json:"circuit_breaker_recovery_seconds"` // 熔断后恢复探测的间隔秒数
+	DeletedAt                     *time.Time `json:"deleted_at,omitempty"`             // 软删除时间，非 nil 表示已删除
 	Healthy            bool       // 仅运行时使用，不持久化
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
@@ -104,5 +108,27 @@ type TestModel struct {
 	Name      string    `json:"name"`
 	Protocol  string    `json:"protocol"` // "openai", "anthropic", "responses"
 	CreatedAt time.Time `json:"created_at"`
+}
+
+// UpstreamRateInfo 表示从上游响应头观测到的速率限制信息。
+// 用于速率感知路由，优先选择余量充裕的上游。
+type UpstreamRateInfo struct {
+	UpstreamID      int64      `json:"upstream_id"`
+	RPMLimit        int        `json:"rpm_limit"`
+	RPMRemaining    int        `json:"rpm_remaining"`
+	TPMLimit        int        `json:"tpm_limit"`
+	TPMRemaining    int        `json:"tpm_remaining"`
+	ResetAt         *time.Time `json:"reset_at,omitempty"`
+	Last429At       *time.Time `json:"last_429_at,omitempty"`
+	Consecutive429s int        `json:"consecutive_429s"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+}
+
+// UpstreamTemplate 表示预置的上游配置模板，用于快速添加常见 LLM 提供商。
+type UpstreamTemplate struct {
+	Name          string   `json:"name"`
+	BaseURL       string   `json:"base_url"`
+	AuthMode      string   `json:"auth_mode"`
+	ModelPatterns []string `json:"model_patterns"`
 }
 

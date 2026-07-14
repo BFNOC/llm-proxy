@@ -42,7 +42,7 @@ func setupEdgeTestAdmin(t *testing.T) (*AdminHandler, *mux.Router, *store.Store)
 
 	prober := proxy.NewUpstreamProber(s, dp, 30*time.Second, 5*time.Second)
 
-	h := NewAdminHandler(s, keyCache, rateLimiter, prober, dp, nil, modelFilter, globalCounter, perKeyStats, overrideCache, bindingCache, headerCapture, testAdminToken, "test-edge")
+	h := NewAdminHandler(s, keyCache, rateLimiter, prober, dp, nil, modelFilter, globalCounter, perKeyStats, overrideCache, bindingCache, headerCapture, nil, testAdminToken, "test-edge")
 	r := mux.NewRouter()
 	h.RegisterRoutes(r)
 	return h, r, s
@@ -857,7 +857,7 @@ func TestEdge_GetStatus_NilRequestCounter(t *testing.T) {
 	prober := proxy.NewUpstreamProber(s, dp, 30*time.Second, 5*time.Second)
 
 	// Pass nil for requestCounter
-	h := NewAdminHandler(s, keyCache, rateLimiter, prober, dp, nil, modelFilter, nil, perKeyStats, overrideCache, bindingCache, headerCapture, testAdminToken, "test-nil-rc")
+	h := NewAdminHandler(s, keyCache, rateLimiter, prober, dp, nil, modelFilter, nil, perKeyStats, overrideCache, bindingCache, headerCapture, nil, testAdminToken, "test-nil-rc")
 	r := mux.NewRouter()
 	h.RegisterRoutes(r)
 
@@ -1065,7 +1065,7 @@ func TestEdge_GetKeyRPM_NilPerKeyStats(t *testing.T) {
 	prober := proxy.NewUpstreamProber(s, dp, 30*time.Second, 5*time.Second)
 
 	// Pass nil for perKeyStats
-	h := NewAdminHandler(s, keyCache, rateLimiter, prober, dp, nil, modelFilter, globalCounter, nil, overrideCache, bindingCache, headerCapture, testAdminToken, "test-nil-pks")
+	h := NewAdminHandler(s, keyCache, rateLimiter, prober, dp, nil, modelFilter, globalCounter, nil, overrideCache, bindingCache, headerCapture, nil, testAdminToken, "test-nil-pks")
 	r := mux.NewRouter()
 	h.RegisterRoutes(r)
 

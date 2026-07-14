@@ -1,10 +1,12 @@
 // --- Upstreams ---
 let allUpstreams = [];
 let allModelPatterns = {}; // upstream_id -> [patterns]
+let allCircuitStatus = {};
 function loadUpstreams() {
-    return Promise.all([api('/upstreams'), api('/upstreams/models')]).then(([data, mp]) => {
+    return Promise.all([api('/upstreams'), api('/upstreams/models'), api('/upstreams/circuit-status')]).then(([data, mp, cs]) => {
         allUpstreams = data || [];
         allModelPatterns = mp || {};
+        allCircuitStatus = cs || {};
         renderUpstreamsTable();
     }).catch(() => {
         document.getElementById('upstreams-table').innerHTML = '<tr><td colspan="12" class="empty-state"><strong>加载失败</strong><p>无法获取上游列表，请刷新重试</p></td></tr>';
@@ -95,6 +97,7 @@ function renderUpstreamsTable() {
         const remarkHtml = u.remark ? '<div style="font-size:0.75rem;color:var(--text-dim);margin-top:2px;" title="'+esc(u.remark)+'">'+esc(u.remark.length>28?u.remark.substring(0,28)+'...':u.remark)+'</div>' : '';
         return '<tr draggable="true" ondragstart="onDragStart(event,'+u.id+')" ondragover="onDragOver(event)" ondrop="onDrop(event,'+u.id+')" ondragend="onDragEnd(event)" ondragleave="onDragLeave(event)"><td class="col-check"><input type="checkbox" class="upstream-cb" value="'+u.id+'" onchange="updateUpstreamBatchBtns()"></td><td class="hide-on-mobile">'+u.id+'</td><td><strong>'+esc(u.name)+'</strong>'+remarkHtml+'</td><td><code class="truncate-url" title="'+esc(u.base_url)+'">'+esc(u.base_url)+'</code></td><td class="hide-on-mobile">'+keyBadge+'</td><td class="hide-on-mobile">'+authBadge+'</td><td class="hide-on-mobile"><span style="font-size:0.75rem;color:'+schedColor+';font-weight:500;white-space:nowrap;">'+schedLabel+'</span></td><td class="hide-on-mobile">'+(u.proxy_url?'<code class="truncate-url" title="'+esc(u.proxy_url)+'">'+esc(u.proxy_url)+'</code>':'<span class="badge badge-muted">环境</span>')+'</td><td class="hide-on-mobile">'+u.priority+'</td><td class="hide-on-mobile"><div class="model-tags">'+modelHtml+'</div></td><td>'+
         (u.enabled?'<span class="badge badge-green">启用</span>':'<span class="badge badge-red">禁用</span>')+
+        (function(){ var cs = allCircuitStatus[String(u.id)]; if(cs==='open') return '<span class="badge badge-red" title="熔断中">熔断</span>'; if(cs==='half_open') return '<span class="badge badge-orange" title="恢复中">恢复中</span>'; return ''; })()+
         (u.websocket_enabled?'<span class="badge badge-purple" title="WebSocket 已启用" style="margin-left:4px;">WS</span>':'')+
         (u.auto_discover_models?'<span class="badge badge-green" title="模型自动发现" style="margin-left:4px;">发现</span>':'')+
         '</td><td class="actions">'+
@@ -182,10 +185,31 @@ function editUpstream(id) {
 async function deleteUpstream(id) {
     const u = allUpstreams.find(x => x.id === id);
     const name = u ? u.name : ('#'+id);
-    if(!await askConfirm('删除上游「'+name+'」后，相关 Key 与绑定也会被清理。此操作不可恢复。', {title:'删除上游', okText:'删除', danger:true})) return;
+    if(!await askConfirm('删除上游「'+name+'」？可在 60 秒内撤销。', {title:'删除上游', okText:'删除', danger:true})) return;
     api('/upstreams/'+id, {method:'DELETE'}).then(d => {
-        if(d && d.error) toastErr(d.error); else { loadUpstreams(); toastOk('已删除上游'); }
+        if(d && d.error) { toastErr(d.error); return; }
+        loadUpstreams();
+        showUndoToast(id, d.undo_seconds || 60);
     }).catch(() => toastErr('删除失败'));
+}
+function showUndoToast(id, seconds) {
+    const toast = document.createElement('div');
+    toast.className = 'toast-undo';
+    toast.innerHTML = '上游已删除 <button onclick="undoDelete('+id+',this.parentElement)">撤销</button> <span class="countdown">'+seconds+'s</span>';
+    document.body.appendChild(toast);
+    let remaining = seconds;
+    const timer = setInterval(() => {
+        remaining--;
+        toast.querySelector('.countdown').textContent = remaining+'s';
+        if (remaining <= 0) { clearInterval(timer); toast.remove(); }
+    }, 1000);
+}
+function undoDelete(id, toastEl) {
+    api('/upstreams/'+id+'/undo', {method:'POST'}).then(d => {
+        if(d.error) toastErr(d.error);
+        else { toastOk('已撤销删除'); loadUpstreams(); }
+        if(toastEl) toastEl.remove();
+    });
 }
 
 function toggleUpstream(id, enabled) {
@@ -573,5 +597,22 @@ function onDrop(e, targetId) {
     api('/upstreams/reorder', {method:'PUT', body: JSON.stringify({ids: ids})}).then(function(d) {
         if(d.error) toastErr(d.error); else { loadUpstreams(); toastOk('排序已更新'); }
     });
+}
+
+// --- 上游模板 ---
+function loadTemplates() {
+    api('/upstream-templates').then(templates => {
+        const container = document.getElementById('template-buttons');
+        if (!container || !templates || !templates.length) return;
+        container.innerHTML = templates.map(t =>
+            '<button class="btn btn-ghost btn-sm" onclick="applyTemplate(\''+esc(t.name)+'\',\''+esc(t.base_url)+'\',\''+esc(t.auth_mode)+'\')">'+esc(t.name)+'</button>'
+        ).join('');
+    });
+}
+function applyTemplate(name, baseURL, authMode) {
+    document.querySelector('#dlg-upstream [name=name]').value = name;
+    document.querySelector('#dlg-upstream [name=base_url]').value = baseURL;
+    if (authMode) document.querySelector('#dlg-upstream [name=auth_mode]').value = authMode;
+    document.getElementById('dlg-upstream').showModal();
 }
 

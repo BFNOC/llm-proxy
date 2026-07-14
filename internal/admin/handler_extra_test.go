@@ -44,7 +44,7 @@ func setupExtraTestAdmin(t *testing.T) (*AdminHandler, *mux.Router, *store.Store
 	bc := middleware.NewBindingCache(s)
 	hc := middleware.NewHeaderCapture(10)
 
-	h := NewAdminHandler(s, kc, rl, prober, dp, al, mf, rc, pks, oc, bc, hc, testAdminToken, "test")
+	h := NewAdminHandler(s, kc, rl, prober, dp, al, mf, rc, pks, oc, bc, hc, nil, testAdminToken, "test")
 	r := mux.NewRouter()
 	h.RegisterRoutes(r)
 
@@ -699,6 +699,7 @@ func TestGetHeaderCapture_NilCapture(t *testing.T) {
 		nil, middleware.NewModelFilter(s), rc, middleware.NewPerKeyStatsCollector(),
 		middleware.NewModelOverrideCache(s), middleware.NewBindingCache(s),
 		nil, // nil HeaderCapture
+		nil, // nil CircuitBreaker
 		testAdminToken, "test")
 	r := mux.NewRouter()
 	h.RegisterRoutes(r)

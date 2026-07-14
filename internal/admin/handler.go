@@ -39,6 +39,7 @@ type AdminHandler struct {
 	overrideCache  *middleware.ModelOverrideCache
 	bindingCache   *middleware.BindingCache
 	headerCapture  *middleware.HeaderCapture
+	circuitBreaker *middleware.CircuitBreaker
 	adminToken     string
 	version        string
 }
@@ -56,6 +57,7 @@ func NewAdminHandler(
 	oc *middleware.ModelOverrideCache,
 	bc *middleware.BindingCache,
 	hc *middleware.HeaderCapture,
+	cb *middleware.CircuitBreaker,
 	adminToken string,
 	version string,
 ) *AdminHandler {
@@ -72,6 +74,7 @@ func NewAdminHandler(
 		overrideCache:  oc,
 		bindingCache:   bc,
 		headerCapture:  hc,
+		circuitBreaker: cb,
 		adminToken:     adminToken,
 		version:        version,
 	}
@@ -107,6 +110,16 @@ func (h *AdminHandler) RegisterRoutes(r *mux.Router) {
 	api.HandleFunc("/upstreams/{id}/apikeys/{key_id}", h.deleteUpstreamAPIKey).Methods("DELETE")
 	api.HandleFunc("/upstreams/{id}/apikeys/{key_id}/enabled", h.setAPIKeyEnabled).Methods("PUT")
 	api.HandleFunc("/upstreams/{id}/apikeys/{key_id}/test", h.testUpstreamAPIKey).Methods("POST")
+
+	// 上游模板
+	api.HandleFunc("/upstream-templates", h.listUpstreamTemplates).Methods("GET")
+	// 上游速率信息与熔断状态
+	api.HandleFunc("/upstreams/rate-info", h.getUpstreamRateInfo).Methods("GET")
+	api.HandleFunc("/upstreams/circuit-status", h.getCircuitStatus).Methods("GET")
+	api.HandleFunc("/upstreams/deleted", h.listDeletedUpstreams).Methods("GET")
+	api.HandleFunc("/upstreams/{id}/rpm-limit", h.setUpstreamRPMLimit).Methods("PUT")
+	api.HandleFunc("/upstreams/{id}/circuit-breaker", h.setCircuitBreakerConfig).Methods("PUT")
+	api.HandleFunc("/upstreams/{id}/undo", h.undoDeleteUpstream).Methods("POST")
 
 	// Key
 	api.HandleFunc("/keys", h.listKeys).Methods("GET")
@@ -330,7 +343,7 @@ func (h *AdminHandler) createUpstream(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	upstream, err := h.store.CreateUpstream(req.Name, req.BaseURL, apiKeys, req.Priority, req.ProxyURL, schedulingMode, authMode, req.Remark, req.WebSocketEnabled, false)
+	upstream, err := h.store.CreateUpstream(req.Name, req.BaseURL, apiKeys, req.Priority, req.ProxyURL, schedulingMode, authMode, req.Remark, req.WebSocketEnabled, false, 0)
 	if err != nil {
 		slog.Error("admin: store error", "error", err)
 		jsonError(w, http.StatusInternalServerError, "internal error")
@@ -481,16 +494,10 @@ func (h *AdminHandler) deleteUpstream(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	// 先获取上游信息以备回收 transport
-	existing, _ := h.store.GetUpstream(id)
-	if err := h.store.DeleteUpstream(id); err != nil {
+	if err := h.store.SoftDeleteUpstream(id); err != nil {
 		slog.Error("admin: store error", "error", err)
 		jsonError(w, http.StatusInternalServerError, "internal error")
 		return
-	}
-	// 回收被删除上游的 transport 连接池（仅当没有其他上游复用该代理时）
-	if existing != nil {
-		h.tryRemoveTransport(existing.ProxyURL, id)
 	}
 	// 立即触发一次探活，按需更新可用上游集合。
 	go func() {
@@ -507,9 +514,8 @@ func (h *AdminHandler) deleteUpstream(w http.ResponseWriter, r *http.Request) {
 	if h.modelFilter != nil {
 		h.modelFilter.ReloadDeclaredModels()
 	}
-	slog.Info("admin: deleted upstream", "id", id)
-
-	jsonOK(w, map[string]string{"status": "deleted"})
+	slog.Info("admin: soft-deleted upstream", "id", id)
+	jsonOK(w, map[string]interface{}{"status": "deleted", "undo_seconds": 60})
 }
 
 // batchSetUpstreamEnabled 批量启用或禁用上游：{"ids":[1,2], "enabled":true}。
@@ -575,14 +581,17 @@ func (h *AdminHandler) batchDeleteUpstreams(w http.ResponseWriter, r *http.Reque
 			refs = append(refs, proxyRef{id: id, proxyURL: u.ProxyURL})
 		}
 	}
-	deleted, err := h.store.BatchDeleteUpstreams(req.IDs)
-	if err != nil {
-		slog.Error("admin: store error", "error", err)
-		jsonError(w, http.StatusInternalServerError, "internal error")
-		return
-	}
-	for _, ref := range refs {
-		h.tryRemoveTransport(ref.proxyURL, ref.id)
+	// 批量软删除（与单个删除行为一致，支持撤销）
+	var deleted int64
+	for _, id := range req.IDs {
+		if id <= 0 {
+			continue
+		}
+		if err := h.store.SoftDeleteUpstream(id); err != nil {
+			slog.Warn("admin: soft delete upstream failed", "id", id, "error", err)
+			continue
+		}
+		deleted++
 	}
 	go func() {
 		defer func() { recover() }()
@@ -1234,6 +1243,16 @@ func (h *AdminHandler) getStatus(w http.ResponseWriter, r *http.Request) {
 
 	// 连接池统计
 	status["transport_pool"] = proxy.TransportPoolStats()
+
+	// 熔断器状态
+	if h.circuitBreaker != nil {
+		cbStates := h.circuitBreaker.GetAllStates()
+		cbMap := make(map[string]string, len(cbStates))
+		for uid, state := range cbStates {
+			cbMap[strconv.FormatInt(uid, 10)] = state.String()
+		}
+		status["circuit_breaker"] = cbMap
+	}
 
 	jsonOK(w, status)
 }
@@ -3081,4 +3100,188 @@ func (h *AdminHandler) clearHeaderCapture(w http.ResponseWriter, r *http.Request
 	}
 	h.headerCapture.Clear()
 	jsonOK(w, map[string]interface{}{"status": "cleared"})
+}
+
+// --- 上游模板 ---
+
+// listUpstreamTemplates 返回预置的上游模板列表。
+func (h *AdminHandler) listUpstreamTemplates(w http.ResponseWriter, r *http.Request) {
+	templates := store.GetUpstreamTemplates()
+	if len(templates) == 0 {
+		jsonOK(w, []store.UpstreamTemplate{})
+		return
+	}
+	jsonOK(w, templates)
+}
+
+// --- 上游速率信息 ---
+
+// getUpstreamRateInfo 聚合实时速率快照与持久化的 429 历史。
+func (h *AdminHandler) getUpstreamRateInfo(w http.ResponseWriter, r *http.Request) {
+	// 从 DynamicProxy 获取实时 header 速率快照
+	liveSnapshots := proxy.GetAllRateSnapshots()
+	// 从 store 获取持久化的 429 历史
+	persistedInfo, err := h.store.GetAllUpstreamRateInfo()
+	if err != nil {
+		slog.Error("admin: store error", "error", err)
+		jsonError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	// 合并两个来源的数据
+	type rateInfo struct {
+		UpstreamID     int64       `json:"upstream_id"`
+		RPMLimit       int         `json:"rpm_limit,omitempty"`
+		RPMUsed        int         `json:"rpm_used,omitempty"`
+		RPMRemaining   int         `json:"rpm_remaining,omitempty"`
+		Last429At      *time.Time  `json:"last_429_at,omitempty"`
+		Consecutive429s  int         `json:"total_429_count,omitempty"`
+	}
+
+	merged := make(map[int64]*rateInfo)
+	// 先填充持久化数据
+	for _, p := range persistedInfo {
+		merged[p.UpstreamID] = &rateInfo{
+			UpstreamID:    p.UpstreamID,
+			Last429At:     p.Last429At,
+			Consecutive429s: p.Consecutive429s,
+		}
+	}
+	// 叠加实时快照
+	for uid, snap := range liveSnapshots {
+		ri, ok := merged[uid]
+		if !ok {
+			ri = &rateInfo{UpstreamID: uid}
+			merged[uid] = ri
+		}
+		ri.RPMLimit = snap.RPMLimit
+		ri.RPMUsed = snap.RPMUsed
+		ri.RPMRemaining = snap.RPMRemaining
+	}
+
+	result := make([]*rateInfo, 0, len(merged))
+	for _, ri := range merged {
+		result = append(result, ri)
+	}
+	jsonOK(w, result)
+}
+
+// --- 熔断状态 ---
+
+// getCircuitStatus 返回所有上游的熔断器状态。
+func (h *AdminHandler) getCircuitStatus(w http.ResponseWriter, r *http.Request) {
+	if h.circuitBreaker == nil {
+		jsonOK(w, map[string]string{})
+		return
+	}
+	states := h.circuitBreaker.GetAllStates()
+	result := make(map[string]string, len(states))
+	for uid, state := range states {
+		result[strconv.FormatInt(uid, 10)] = state.String()
+	}
+	jsonOK(w, result)
+}
+
+// --- 上游 RPM 限制 ---
+
+// setUpstreamRPMLimit 设置上游的每分钟请求限制。
+func (h *AdminHandler) setUpstreamRPMLimit(w http.ResponseWriter, r *http.Request) {
+	id, err := parseID(r)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	var req struct {
+		RPMLimit int `json:"rpm_limit"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if req.RPMLimit < 0 {
+		jsonError(w, http.StatusBadRequest, "rpm_limit must be >= 0")
+		return
+	}
+	if err := h.store.SetUpstreamRPMLimit(id, req.RPMLimit); err != nil {
+		slog.Error("admin: store error", "error", err)
+		jsonError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	go func() {
+		defer func() { recover() }()
+		h.prober.ProbeNow()
+	}()
+	slog.Info("admin: updated upstream rpm limit", "upstream_id", id, "rpm_limit", req.RPMLimit)
+	jsonOK(w, map[string]interface{}{"status": "updated", "rpm_limit": req.RPMLimit})
+}
+
+// --- 熔断器配置 ---
+
+// setCircuitBreakerConfig 设置上游的熔断器参数。
+func (h *AdminHandler) setCircuitBreakerConfig(w http.ResponseWriter, r *http.Request) {
+	id, err := parseID(r)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	var req struct {
+		Threshold       int `json:"threshold"`
+		RecoverySeconds int `json:"recovery_seconds"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if req.Threshold < 0 {
+		jsonError(w, http.StatusBadRequest, "threshold must be >= 0")
+		return
+	}
+	if req.RecoverySeconds < 0 {
+		jsonError(w, http.StatusBadRequest, "recovery_seconds must be >= 0")
+		return
+	}
+	if err := h.store.SetCircuitBreakerConfig(id, req.Threshold, req.RecoverySeconds); err != nil {
+		slog.Error("admin: store error", "error", err)
+		jsonError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	go func() {
+		defer func() { recover() }()
+		h.prober.ProbeNow()
+	}()
+	slog.Info("admin: updated circuit breaker config", "upstream_id", id, "threshold", req.Threshold, "recovery_seconds", req.RecoverySeconds)
+	jsonOK(w, map[string]interface{}{"status": "updated", "threshold": req.Threshold, "recovery_seconds": req.RecoverySeconds})
+}
+
+// --- 软删除撤销 ---
+
+// undoDeleteUpstream 撤销上游的软删除操作。
+func (h *AdminHandler) undoDeleteUpstream(w http.ResponseWriter, r *http.Request) {
+	id, err := parseID(r)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := h.store.UndoDeleteUpstream(id); err != nil {
+		slog.Error("admin: store error", "error", err)
+		jsonError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	go func() {
+		defer func() { recover() }()
+		h.prober.ProbeNow()
+	}()
+	slog.Info("admin: undo delete upstream", "id", id)
+	jsonOK(w, map[string]interface{}{"status": "restored"})
+}
+
+// listDeletedUpstreams 返回已软删除但尚未清理的上游列表。
+func (h *AdminHandler) listDeletedUpstreams(w http.ResponseWriter, r *http.Request) {
+	upstreams, err := h.store.ListDeletedUpstreams()
+	if err != nil {
+		slog.Error("admin: store error", "error", err)
+		jsonError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	jsonOK(w, upstreams)
 }

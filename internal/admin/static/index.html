@@ -5,7 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LLM Proxy · 控制台</title>
     <link rel="stylesheet" href="/admin/assets/admin.css">
-
+    <style>
+    .toast-undo { position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:var(--bg-card,var(--bg)); border:1px solid var(--orange); border-radius:var(--radius-sm,6px); padding:12px 20px; z-index:9999; display:flex; align-items:center; gap:12px; box-shadow:0 4px 12px rgba(0,0,0,0.15); }
+    .toast-undo button { color:var(--accent); font-weight:600; background:none; border:none; cursor:pointer; }
+    .toast-undo .countdown { color:var(--text-dim); font-size:0.8rem; }
+    </style>
 </head>
 <body>
 <div class="app-shell">
@@ -201,6 +205,10 @@
                 </div>
                 <h3 style="font-family:var(--font);font-size:1rem;margin-bottom:14px;letter-spacing:-0.02em;">上游健康</h3>
                 <div id="status-upstreams" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;"></div>
+                <h3 style="font-family:var(--font);font-size:1rem;margin-bottom:14px;margin-top:24px;letter-spacing:-0.02em;">熔断器状态</h3>
+                <div id="status-circuit-breaker" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;"></div>
+                <h3 style="font-family:var(--font);font-size:1rem;margin-bottom:14px;margin-top:24px;letter-spacing:-0.02em;">速率信息</h3>
+                <div id="status-rate-info" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;"></div>
             </div>
         </div>
 
@@ -305,6 +313,7 @@
     <form onsubmit="createUpstream(event)">
         <div class="dlg-header"><h3>添加上游</h3><p class="dlg-desc">配置转发目标与鉴权方式</p></div>
         <div class="dlg-body">
+            <div id="template-buttons" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;"></div>
             <div class="form-group"><label>名称</label><input name="name" placeholder="如 openai-sgp" required></div>
             <div class="form-group"><label>地址</label><input name="base_url" placeholder="https://api.example.com" required></div>
             <div class="form-group">

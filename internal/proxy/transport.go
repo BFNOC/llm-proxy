@@ -188,6 +188,72 @@ func TransportPoolStats() map[string]interface{} {
 	}
 }
 
+// TransportPoolDetails 返回缓存的 transport 详细信息列表。
+// 每个条目包含代理 URL 键和类型（标准/uTLS）。
+func TransportPoolDetails() []map[string]interface{} {
+	var details []map[string]interface{}
+
+	transportCache.Range(func(key, _ any) bool {
+		proxyKey := key.(string)
+		entry := map[string]interface{}{
+			"proxy_url": proxyKey,
+			"type":      "standard",
+			"http2":     true, // 标准 transport 默认启用 ForceAttemptHTTP2
+		}
+		if proxyKey == "" {
+			entry["proxy_url"] = "(direct/env)"
+		}
+		details = append(details, entry)
+		return true
+	})
+
+	utlsTransportCache.Range(func(key, _ any) bool {
+		cacheKey := key.(string)
+		entry := map[string]interface{}{
+			"proxy_url": cacheKey,
+			"type":      "utls",
+			"http2":     false, // uTLS transport 禁用 HTTP/2
+		}
+		details = append(details, entry)
+		return true
+	})
+
+	return details
+}
+
+// PrewarmTransport 预热指定上游的 TCP 连接池。
+// 构建（或获取缓存的）transport，然后向目标主机发起一次 HEAD 请求
+// 以填充连接池。适合在探测器健康检查后调用。
+func PrewarmTransport(baseURL, proxyURL string) error {
+	t, err := BuildTransport(proxyURL)
+	if err != nil {
+		return fmt.Errorf("build transport for prewarm: %w", err)
+	}
+
+	parsed, err := url.Parse(baseURL)
+	if err != nil {
+		return fmt.Errorf("parse base URL for prewarm: %w", err)
+	}
+
+	// 使用短超时的 HEAD 请求来预热连接。
+	// 目标是让 transport 建立 TCP 连接并完成 TLS 握手。
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, parsed.Scheme+"://"+parsed.Host+"/", nil)
+	if err != nil {
+		return fmt.Errorf("create prewarm request: %w", err)
+	}
+
+	resp, err := t.RoundTrip(req)
+	if err != nil {
+		// 连接错误不视为致命错误——预热是尽力而为
+		return fmt.Errorf("prewarm dial: %w", err)
+	}
+	resp.Body.Close()
+	return nil
+}
+
 // newBaseTransport 返回一个预配置的 *http.Transport。
 // MaxIdleConnsPerHost 提高默认 2，避免高并发单上游时连接池瓶颈。
 // cfg 为 nil 时使用 config.DefaultTransportConfig() 默认值。
