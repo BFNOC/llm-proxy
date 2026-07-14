@@ -22,7 +22,7 @@ function loadLogs(e) {
     api('/logs'+q).then(data => {
         const tbody = document.getElementById('logs-table');
         if (!data || data.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="15" class="empty-state">暂无日志</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="16" class="empty-state">暂无日志</td></tr>';
             return;
         }
         tbody.innerHTML = (data||[]).map(l => {
@@ -35,8 +35,29 @@ function loadLogs(e) {
                 ? '<span class="badge badge-red" title="慢请求">'+l.LatencyMs+'ms</span>'
                 : l.LatencyMs+'ms';
             const rowStyle = isSlow ? ' style="background:rgba(239,68,68,0.06);"' : '';
-            return '<tr'+rowStyle+'><td class="hide-on-mobile">'+l.ID+'</td><td>'+l.DownstreamKeyID+'</td><td>'+esc(l.UpstreamName||'-')+'</td><td class="hide-on-mobile"><span class="badge badge-purple" style="font-size:0.7rem">'+keyIdxText+'</span></td><td class="hide-on-mobile"><code style="font-size:0.78rem">'+esc(modelText)+'</code></td><td class="hide-on-mobile" style="font-size:0.78rem;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(l.UsedProxy||'')+'">'+proxyText+'</td><td class="hide-on-mobile">'+esc(l.ClientIP||'-')+'</td><td>'+esc(l.IPRegion||'-')+'</td><td class="hide-on-mobile">'+esc(l.ProviderStyle)+'</td><td class="hide-on-mobile">'+esc(l.Path)+'</td><td><span class="badge '+(l.StatusCode<400?'badge-green':'badge-red')+'">'+l.StatusCode+'</span></td><td class="hide-on-mobile">'+latencyHtml+'</td><td class="hide-on-mobile">'+formatBytes(l.RequestSize)+'</td><td class="hide-on-mobile">'+formatBytes(l.ResponseSize)+'</td><td>'+fmtTime(l.CreatedAt)+'</td></tr>';
+            return '<tr'+rowStyle+'><td class="hide-on-mobile">'+l.ID+'</td><td>'+l.DownstreamKeyID+'</td><td>'+esc(l.UpstreamName||'-')+'</td><td class="hide-on-mobile"><span class="badge badge-purple" style="font-size:0.7rem">'+keyIdxText+'</span></td><td class="hide-on-mobile"><code style="font-size:0.78rem">'+esc(modelText)+'</code></td><td class="hide-on-mobile" style="font-size:0.78rem;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(l.UsedProxy||'')+'">'+proxyText+'</td><td class="hide-on-mobile">'+esc(l.ClientIP||'-')+'</td><td>'+esc(l.IPRegion||'-')+'</td><td class="hide-on-mobile">'+esc(l.ProviderStyle)+'</td><td class="hide-on-mobile">'+esc(l.Path)+'</td><td><span class="badge '+(l.StatusCode<400?'badge-green':'badge-red')+'">'+l.StatusCode+'</span></td><td class="hide-on-mobile">'+latencyHtml+'</td><td class="hide-on-mobile">'+formatBytes(l.RequestSize)+'</td><td class="hide-on-mobile">'+formatBytes(l.ResponseSize)+'</td><td>'+fmtTime(l.CreatedAt)+'</td><td class="actions"><button class="btn btn-ghost btn-sm" onclick="replayLog('+l.ID+')">重放</button></td></tr>';
         }).join('');
+    });
+}
+
+function replayLog(logId) {
+    api('/logs/' + logId + '/replay', {method:'POST'}).then(function(d) {
+        if (d.error) { toastErr(d.error); return; }
+        var upstream = allUpstreams.find(function(u) { return u.name === d.upstream_name; });
+        if (upstream) {
+            document.querySelector('[data-tab="upstreams"]').click();
+            openTestUpstreamDialog(upstream.id, true);
+            setTimeout(function() {
+                var modelInput = document.getElementById('tu-model');
+                if (modelInput && d.model) modelInput.value = d.model;
+                var protoMap = {openai:'openai', anthropic:'anthropic'};
+                if (d.provider_style && protoMap[d.provider_style]) {
+                    setTuProtocol(protoMap[d.provider_style]);
+                }
+            }, 200);
+        } else {
+            toastErr('未找到上游: ' + d.upstream_name);
+        }
     });
 }
 

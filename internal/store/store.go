@@ -58,7 +58,7 @@ func (s *Store) Close() error {
 // 每个 Key 在写入 upstream_api_keys 表之前都会被加密。
 // URL 校验（scheme、SSRF）由 HTTP handler 层负责；
 // store 层接受任意非空 URL，以便使用 loopback 地址进行测试。
-func (s *Store) CreateUpstream(name, baseURL string, apiKeys []string, priority int, proxyURL string, keySchedulingMode string, authMode string, remark string, websocketEnabled bool) (*UpstreamProvider, error) {
+func (s *Store) CreateUpstream(name, baseURL string, apiKeys []string, priority int, proxyURL string, keySchedulingMode string, authMode string, remark string, websocketEnabled bool, autoDiscoverModels bool) (*UpstreamProvider, error) {
 	if keySchedulingMode == "" {
 		keySchedulingMode = "round-robin"
 	}
@@ -75,9 +75,9 @@ func (s *Store) CreateUpstream(name, baseURL string, apiKeys []string, priority 
 
 	// 旧 api_key 列保留占位值（NOT NULL 约束无法删除）
 	res, err := tx.Exec(
-		`INSERT INTO upstream_providers (name, base_url, api_key, priority, enabled, proxy_url, key_scheduling_mode, auth_mode, remark, websocket_enabled, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)`,
-		name, baseURL, "_migrated_to_upstream_api_keys", priority, proxyURL, keySchedulingMode, authMode, remark, websocketEnabled, now, now,
+		`INSERT INTO upstream_providers (name, base_url, api_key, priority, enabled, proxy_url, key_scheduling_mode, auth_mode, remark, websocket_enabled, auto_discover_models, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		name, baseURL, "_migrated_to_upstream_api_keys", priority, proxyURL, keySchedulingMode, authMode, remark, websocketEnabled, autoDiscoverModels, now, now,
 	)
 	if err != nil {
 		_ = tx.Rollback()
@@ -115,36 +115,42 @@ func (s *Store) CreateUpstream(name, baseURL string, apiKeys []string, priority 
 	}
 
 	return &UpstreamProvider{
-		ID:                id,
-		Name:              name,
-		BaseURL:           baseURL,
-		APIKeys:           apiKeys,
-		ProxyURL:          proxyURL,
-		Priority:          priority,
-		Enabled:           true,
-		KeySchedulingMode: keySchedulingMode,
-		AuthMode:          authMode,
-		Remark:            remark,
-		WebSocketEnabled:  websocketEnabled,
-		Healthy:           true,
-		CreatedAt:         now,
-		UpdatedAt:         now,
+		ID:                 id,
+		Name:               name,
+		BaseURL:            baseURL,
+		APIKeys:            apiKeys,
+		ProxyURL:           proxyURL,
+		Priority:           priority,
+		Enabled:            true,
+		KeySchedulingMode:  keySchedulingMode,
+		AuthMode:           authMode,
+		Remark:             remark,
+		WebSocketEnabled:   websocketEnabled,
+		AutoDiscoverModels: autoDiscoverModels,
+		Healthy:            true,
+		CreatedAt:          now,
+		UpdatedAt:          now,
 	}, nil
 }
 
 // GetUpstream 按 ID 获取一个上游 provider，并解密其所有 API Key。
 func (s *Store) GetUpstream(id int64) (*UpstreamProvider, error) {
 	row := s.db.QueryRow(
-		`SELECT id, name, base_url, priority, enabled, key_scheduling_mode, auth_mode, remark, websocket_enabled, proxy_url, created_at, updated_at
+		`SELECT id, name, base_url, priority, enabled, key_scheduling_mode, auth_mode, remark, websocket_enabled, auto_discover_models, last_model_discovery, proxy_url, created_at, updated_at
 		 FROM upstream_providers WHERE id = ?`, id,
 	)
 
 	var up UpstreamProvider
-	if err := row.Scan(&up.ID, &up.Name, &up.BaseURL, &up.Priority, &up.Enabled, &up.KeySchedulingMode, &up.AuthMode, &up.Remark, &up.WebSocketEnabled, &up.ProxyURL, &up.CreatedAt, &up.UpdatedAt); err != nil {
+	var lastModelDiscovery sql.NullTime
+	if err := row.Scan(&up.ID, &up.Name, &up.BaseURL, &up.Priority, &up.Enabled, &up.KeySchedulingMode, &up.AuthMode, &up.Remark, &up.WebSocketEnabled, &up.AutoDiscoverModels, &lastModelDiscovery, &up.ProxyURL, &up.CreatedAt, &up.UpdatedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("upstream %d not found", id)
 		}
 		return nil, fmt.Errorf("scan upstream: %w", err)
+	}
+	if lastModelDiscovery.Valid {
+		t := lastModelDiscovery.Time
+		up.LastModelDiscovery = &t
 	}
 
 	keys, err := s.getUpstreamAPIKeys(id)
@@ -159,7 +165,7 @@ func (s *Store) GetUpstream(id int64) (*UpstreamProvider, error) {
 // ListUpstreams 返回所有上游 provider，并附带已解密的 API Key。
 func (s *Store) ListUpstreams() ([]UpstreamProvider, error) {
 	rows, err := s.db.Query(
-		`SELECT id, name, base_url, priority, enabled, key_scheduling_mode, auth_mode, remark, websocket_enabled, proxy_url, created_at, updated_at
+		`SELECT id, name, base_url, priority, enabled, key_scheduling_mode, auth_mode, remark, websocket_enabled, auto_discover_models, last_model_discovery, proxy_url, created_at, updated_at
 		 FROM upstream_providers ORDER BY priority ASC, id ASC`,
 	)
 	if err != nil {
@@ -170,8 +176,13 @@ func (s *Store) ListUpstreams() ([]UpstreamProvider, error) {
 	var result []UpstreamProvider
 	for rows.Next() {
 		var up UpstreamProvider
-		if err := rows.Scan(&up.ID, &up.Name, &up.BaseURL, &up.Priority, &up.Enabled, &up.KeySchedulingMode, &up.AuthMode, &up.Remark, &up.WebSocketEnabled, &up.ProxyURL, &up.CreatedAt, &up.UpdatedAt); err != nil {
+		var lastModelDiscovery sql.NullTime
+		if err := rows.Scan(&up.ID, &up.Name, &up.BaseURL, &up.Priority, &up.Enabled, &up.KeySchedulingMode, &up.AuthMode, &up.Remark, &up.WebSocketEnabled, &up.AutoDiscoverModels, &lastModelDiscovery, &up.ProxyURL, &up.CreatedAt, &up.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan upstream row: %w", err)
+		}
+		if lastModelDiscovery.Valid {
+			t := lastModelDiscovery.Time
+			up.LastModelDiscovery = &t
 		}
 		up.Healthy = true
 		result = append(result, up)
@@ -284,6 +295,90 @@ func (s *Store) SetWebSocketEnabled(id int64, enabled bool) error {
 		return fmt.Errorf("upstream %d not found", id)
 	}
 	return nil
+}
+
+// SetAutoDiscoverModels 仅更新指定上游的 auto_discover_models 列，
+// 避免全字段 UpdateUpstream 在并发修改时覆盖其他字段。
+func (s *Store) SetAutoDiscoverModels(id int64, enabled bool) error {
+	res, err := s.db.Exec(
+		`UPDATE upstream_providers SET auto_discover_models=?, updated_at=? WHERE id=?`,
+		enabled, time.Now().UTC(), id,
+	)
+	if err != nil {
+		return fmt.Errorf("set auto_discover_models: %w", err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("upstream %d not found", id)
+	}
+	return nil
+}
+
+// UpdateDiscoveredModels 更新上游的模型模式列表并记录发现时间。
+// 内部调用 SetUpstreamModelPatterns 全量覆盖模式，并更新 last_model_discovery 时间戳。
+func (s *Store) UpdateDiscoveredModels(upstreamID int64, patterns []string) error {
+	if err := s.SetUpstreamModelPatterns(upstreamID, patterns); err != nil {
+		return fmt.Errorf("set upstream model patterns: %w", err)
+	}
+	now := time.Now().UTC()
+	_, err := s.db.Exec(
+		`UPDATE upstream_providers SET last_model_discovery=?, updated_at=? WHERE id=?`,
+		now, now, upstreamID,
+	)
+	if err != nil {
+		return fmt.Errorf("update last_model_discovery: %w", err)
+	}
+	return nil
+}
+
+// ReorderUpstreams 按传入的 ID 顺序重新设置上游优先级（位置 0 = 最高优先级）。
+// 在单个事务中逐一 UPDATE，保证操作的原子性。
+func (s *Store) ReorderUpstreams(ids []int64) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+
+	now := time.Now().UTC()
+	for i, id := range ids {
+		res, err := tx.Exec(
+			`UPDATE upstream_providers SET priority=?, updated_at=? WHERE id=?`,
+			i, now, id,
+		)
+		if err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("reorder upstream %d: %w", id, err)
+		}
+		affected, err := res.RowsAffected()
+		if err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("rows affected for upstream %d: %w", id, err)
+		}
+		if affected == 0 {
+			_ = tx.Rollback()
+			return fmt.Errorf("upstream %d not found", id)
+		}
+	}
+
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit reorder: %w", err)
+	}
+	return nil
+}
+
+// SetAllUpstreamsEnabled 批量设置所有上游的启用状态，返回受影响的行数。
+func (s *Store) SetAllUpstreamsEnabled(enabled bool) (int64, error) {
+	res, err := s.db.Exec(
+		`UPDATE upstream_providers SET enabled=?, updated_at=? WHERE 1=1`,
+		enabled, time.Now().UTC(),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("set all upstreams enabled: %w", err)
+	}
+	return res.RowsAffected()
 }
 
 // DeleteUpstream 按 ID 删除一个上游 provider。
@@ -933,6 +1028,22 @@ func (s *Store) QueryLogs(keyID int64, from, to time.Time, limit int) ([]Request
 		return nil, fmt.Errorf("iterate request log rows: %w", err)
 	}
 	return result, nil
+}
+
+// GetLogByID 按 ID 获取单条请求日志，用于重放等场景。
+func (s *Store) GetLogByID(id int64) (*RequestLog, error) {
+	row := s.db.QueryRow(
+		`SELECT id, downstream_key_id, upstream_name, upstream_key_idx, model, used_proxy, client_ip, ip_region, provider_style, path, status_code, latency_ms, request_size, response_size, created_at
+		 FROM request_logs WHERE id = ?`, id,
+	)
+	var rl RequestLog
+	if err := row.Scan(&rl.ID, &rl.DownstreamKeyID, &rl.UpstreamName, &rl.UpstreamKeyIdx, &rl.Model, &rl.UsedProxy, &rl.ClientIP, &rl.IPRegion, &rl.ProviderStyle, &rl.Path, &rl.StatusCode, &rl.LatencyMs, &rl.RequestSize, &rl.ResponseSize, &rl.CreatedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("log %d not found", id)
+		}
+		return nil, fmt.Errorf("scan log: %w", err)
+	}
+	return &rl, nil
 }
 
 // CountLogsSince 返回指定时间之后的请求日志条数。

@@ -153,6 +153,7 @@ function enterDashboard(statusData) {
         ver.style.display = '';
     }
     loadUpstreams().then(() => loadKeys());
+    if (typeof startSSE === 'function') startSSE();
 }
 function authenticate() {
     const input = document.getElementById('admin-token');
@@ -179,6 +180,7 @@ function logout() {
     clearToken();
     TOKEN = '';
     stopStatusTimer();
+    if (typeof stopSSE === 'function') stopSSE();
     Object.keys(localStorage).filter(k => k.startsWith('cf_config_')).forEach(k => localStorage.removeItem(k));
     document.getElementById('main-section').style.display = 'none';
     document.getElementById('auth-section').style.display = 'flex';

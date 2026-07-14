@@ -2,7 +2,9 @@ package proxy
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -23,6 +25,7 @@ type UpstreamProber struct {
 	currentID          int64
 	lastHealthyCnt     int // 上次探活健康数，仅变化时打日志
 	lastHealthCleanup  time.Time
+	lastDiscoveryTime  time.Time // 上次执行模型自动发现的时间，控制 5 分钟间隔
 	mu                 sync.Mutex
 }
 
@@ -174,6 +177,39 @@ func (p *UpstreamProber) probeOnce() {
 		}
 		p.lastHealthCleanup = time.Now()
 	}
+
+	// 模型自动发现阶段：每 5 分钟对启用了自动发现的健康上游执行一次
+	if time.Since(p.lastDiscoveryTime) >= 5*time.Minute {
+		healthyIDs := make(map[int64]bool, len(healthy))
+		for _, h := range healthy {
+			healthyIDs[h.ID] = true
+		}
+		for _, u := range enabled {
+			if !u.AutoDiscoverModels || !healthyIDs[u.ID] {
+				continue
+			}
+			if len(u.APIKeys) == 0 {
+				continue
+			}
+			models, discoverErr := p.discoverModels(u.BaseURL, u.ProxyURL, u.APIKeys[0])
+			if discoverErr != nil {
+				slog.Warn("prober: model discovery failed, disabling auto-discover",
+					"upstream_id", u.ID, "name", u.Name, "error", discoverErr)
+				if disableErr := p.store.SetAutoDiscoverModels(u.ID, false); disableErr != nil {
+					slog.Error("prober: failed to disable auto-discover", "upstream_id", u.ID, "error", disableErr)
+				}
+				continue
+			}
+			if len(models) > 0 {
+				if updateErr := p.store.UpdateDiscoveredModels(u.ID, models); updateErr != nil {
+					slog.Error("prober: failed to update discovered models", "upstream_id", u.ID, "error", updateErr)
+				} else {
+					slog.Info("prober: discovered models", "upstream_id", u.ID, "name", u.Name, "count", len(models))
+				}
+			}
+		}
+		p.lastDiscoveryTime = time.Now()
+	}
 }
 
 // probeUpstream 向 baseURL/v1/models 发起 HEAD 请求（可选经由配置的代理），
@@ -211,6 +247,64 @@ func (p *UpstreamProber) probeUpstream(baseURL, proxyURL string) (bool, int64, s
 // ProbeNow 立即触发一次探测周期。适用于 admin 修改配置之后的场景。
 func (p *UpstreamProber) ProbeNow() {
 	p.probeOnce()
+}
+
+// discoverModels 从上游 /v1/models 接口获取模型列表（OpenAI 格式）。
+// 使用 GET 请求并以 Authorization: Bearer 鉴权，解析 {"data": [{"id": "..."}, ...]} 响应。
+func (p *UpstreamProber) discoverModels(baseURL, proxyURL, apiKey string) ([]string, error) {
+	transport, err := BuildTransport(proxyURL)
+	if err != nil {
+		return nil, fmt.Errorf("build transport: %w", err)
+	}
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   p.timeout,
+		// 禁止跟随重定向，防止 302 到内网地址的 SSRF 绕过
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	req, err := http.NewRequest("GET", baseURL+"/v1/models", nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+
+	// 限制响应体大小防止 OOM
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024))
+	if err != nil {
+		return nil, fmt.Errorf("read body: %w", err)
+	}
+
+	var result struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("parse JSON: %w", err)
+	}
+
+	models := make([]string, 0, len(result.Data))
+	for _, m := range result.Data {
+		if m.ID != "" {
+			models = append(models, m.ID)
+		}
+	}
+	return models, nil
 }
 
 // GetCurrentID 返回当前活跃上游的 ID。

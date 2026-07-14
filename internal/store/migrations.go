@@ -300,6 +300,16 @@ CREATE TABLE IF NOT EXISTS upstream_health_history (
 CREATE INDEX IF NOT EXISTS idx_health_history_upstream_time ON upstream_health_history(upstream_id, created_at DESC);
 `,
 	},
+	{
+		// v26: 模型自动发现支持。
+		// auto_discover_models: 是否启用自动发现该上游支持的模型。
+		// last_model_discovery: 上次成功发现模型的时间。
+		version: 26,
+		up: `
+ALTER TABLE upstream_providers ADD COLUMN auto_discover_models BOOLEAN NOT NULL DEFAULT 0;
+ALTER TABLE upstream_providers ADD COLUMN last_model_discovery DATETIME;
+`,
+	},
 }
 
 // RunMigrations 按顺序应用所有待执行的 schema 迁移。

@@ -37,7 +37,7 @@
                 </div>
             </div>
             <nav class="tab-nav">
-                <button class="active" onclick="showTab('upstreams',this)">
+                <button class="active" data-tab="upstreams" onclick="showTab('upstreams',this)">
                     <span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v6"/><path d="m4.93 10.93 4.24 4.24"/><path d="M2 18h6"/><path d="m19.07 10.93-4.24 4.24"/><path d="M22 18h-6"/><circle cx="12" cy="18" r="3"/></svg></span>
                     上游
                 </button>
@@ -176,7 +176,7 @@
                     <div class="form-group"><label>&nbsp;</label><button type="submit" class="btn btn-primary">查询</button></div>
                 </form>
                 <div class="table-container">
-                <table><thead><tr><th class="hide-on-mobile">ID</th><th>密钥</th><th>上游</th><th class="hide-on-mobile">Key#</th><th class="hide-on-mobile">模型</th><th class="hide-on-mobile">代理</th><th class="hide-on-mobile">IP</th><th>地区</th><th class="hide-on-mobile">风格</th><th class="hide-on-mobile">路径</th><th>状态码</th><th class="hide-on-mobile">延迟</th><th class="hide-on-mobile">请求大小</th><th class="hide-on-mobile">响应大小</th><th>时间</th></tr></thead>
+                <table><thead><tr><th class="hide-on-mobile">ID</th><th>密钥</th><th>上游</th><th class="hide-on-mobile">Key#</th><th class="hide-on-mobile">模型</th><th class="hide-on-mobile">代理</th><th class="hide-on-mobile">IP</th><th>地区</th><th class="hide-on-mobile">风格</th><th class="hide-on-mobile">路径</th><th>状态码</th><th class="hide-on-mobile">延迟</th><th class="hide-on-mobile">请求大小</th><th class="hide-on-mobile">响应大小</th><th>时间</th><th>操作</th></tr></thead>
                 <tbody id="logs-table"></tbody></table>
                 </div>
             </div>
@@ -188,6 +188,11 @@
                 <div class="card-header">
                     <h2>系统状态</h2>
                     <button class="btn btn-ghost btn-sm" onclick="loadStatus()">刷新</button>
+                </div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;">
+                    <button class="btn btn-ghost btn-sm" onclick="pauseAllUpstreams()" style="color:var(--red)">⏸ 暂停所有上游</button>
+                    <button class="btn btn-ghost btn-sm" onclick="resumeAllUpstreams()" style="color:var(--green)">▶ 恢复所有上游</button>
+                    <button class="btn btn-ghost btn-sm" onclick="refreshAllCaches()">🔄 刷新所有缓存</button>
                 </div>
                 <div id="status-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-bottom:24px;"></div>
                 <div id="latency-chart-container" style="margin-bottom:24px;display:none;">
@@ -566,5 +571,7 @@
     <script src="/admin/assets/js/tools.js"></script>
     <script src="/admin/assets/js/status.js"></script>
     <script src="/admin/assets/js/charts.js"></script>
+    <script src="/admin/assets/js/sse.js"></script>
+    <script src="/admin/assets/js/actions.js"></script>
 </body>
 </html>

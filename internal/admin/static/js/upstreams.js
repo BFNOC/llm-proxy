@@ -93,9 +93,10 @@ function renderUpstreamsTable() {
             ? '<span class="badge badge-orange" title="Authorization: Bearer">OAuth</span>'
             : '<span class="badge badge-muted" title="x-api-key">API Key</span>';
         const remarkHtml = u.remark ? '<div style="font-size:0.75rem;color:var(--text-dim);margin-top:2px;" title="'+esc(u.remark)+'">'+esc(u.remark.length>28?u.remark.substring(0,28)+'...':u.remark)+'</div>' : '';
-        return '<tr><td class="col-check"><input type="checkbox" class="upstream-cb" value="'+u.id+'" onchange="updateUpstreamBatchBtns()"></td><td class="hide-on-mobile">'+u.id+'</td><td><strong>'+esc(u.name)+'</strong>'+remarkHtml+'</td><td><code class="truncate-url" title="'+esc(u.base_url)+'">'+esc(u.base_url)+'</code></td><td class="hide-on-mobile">'+keyBadge+'</td><td class="hide-on-mobile">'+authBadge+'</td><td class="hide-on-mobile"><span style="font-size:0.75rem;color:'+schedColor+';font-weight:500;white-space:nowrap;">'+schedLabel+'</span></td><td class="hide-on-mobile">'+(u.proxy_url?'<code class="truncate-url" title="'+esc(u.proxy_url)+'">'+esc(u.proxy_url)+'</code>':'<span class="badge badge-muted">环境</span>')+'</td><td class="hide-on-mobile">'+u.priority+'</td><td class="hide-on-mobile"><div class="model-tags">'+modelHtml+'</div></td><td>'+
+        return '<tr draggable="true" ondragstart="onDragStart(event,'+u.id+')" ondragover="onDragOver(event)" ondrop="onDrop(event,'+u.id+')" ondragend="onDragEnd(event)" ondragleave="onDragLeave(event)"><td class="col-check"><input type="checkbox" class="upstream-cb" value="'+u.id+'" onchange="updateUpstreamBatchBtns()"></td><td class="hide-on-mobile">'+u.id+'</td><td><strong>'+esc(u.name)+'</strong>'+remarkHtml+'</td><td><code class="truncate-url" title="'+esc(u.base_url)+'">'+esc(u.base_url)+'</code></td><td class="hide-on-mobile">'+keyBadge+'</td><td class="hide-on-mobile">'+authBadge+'</td><td class="hide-on-mobile"><span style="font-size:0.75rem;color:'+schedColor+';font-weight:500;white-space:nowrap;">'+schedLabel+'</span></td><td class="hide-on-mobile">'+(u.proxy_url?'<code class="truncate-url" title="'+esc(u.proxy_url)+'">'+esc(u.proxy_url)+'</code>':'<span class="badge badge-muted">环境</span>')+'</td><td class="hide-on-mobile">'+u.priority+'</td><td class="hide-on-mobile"><div class="model-tags">'+modelHtml+'</div></td><td>'+
         (u.enabled?'<span class="badge badge-green">启用</span>':'<span class="badge badge-red">禁用</span>')+
         (u.websocket_enabled?'<span class="badge badge-purple" title="WebSocket 已启用" style="margin-left:4px;">WS</span>':'')+
+        (u.auto_discover_models?'<span class="badge badge-green" title="模型自动发现" style="margin-left:4px;">发现</span>':'')+
         '</td><td class="actions">'+
         '<button class="btn btn-ghost btn-sm" onclick="testProxy(event,'+u.id+')">测试</button>'+
         '<button class="btn btn-ghost btn-sm" onclick="testWebSocket(event,'+u.id+')" title="测试 WebSocket 连接">WS</button>'+
@@ -108,6 +109,7 @@ function renderUpstreamsTable() {
         '<button onclick="toggleWebSocket('+u.id+','+(!u.websocket_enabled)+')">'+(u.websocket_enabled?'关闭 WS':'开启 WS')+'</button>'+
         '<button onclick="openModelPatternsDialog('+u.id+')">模型模式</button>'+
         '<button onclick="openDeclaredModelsDialog('+u.id+')">声明模型</button>'+
+        '<button onclick="toggleAutoDiscover('+u.id+','+(!u.auto_discover_models)+')">'+(u.auto_discover_models?'关闭自动发现':'开启自动发现')+'</button>'+
         '<button onclick="toggleUpstream('+u.id+','+(!u.enabled)+')">'+(u.enabled?'禁用':'启用')+'</button>'+
         '<button class="menu-danger" onclick="deleteUpstream('+u.id+')">删除</button>'+
         '</div></div>'+
@@ -526,6 +528,50 @@ function testWebSocket(e, id) {
 function toggleWebSocket(id, enabled) {
     api('/upstreams/'+id, {method:'PUT', body: JSON.stringify({websocket_enabled:enabled})}).then(d => {
         if(d.error) toastErr(d.error); else { loadUpstreams(); toastOk(enabled?'已开启 WebSocket':'已关闭 WebSocket'); }
+    });
+}
+
+// --- 模型自动发现开关 ---
+function toggleAutoDiscover(id, enabled) {
+    api('/upstreams/'+id+'/auto-discover', {method:'PUT', body: JSON.stringify({enabled:enabled})}).then(function(d) {
+        if(d.error) toastErr(d.error); else { loadUpstreams(); toastOk(enabled?'已开启模型自动发现':'已关闭模型自动发现'); }
+    });
+}
+
+// --- 拖拽排序 ---
+var dragSrcId = null;
+function onDragStart(e, id) {
+    dragSrcId = id;
+    e.dataTransfer.effectAllowed = 'move';
+    e.target.closest('tr').style.opacity = '0.4';
+}
+function onDragOver(e) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    var tr = e.target.closest('tr');
+    if (tr) tr.style.borderTop = '2px solid var(--accent)';
+}
+function onDragLeave(e) {
+    var tr = e.target.closest('tr');
+    if (tr) tr.style.borderTop = '';
+}
+function onDragEnd(e) {
+    e.target.closest('tr').style.opacity = '';
+    document.querySelectorAll('#upstreams-table tr').forEach(function(r) { r.style.borderTop = ''; });
+}
+function onDrop(e, targetId) {
+    e.preventDefault();
+    var tr = e.target.closest('tr');
+    if (tr) tr.style.borderTop = '';
+    if (dragSrcId === targetId) return;
+    var ids = allUpstreams.map(function(u) { return u.id; });
+    var srcIdx = ids.indexOf(dragSrcId);
+    var tgtIdx = ids.indexOf(targetId);
+    if (srcIdx < 0 || tgtIdx < 0) return;
+    ids.splice(srcIdx, 1);
+    ids.splice(tgtIdx, 0, dragSrcId);
+    api('/upstreams/reorder', {method:'PUT', body: JSON.stringify({ids: ids})}).then(function(d) {
+        if(d.error) toastErr(d.error); else { loadUpstreams(); toastOk('排序已更新'); }
     });
 }
 

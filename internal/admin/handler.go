@@ -13,6 +13,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/Instawork/llm-proxy/internal/middleware"
@@ -89,8 +90,10 @@ func (h *AdminHandler) RegisterRoutes(r *mux.Router) {
 	api.HandleFunc("/upstreams/batch", h.batchDeleteUpstreams).Methods("DELETE")
 	api.HandleFunc("/upstreams/models", h.getAllUpstreamModelPatterns).Methods("GET")
 	api.HandleFunc("/upstreams/declared-models", h.getAllUpstreamDeclaredModels).Methods("GET")
+	api.HandleFunc("/upstreams/reorder", h.reorderUpstreams).Methods("PUT")
 	api.HandleFunc("/upstreams/{id}", h.updateUpstream).Methods("PUT")
 	api.HandleFunc("/upstreams/{id}", h.deleteUpstream).Methods("DELETE")
+	api.HandleFunc("/upstreams/{id}/auto-discover", h.setAutoDiscoverModels).Methods("PUT")
 	api.HandleFunc("/upstreams/{id}/test-proxy", h.testUpstreamProxy).Methods("POST")
 	api.HandleFunc("/upstreams/{id}/test-websocket", h.testUpstreamWebSocket).Methods("POST")
 	api.HandleFunc("/upstreams/{id}/check-quota", h.checkUpstreamQuota).Methods("POST")
@@ -115,6 +118,7 @@ func (h *AdminHandler) RegisterRoutes(r *mux.Router) {
 	// 日志
 	api.HandleFunc("/logs", h.queryLogs).Methods("GET")
 	api.HandleFunc("/logs/key-stats", h.getKeyUsageStats).Methods("GET")
+	api.HandleFunc("/logs/{id}/replay", h.replayRequest).Methods("POST")
 
 	// 模型白名单
 	api.HandleFunc("/models/whitelist", h.listModelWhitelist).Methods("GET")
@@ -150,6 +154,14 @@ func (h *AdminHandler) RegisterRoutes(r *mux.Router) {
 	api.HandleFunc("/stats/latency", h.getLatencyStats).Methods("GET")
 	api.HandleFunc("/upstreams/{id}/health-history", h.getHealthHistory).Methods("GET")
 
+	// 快捷操作
+	api.HandleFunc("/actions/pause-all", h.pauseAllUpstreams).Methods("POST")
+	api.HandleFunc("/actions/resume-all", h.resumeAllUpstreams).Methods("POST")
+	api.HandleFunc("/actions/refresh-caches", h.refreshAllCaches).Methods("POST")
+
+	// SSE 实时事件推送
+	api.HandleFunc("/events", h.sseEvents).Methods("GET")
+
 	// 配置导入导出
 	api.HandleFunc("/config/export", h.exportConfig).Methods("GET")
 	api.HandleFunc("/config/import", h.importConfig).Methods("POST")
@@ -167,11 +179,23 @@ func (h *AdminHandler) RegisterRoutes(r *mux.Router) {
 func (h *AdminHandler) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token := r.Header.Get("Authorization")
-		if !strings.HasPrefix(token, "Bearer ") || subtle.ConstantTimeCompare([]byte(strings.TrimPrefix(token, "Bearer ")), []byte(h.adminToken)) != 1 {
-			jsonError(w, http.StatusUnauthorized, "invalid admin token")
-			return
+		if strings.HasPrefix(token, "Bearer ") {
+			if subtle.ConstantTimeCompare([]byte(strings.TrimPrefix(token, "Bearer ")), []byte(h.adminToken)) == 1 {
+				next.ServeHTTP(w, r)
+				return
+			}
 		}
-		next.ServeHTTP(w, r)
+		// 仅 SSE 端点允许 ?token= 查询参数（EventSource 无法设置自定义 Header），
+		// 避免其他端点在 URL 中暴露 admin token（日志、浏览器历史、Referer 等）。
+		if strings.HasSuffix(r.URL.Path, "/events") {
+			if qToken := r.URL.Query().Get("token"); qToken != "" {
+				if subtle.ConstantTimeCompare([]byte(qToken), []byte(h.adminToken)) == 1 {
+					next.ServeHTTP(w, r)
+					return
+				}
+			}
+		}
+		jsonError(w, http.StatusUnauthorized, "invalid admin token")
 	})
 }
 
@@ -191,20 +215,22 @@ func (h *AdminHandler) listUpstreams(w http.ResponseWriter, r *http.Request) {
 		Enabled bool   `json:"enabled"`
 	}
 	type upstreamResponse struct {
-		ID                int64        `json:"id"`
-		Name              string       `json:"name"`
-		BaseURL           string       `json:"base_url"`
-		APIKeys           []string     `json:"api_keys"`
-		APIKeyDetails     []apiKeyInfo `json:"api_key_details"`
-		ProxyURL          string       `json:"proxy_url"`
-		Priority          int          `json:"priority"`
-		Enabled           bool         `json:"enabled"`
-		KeySchedulingMode string       `json:"key_scheduling_mode"`
-		AuthMode          string       `json:"auth_mode"`
-		Remark            string       `json:"remark"`
-		WebSocketEnabled  bool         `json:"websocket_enabled"`
-		CreatedAt         time.Time    `json:"created_at"`
-		UpdatedAt         time.Time    `json:"updated_at"`
+		ID                   int64        `json:"id"`
+		Name                 string       `json:"name"`
+		BaseURL              string       `json:"base_url"`
+		APIKeys              []string     `json:"api_keys"`
+		APIKeyDetails        []apiKeyInfo `json:"api_key_details"`
+		ProxyURL             string       `json:"proxy_url"`
+		Priority             int          `json:"priority"`
+		Enabled              bool         `json:"enabled"`
+		KeySchedulingMode    string       `json:"key_scheduling_mode"`
+		AuthMode             string       `json:"auth_mode"`
+		Remark               string       `json:"remark"`
+		WebSocketEnabled     bool         `json:"websocket_enabled"`
+		AutoDiscoverModels   bool         `json:"auto_discover_models"`
+		LastModelDiscovery   *time.Time   `json:"last_model_discovery"`
+		CreatedAt            time.Time    `json:"created_at"`
+		UpdatedAt            time.Time    `json:"updated_at"`
 	}
 	result := make([]upstreamResponse, len(upstreams))
 	for i, u := range upstreams {
@@ -226,11 +252,17 @@ func (h *AdminHandler) listUpstreams(w http.ResponseWriter, r *http.Request) {
 		if authMode == "" {
 			authMode = "api_key"
 		}
+		// 处理 last_model_discovery 可空时间
+		var lastDiscovery *time.Time
+		if u.LastModelDiscovery != nil && !u.LastModelDiscovery.IsZero() {
+			lastDiscovery = u.LastModelDiscovery
+		}
 		result[i] = upstreamResponse{
 			ID: u.ID, Name: u.Name, BaseURL: u.BaseURL, APIKeys: keys, APIKeyDetails: details,
 			ProxyURL: u.ProxyURL, Priority: u.Priority, Enabled: u.Enabled,
 			KeySchedulingMode: u.KeySchedulingMode, AuthMode: authMode, Remark: u.Remark,
-			WebSocketEnabled: u.WebSocketEnabled, CreatedAt: u.CreatedAt, UpdatedAt: u.UpdatedAt,
+			WebSocketEnabled: u.WebSocketEnabled, AutoDiscoverModels: u.AutoDiscoverModels,
+			LastModelDiscovery: lastDiscovery, CreatedAt: u.CreatedAt, UpdatedAt: u.UpdatedAt,
 		}
 	}
 	jsonOK(w, result)
@@ -238,16 +270,17 @@ func (h *AdminHandler) listUpstreams(w http.ResponseWriter, r *http.Request) {
 
 func (h *AdminHandler) createUpstream(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name              string   `json:"name"`
-		BaseURL           string   `json:"base_url"`
-		APIKey            string   `json:"api_key"`  // 向后兼容单 Key
-		APIKeys           []string `json:"api_keys"` // 新多 Key 字段
-		ProxyURL          string   `json:"proxy_url"`
-		Priority          int      `json:"priority"`
+		Name               string   `json:"name"`
+		BaseURL            string   `json:"base_url"`
+		APIKey             string   `json:"api_key"`  // 向后兼容单 Key
+		APIKeys            []string `json:"api_keys"` // 新多 Key 字段
+		ProxyURL           string   `json:"proxy_url"`
+		Priority           int      `json:"priority"`
 		KeySchedulingMode  string   `json:"key_scheduling_mode"`
 		AuthMode           string   `json:"auth_mode"`
 		Remark             string   `json:"remark"`
 		WebSocketEnabled   bool     `json:"websocket_enabled"`
+		AutoDiscoverModels bool     `json:"auto_discover_models"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid JSON")
@@ -297,15 +330,26 @@ func (h *AdminHandler) createUpstream(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	upstream, err := h.store.CreateUpstream(req.Name, req.BaseURL, apiKeys, req.Priority, req.ProxyURL, schedulingMode, authMode, req.Remark, req.WebSocketEnabled)
+	upstream, err := h.store.CreateUpstream(req.Name, req.BaseURL, apiKeys, req.Priority, req.ProxyURL, schedulingMode, authMode, req.Remark, req.WebSocketEnabled, false)
 	if err != nil {
 		slog.Error("admin: store error", "error", err)
 		jsonError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
+	// 创建后若指定了模型自动发现，则额外调用 store 设置
+	if req.AutoDiscoverModels {
+		if err := h.store.SetAutoDiscoverModels(upstream.ID, true); err != nil {
+			slog.Warn("admin: 设置模型自动发现失败", "upstream_id", upstream.ID, "error", err)
+		} else {
+			go func() {
+				defer func() { recover() }()
+				h.prober.ProbeNow()
+			}()
+		}
+	}
 	slog.Info("admin: created upstream", "id", upstream.ID, "name", upstream.Name, "key_count", len(apiKeys), "proxy_url", sanitizeProxyForLog(req.ProxyURL))
 	w.WriteHeader(http.StatusCreated)
-	jsonOK(w, map[string]interface{}{"id": upstream.ID, "name": upstream.Name, "base_url": upstream.BaseURL, "priority": upstream.Priority})
+	jsonOK(w, map[string]interface{}{"id": upstream.ID, "name": upstream.Name, "base_url": upstream.BaseURL, "priority": upstream.Priority, "auto_discover_models": req.AutoDiscoverModels})
 }
 
 func (h *AdminHandler) updateUpstream(w http.ResponseWriter, r *http.Request) {
@@ -323,17 +367,18 @@ func (h *AdminHandler) updateUpstream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Name              *string   `json:"name"`
-		BaseURL           *string   `json:"base_url"`
-		APIKey            *string   `json:"api_key"`  // 向后兼容单 Key
-		APIKeys           *[]string `json:"api_keys"` // 新多 Key 字段
-		ProxyURL          *string   `json:"proxy_url"`
-		Priority          *int      `json:"priority"`
-		Enabled           *bool     `json:"enabled"`
+		Name               *string   `json:"name"`
+		BaseURL            *string   `json:"base_url"`
+		APIKey             *string   `json:"api_key"`  // 向后兼容单 Key
+		APIKeys            *[]string `json:"api_keys"` // 新多 Key 字段
+		ProxyURL           *string   `json:"proxy_url"`
+		Priority           *int      `json:"priority"`
+		Enabled            *bool     `json:"enabled"`
 		KeySchedulingMode  *string   `json:"key_scheduling_mode"`
 		AuthMode           *string   `json:"auth_mode"`
 		Remark             *string   `json:"remark"`
 		WebSocketEnabled   *bool     `json:"websocket_enabled"`
+		AutoDiscoverModels *bool     `json:"auto_discover_models"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid JSON")
@@ -414,6 +459,12 @@ func (h *AdminHandler) updateUpstream(w http.ResponseWriter, r *http.Request) {
 	// 代理配置变更时回收旧 transport 连接池（仅当没有其他上游复用该代理时）
 	if proxyURL != existing.ProxyURL {
 		h.tryRemoveTransport(existing.ProxyURL, id)
+	}
+	// 更新模型自动发现设置
+	if req.AutoDiscoverModels != nil {
+		if err := h.store.SetAutoDiscoverModels(id, *req.AutoDiscoverModels); err != nil {
+			slog.Warn("admin: 设置模型自动发现失败", "upstream_id", id, "error", err)
+		}
 	}
 	// 立即触发一次探活，让启用/禁用变更马上生效。
 	go func() {
@@ -1277,6 +1328,252 @@ func (h *AdminHandler) deleteTestModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jsonOK(w, map[string]string{"status": "deleted"})
+}
+
+// --- 请求重放 ---
+
+// replayRequest 根据日志 ID 返回请求元数据，供前端预填测试对话框。
+// 由于日志不存储请求体，"重放"实际上是读取日志条目的上游/模型/路径等信息。
+func (h *AdminHandler) replayRequest(w http.ResponseWriter, r *http.Request) {
+	id, err := parseID(r)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	logEntry, err := h.store.GetLogByID(id)
+	if err != nil {
+		jsonError(w, http.StatusNotFound, fmt.Sprintf("日志 %d 未找到", id))
+		return
+	}
+
+	providerStyle := logEntry.ProviderStyle
+	if providerStyle == "" {
+		providerStyle = "openai"
+	}
+
+	slog.Info("admin: 请求重放预填", "log_id", logEntry.ID)
+	jsonOK(w, map[string]interface{}{
+		"log_id":         logEntry.ID,
+		"upstream_name":  logEntry.UpstreamName,
+		"model":          logEntry.Model,
+		"path":           logEntry.Path,
+		"provider_style": providerStyle,
+	})
+}
+
+// --- 模型自动发现 ---
+
+// setAutoDiscoverModels 启用或禁用上游的模型自动发现功能。
+func (h *AdminHandler) setAutoDiscoverModels(w http.ResponseWriter, r *http.Request) {
+	id, err := parseID(r)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+
+	if err := h.store.SetAutoDiscoverModels(id, req.Enabled); err != nil {
+		slog.Error("admin: 设置模型自动发现失败", "upstream_id", id, "error", err)
+		jsonError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	// 启用时立即触发探活以发现模型
+	if req.Enabled {
+		go func() {
+			defer func() { recover() }()
+			h.prober.ProbeNow()
+		}()
+	}
+
+	slog.Info("admin: 模型自动发现设置已更新", "upstream_id", id, "enabled", req.Enabled)
+	jsonOK(w, map[string]interface{}{
+		"status":               "updated",
+		"auto_discover_models": req.Enabled,
+	})
+}
+
+// --- SSE 实时事件推送 ---
+
+// activeSSEConns 限制并发 SSE 连接数，防止资源耗尽。
+var activeSSEConns atomic.Int64
+
+// sseEvents 通过 Server-Sent Events 向管理面板推送实时状态（RPM、RPS、活跃请求数、健康上游数）。
+// 每 5 秒发送一次状态事件，每 15 秒发送一次心跳保活注释。
+func (h *AdminHandler) sseEvents(w http.ResponseWriter, r *http.Request) {
+	if activeSSEConns.Add(1) > 10 {
+		activeSSEConns.Add(-1)
+		jsonError(w, http.StatusTooManyRequests, "too many SSE connections")
+		return
+	}
+	defer activeSSEConns.Add(-1)
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		jsonError(w, http.StatusInternalServerError, "streaming not supported")
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	flusher.Flush()
+
+	ctx := r.Context()
+	statusTicker := time.NewTicker(5 * time.Second)
+	heartbeatTicker := time.NewTicker(15 * time.Second)
+	defer statusTicker.Stop()
+	defer heartbeatTicker.Stop()
+
+	// 立即发送一次初始状态
+	h.sendSSEStatus(w, flusher)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-statusTicker.C:
+			h.sendSSEStatus(w, flusher)
+		case <-heartbeatTicker.C:
+			fmt.Fprintf(w, ":ping\n\n")
+			flusher.Flush()
+		}
+	}
+}
+
+// sendSSEStatus 向 SSE 连接发送一条状态事件。
+func (h *AdminHandler) sendSSEStatus(w http.ResponseWriter, flusher http.Flusher) {
+	var rpm int
+	var rps string
+	if h.requestCounter != nil {
+		rpm = h.requestCounter.RPM()
+		rps = fmt.Sprintf("%.1f", h.requestCounter.RPS())
+	} else {
+		rpm = 0
+		rps = "0.0"
+	}
+
+	healthyCount := len(h.dynamicProxy.GetAllUpstreams())
+
+	payload := map[string]interface{}{
+		"type":              "status",
+		"rpm":               rpm,
+		"rps":               rps,
+		"active_requests":   h.dynamicProxy.ActiveRequests(),
+		"healthy_upstreams": healthyCount,
+		"timestamp":         time.Now().UTC(),
+	}
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	fmt.Fprintf(w, "data: %s\n\n", data)
+	flusher.Flush()
+}
+
+// --- 上游拖拽排序 ---
+
+// reorderUpstreams 按前端传入的 ID 顺序重新排列上游优先级。
+func (h *AdminHandler) reorderUpstreams(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		IDs []int64 `json:"ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if len(req.IDs) == 0 {
+		jsonError(w, http.StatusBadRequest, "ids is required")
+		return
+	}
+	// 校验所有 ID 为正整数
+	for _, id := range req.IDs {
+		if id <= 0 {
+			jsonError(w, http.StatusBadRequest, fmt.Sprintf("invalid upstream id: %d", id))
+			return
+		}
+	}
+
+	if err := h.store.ReorderUpstreams(req.IDs); err != nil {
+		slog.Error("admin: 上游排序失败", "error", err)
+		jsonError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	// 触发探活以按新优先级重新加载上游
+	go func() {
+		defer func() { recover() }()
+		h.prober.ProbeNow()
+	}()
+
+	slog.Info("admin: 上游排序已更新", "ids", req.IDs)
+	jsonOK(w, map[string]interface{}{"status": "reordered"})
+}
+
+// --- 快捷操作 ---
+
+// pauseAllUpstreams 一键禁用所有上游。
+func (h *AdminHandler) pauseAllUpstreams(w http.ResponseWriter, r *http.Request) {
+	affected, err := h.store.SetAllUpstreamsEnabled(false)
+	if err != nil {
+		slog.Error("admin: 全部暂停上游失败", "error", err)
+		jsonError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	go func() {
+		defer func() { recover() }()
+		h.prober.ProbeNow()
+	}()
+	slog.Info("admin: 全部上游已暂停", "affected", affected)
+	jsonOK(w, map[string]interface{}{"status": "paused", "affected": affected})
+}
+
+// resumeAllUpstreams 一键启用所有上游。
+func (h *AdminHandler) resumeAllUpstreams(w http.ResponseWriter, r *http.Request) {
+	affected, err := h.store.SetAllUpstreamsEnabled(true)
+	if err != nil {
+		slog.Error("admin: 全部恢复上游失败", "error", err)
+		jsonError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	go func() {
+		defer func() { recover() }()
+		h.prober.ProbeNow()
+	}()
+	slog.Info("admin: 全部上游已恢复", "affected", affected)
+	jsonOK(w, map[string]interface{}{"status": "resumed", "affected": affected})
+}
+
+// refreshAllCaches 一键刷新所有内存缓存并触发探活。
+func (h *AdminHandler) refreshAllCaches(w http.ResponseWriter, r *http.Request) {
+	if err := h.keyCache.Reload(h.store); err != nil {
+		slog.Error("admin: 刷新 key cache 失败", "error", err)
+	}
+	if h.overrideCache != nil {
+		h.overrideCache.Reload()
+	}
+	if h.bindingCache != nil {
+		h.bindingCache.Reload()
+	}
+	if h.modelFilter != nil {
+		h.modelFilter.Reload()
+		h.modelFilter.ReloadDeclaredModels()
+	}
+	go func() {
+		defer func() { recover() }()
+		h.prober.ProbeNow()
+	}()
+	slog.Info("admin: 全部缓存已刷新")
+	jsonOK(w, map[string]interface{}{"status": "refreshed"})
 }
 
 // --- Dashboard 页面 ---

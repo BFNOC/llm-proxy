@@ -13,8 +13,10 @@ type UpstreamProvider struct {
 	KeySchedulingMode  string // "round-robin"（默认）或 "fill"
 	AuthMode           string // "api_key"（默认，x-api-key）或 "oauth"（Authorization: Bearer）
 	Remark             string // 管理员备注（Key 来源、用途等）
-	WebSocketEnabled   bool   `json:"websocket_enabled"` // 是否允许 WebSocket 透传
-	Healthy            bool   // 仅运行时使用，不持久化
+	WebSocketEnabled   bool       `json:"websocket_enabled"`            // 是否允许 WebSocket 透传
+	AutoDiscoverModels bool       `json:"auto_discover_models"`          // 是否启用模型自动发现
+	LastModelDiscovery *time.Time `json:"last_model_discovery,omitempty"` // 上次成功发现模型的时间
+	Healthy            bool       // 仅运行时使用，不持久化
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
 }

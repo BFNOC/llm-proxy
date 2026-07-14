@@ -3,14 +3,14 @@ function loadStatus() {
     if (typeof loadLatencyChart === 'function') loadLatencyChart();
     api('/status').then(d => {
         const grid = document.getElementById('status-grid');
-        const statCard = (label, value, color) => '<div style="background:var(--bg);padding:16px;border-radius:var(--radius-sm);border:1px solid var(--border);text-align:center;"><div style="font-size:1.5rem;font-weight:700;color:'+(color||'var(--text)')+';">'+value+'</div><div style="font-size:0.75rem;color:var(--text-dim);margin-top:4px;">'+label+'</div></div>';
+        const statCard = (label, value, color, liveKey) => '<div style="background:var(--bg);padding:16px;border-radius:var(--radius-sm);border:1px solid var(--border);text-align:center;"><div'+(liveKey?' data-live="'+liveKey+'"':'')+' style="font-size:1.5rem;font-weight:700;color:'+(color||'var(--text)')+';">'+value+'</div><div style="font-size:0.75rem;color:var(--text-dim);margin-top:4px;">'+label+'</div></div>';
         grid.innerHTML = statCard('版本', esc(d.version||'-'), 'var(--accent)') +
             statCard('运行时间', esc(d.uptime||'-'), 'var(--green)') +
             statCard('密钥数量', d.total_keys||0) +
             statCard('今日请求', d.today_requests||0, 'var(--orange)') +
-            statCard('并发请求', d.active_requests||0, 'var(--accent)') +
-            statCard('RPM', d.rpm||0, 'var(--green)') +
-            statCard('RPS', d.rps||'0.0', 'var(--orange)') +
+            statCard('并发请求', d.active_requests||0, 'var(--accent)', 'active') +
+            statCard('RPM', d.rpm||0, 'var(--green)', 'rpm') +
+            statCard('RPS', d.rps||'0.0', 'var(--orange)', 'rps') +
             statCard('审计丢弃', d.audit_dropped||0, d.audit_dropped>0?'var(--red)':'var(--green)');
 
         const container = document.getElementById('status-upstreams');
