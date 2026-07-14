@@ -928,3 +928,1571 @@ func TestUpstreamModelPatterns_EmptyByDefault(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, patterns, "no patterns by default")
 }
+
+// ---------------------------------------------------------------------------
+// ResetKeyFailures
+// ---------------------------------------------------------------------------
+
+func TestResetKeyFailures_AfterIncrement(t *testing.T) {
+	s := newTestStore(t)
+	up, err := s.CreateUpstream("up", "https://a.example.com", []string{"key-a"}, 0, "", "", "", "")
+	require.NoError(t, err)
+
+	keys, err := s.GetUpstreamAllAPIKeys(up.ID)
+	require.NoError(t, err)
+	require.Len(t, keys, 1)
+	rowID := keys[0].RowID
+
+	// Increment failures a few times (threshold=0 means never auto-disable)
+	_, err = s.IncrKeyFailures(up.ID, rowID, 0)
+	require.NoError(t, err)
+	_, err = s.IncrKeyFailures(up.ID, rowID, 0)
+	require.NoError(t, err)
+
+	// Verify failures are non-zero
+	keysAfterIncr, err := s.GetUpstreamAllAPIKeys(up.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 2, keysAfterIncr[0].ConsecutiveFails)
+
+	// Reset
+	err = s.ResetKeyFailures(up.ID, rowID)
+	require.NoError(t, err)
+
+	keysAfterReset, err := s.GetUpstreamAllAPIKeys(up.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 0, keysAfterReset[0].ConsecutiveFails)
+}
+
+func TestResetKeyFailures_NonExistentKey(t *testing.T) {
+	s := newTestStore(t)
+	// Should not error even if the row doesn't exist (UPDATE affects 0 rows)
+	err := s.ResetKeyFailures(9999, 9999)
+	assert.NoError(t, err)
+}
+
+func TestResetKeyFailures_AlreadyZero(t *testing.T) {
+	s := newTestStore(t)
+	up, err := s.CreateUpstream("up", "https://a.example.com", []string{"key"}, 0, "", "", "", "")
+	require.NoError(t, err)
+
+	keys, err := s.GetUpstreamAllAPIKeys(up.ID)
+	require.NoError(t, err)
+
+	// Reset when already zero should be a no-op
+	err = s.ResetKeyFailures(up.ID, keys[0].RowID)
+	require.NoError(t, err)
+
+	keysAfter, err := s.GetUpstreamAllAPIKeys(up.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 0, keysAfter[0].ConsecutiveFails)
+}
+
+// ---------------------------------------------------------------------------
+// SetSetting / GetSetting
+// ---------------------------------------------------------------------------
+
+func TestSetting_SetAndGet(t *testing.T) {
+	s := newTestStore(t)
+
+	err := s.SetSetting("my_key", "my_value")
+	require.NoError(t, err)
+
+	val, err := s.GetSetting("my_key", "default")
+	require.NoError(t, err)
+	assert.Equal(t, "my_value", val)
+}
+
+func TestSetting_GetMissing_ReturnsDefault(t *testing.T) {
+	s := newTestStore(t)
+
+	val, err := s.GetSetting("nonexistent", "fallback")
+	require.NoError(t, err)
+	assert.Equal(t, "fallback", val)
+}
+
+func TestSetting_Upsert(t *testing.T) {
+	s := newTestStore(t)
+
+	err := s.SetSetting("threshold", "5")
+	require.NoError(t, err)
+
+	err = s.SetSetting("threshold", "10")
+	require.NoError(t, err)
+
+	val, err := s.GetSetting("threshold", "0")
+	require.NoError(t, err)
+	assert.Equal(t, "10", val)
+}
+
+func TestSetting_EmptyValue(t *testing.T) {
+	s := newTestStore(t)
+
+	err := s.SetSetting("empty", "")
+	require.NoError(t, err)
+
+	val, err := s.GetSetting("empty", "default")
+	require.NoError(t, err)
+	assert.Equal(t, "", val, "empty string should be stored, not treated as missing")
+}
+
+func TestSetting_MultipleKeys(t *testing.T) {
+	s := newTestStore(t)
+
+	require.NoError(t, s.SetSetting("a", "1"))
+	require.NoError(t, s.SetSetting("b", "2"))
+	require.NoError(t, s.SetSetting("c", "3"))
+
+	v1, _ := s.GetSetting("a", "")
+	v2, _ := s.GetSetting("b", "")
+	v3, _ := s.GetSetting("c", "")
+	assert.Equal(t, "1", v1)
+	assert.Equal(t, "2", v2)
+	assert.Equal(t, "3", v3)
+}
+
+// ---------------------------------------------------------------------------
+// AutoDisableFailingKeys
+// ---------------------------------------------------------------------------
+
+func TestAutoDisableFailingKeys_DisablesAboveThreshold(t *testing.T) {
+	s := newTestStore(t)
+	up, err := s.CreateUpstream("up", "https://a.example.com", []string{"key-a", "key-b", "key-c"}, 0, "", "", "", "")
+	require.NoError(t, err)
+
+	keys, err := s.GetUpstreamAllAPIKeys(up.ID)
+	require.NoError(t, err)
+	require.Len(t, keys, 3)
+
+	// Increment key-a failures to 3 (threshold=0 to avoid auto-disable during increment)
+	for i := 0; i < 3; i++ {
+		_, err = s.IncrKeyFailures(up.ID, keys[0].RowID, 0)
+		require.NoError(t, err)
+	}
+	// Increment key-b failures to 1
+	_, err = s.IncrKeyFailures(up.ID, keys[1].RowID, 0)
+	require.NoError(t, err)
+	// key-c stays at 0
+
+	// Auto-disable keys with >= 2 failures
+	affected, err := s.AutoDisableFailingKeys(2)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), affected, "only key-a (3 failures) should be disabled")
+
+	keysAfter, err := s.GetUpstreamAllAPIKeys(up.ID)
+	require.NoError(t, err)
+	for _, k := range keysAfter {
+		if k.RowID == keys[0].RowID {
+			assert.False(t, k.Enabled, "key-a should be disabled")
+		} else {
+			assert.True(t, k.Enabled, "keys below threshold should stay enabled")
+		}
+	}
+}
+
+func TestAutoDisableFailingKeys_NoKeysAboveThreshold(t *testing.T) {
+	s := newTestStore(t)
+	up, err := s.CreateUpstream("up", "https://a.example.com", []string{"key"}, 0, "", "", "", "")
+	require.NoError(t, err)
+
+	keys, err := s.GetUpstreamAllAPIKeys(up.ID)
+	require.NoError(t, err)
+
+	// Only 1 failure, threshold is 5
+	_, err = s.IncrKeyFailures(up.ID, keys[0].RowID, 0)
+	require.NoError(t, err)
+
+	affected, err := s.AutoDisableFailingKeys(5)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), affected)
+}
+
+func TestAutoDisableFailingKeys_AlreadyDisabledNotCounted(t *testing.T) {
+	s := newTestStore(t)
+	up, err := s.CreateUpstream("up", "https://a.example.com", []string{"key-a"}, 0, "", "", "", "")
+	require.NoError(t, err)
+
+	keys, err := s.GetUpstreamAllAPIKeys(up.ID)
+	require.NoError(t, err)
+
+	// Increment failures and manually disable
+	for i := 0; i < 5; i++ {
+		_, err = s.IncrKeyFailures(up.ID, keys[0].RowID, 0)
+		require.NoError(t, err)
+	}
+	require.NoError(t, s.SetAPIKeyEnabled(up.ID, keys[0].RowID, false))
+
+	// AutoDisable should not affect already-disabled keys
+	affected, err := s.AutoDisableFailingKeys(2)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), affected)
+}
+
+// ---------------------------------------------------------------------------
+// GetKeyUsageStats
+// ---------------------------------------------------------------------------
+
+func TestGetKeyUsageStats_Empty(t *testing.T) {
+	s := newTestStore(t)
+	stats, err := s.GetKeyUsageStats()
+	require.NoError(t, err)
+	assert.Empty(t, stats)
+}
+
+func TestGetKeyUsageStats_Aggregation(t *testing.T) {
+	s := newTestStore(t)
+	_, dk1, err := s.CreateKey("stats-key-1", 0)
+	require.NoError(t, err)
+	_, dk2, err := s.CreateKey("stats-key-2", 0)
+	require.NoError(t, err)
+
+	now := time.Now().UTC()
+	logs := []RequestLog{
+		// dk1: 2 success (200), 1 error (500)
+		{DownstreamKeyID: dk1.ID, ProviderStyle: "openai", Path: "/v1/chat", StatusCode: 200, LatencyMs: 100, CreatedAt: now},
+		{DownstreamKeyID: dk1.ID, ProviderStyle: "openai", Path: "/v1/chat", StatusCode: 200, LatencyMs: 200, CreatedAt: now},
+		{DownstreamKeyID: dk1.ID, ProviderStyle: "openai", Path: "/v1/chat", StatusCode: 500, LatencyMs: 300, CreatedAt: now},
+		// dk2: 1 success
+		{DownstreamKeyID: dk2.ID, ProviderStyle: "openai", Path: "/v1/chat", StatusCode: 200, LatencyMs: 50, CreatedAt: now},
+	}
+	require.NoError(t, s.InsertRequestLogBatch(logs))
+
+	stats, err := s.GetKeyUsageStats()
+	require.NoError(t, err)
+	require.Len(t, stats, 2)
+
+	// Results ordered by total DESC, so dk1 (3 total) comes first
+	assert.Equal(t, dk1.ID, stats[0].KeyID)
+	assert.Equal(t, 3, stats[0].Total)
+	assert.Equal(t, 2, stats[0].Success)
+	assert.Equal(t, 1, stats[0].Error)
+	assert.InDelta(t, 200.0, stats[0].AvgLatencyMs, 0.1) // (100+200+300)/3
+
+	assert.Equal(t, dk2.ID, stats[1].KeyID)
+	assert.Equal(t, 1, stats[1].Total)
+	assert.Equal(t, 1, stats[1].Success)
+	assert.Equal(t, 0, stats[1].Error)
+	assert.InDelta(t, 50.0, stats[1].AvgLatencyMs, 0.1)
+}
+
+// ---------------------------------------------------------------------------
+// DeleteModelWhitelist / BatchDeleteModelWhitelist
+// ---------------------------------------------------------------------------
+
+func TestDeleteModelWhitelist_Success(t *testing.T) {
+	s := newTestStore(t)
+
+	entry, err := s.AddModelWhitelist("claude-*")
+	require.NoError(t, err)
+
+	err = s.DeleteModelWhitelist(entry.ID)
+	require.NoError(t, err)
+
+	list, err := s.ListModelWhitelist()
+	require.NoError(t, err)
+	assert.Empty(t, list)
+}
+
+func TestDeleteModelWhitelist_NotFound(t *testing.T) {
+	s := newTestStore(t)
+	err := s.DeleteModelWhitelist(9999)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}
+
+func TestBatchDeleteModelWhitelist_Multiple(t *testing.T) {
+	s := newTestStore(t)
+
+	e1, err := s.AddModelWhitelist("gpt-*")
+	require.NoError(t, err)
+	e2, err := s.AddModelWhitelist("claude-*")
+	require.NoError(t, err)
+	_, err = s.AddModelWhitelist("o1-*")
+	require.NoError(t, err)
+
+	deleted, err := s.BatchDeleteModelWhitelist([]int64{e1.ID, e2.ID})
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), deleted)
+
+	list, err := s.ListModelWhitelist()
+	require.NoError(t, err)
+	assert.Len(t, list, 1)
+	assert.Equal(t, "o1-*", list[0].Pattern)
+}
+
+func TestBatchDeleteModelWhitelist_Empty(t *testing.T) {
+	s := newTestStore(t)
+	deleted, err := s.BatchDeleteModelWhitelist([]int64{})
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), deleted)
+}
+
+func TestBatchDeleteModelWhitelist_NonExistentIDs(t *testing.T) {
+	s := newTestStore(t)
+	deleted, err := s.BatchDeleteModelWhitelist([]int64{9999, 8888})
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), deleted)
+}
+
+// ---------------------------------------------------------------------------
+// SetKeyModelOverrides / GetKeyModelOverrides
+// ---------------------------------------------------------------------------
+
+func TestKeyModelOverrides_SetAndGet(t *testing.T) {
+	s := newTestStore(t)
+	_, dk, err := s.CreateKey("override-key", 0)
+	require.NoError(t, err)
+	u1, err := s.CreateUpstream("up1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "")
+	require.NoError(t, err)
+	u2, err := s.CreateUpstream("up2", "https://b.example.com", []string{"kb"}, 0, "", "", "", "")
+	require.NoError(t, err)
+
+	overrides := []KeyModelOverrideInput{
+		{ModelPattern: "claude-*", UpstreamID: u1.ID},
+		{ModelPattern: "gpt-4o", UpstreamID: u2.ID},
+	}
+	err = s.SetKeyModelOverrides(dk.ID, overrides)
+	require.NoError(t, err)
+
+	got, err := s.GetKeyModelOverrides(dk.ID)
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	assert.Equal(t, dk.ID, got[0].DownstreamKeyID)
+	assert.Equal(t, dk.ID, got[1].DownstreamKeyID)
+
+	// Ordered by model_pattern, upstream_id
+	patterns := []string{got[0].ModelPattern, got[1].ModelPattern}
+	assert.Contains(t, patterns, "claude-*")
+	assert.Contains(t, patterns, "gpt-4o")
+}
+
+func TestKeyModelOverrides_Overwrite(t *testing.T) {
+	s := newTestStore(t)
+	_, dk, err := s.CreateKey("ow-key", 0)
+	require.NoError(t, err)
+	u1, err := s.CreateUpstream("u1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "")
+	require.NoError(t, err)
+	u2, err := s.CreateUpstream("u2", "https://b.example.com", []string{"kb"}, 0, "", "", "", "")
+	require.NoError(t, err)
+
+	err = s.SetKeyModelOverrides(dk.ID, []KeyModelOverrideInput{
+		{ModelPattern: "old-*", UpstreamID: u1.ID},
+	})
+	require.NoError(t, err)
+
+	// Overwrite with new set
+	err = s.SetKeyModelOverrides(dk.ID, []KeyModelOverrideInput{
+		{ModelPattern: "new-*", UpstreamID: u2.ID},
+	})
+	require.NoError(t, err)
+
+	got, err := s.GetKeyModelOverrides(dk.ID)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "new-*", got[0].ModelPattern)
+	assert.Equal(t, u2.ID, got[0].UpstreamID)
+}
+
+func TestKeyModelOverrides_Clear(t *testing.T) {
+	s := newTestStore(t)
+	_, dk, err := s.CreateKey("clear-key", 0)
+	require.NoError(t, err)
+	u1, err := s.CreateUpstream("u1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "")
+	require.NoError(t, err)
+
+	err = s.SetKeyModelOverrides(dk.ID, []KeyModelOverrideInput{
+		{ModelPattern: "claude-*", UpstreamID: u1.ID},
+	})
+	require.NoError(t, err)
+
+	// Clear all overrides
+	err = s.SetKeyModelOverrides(dk.ID, []KeyModelOverrideInput{})
+	require.NoError(t, err)
+
+	got, err := s.GetKeyModelOverrides(dk.ID)
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}
+
+func TestKeyModelOverrides_GetEmptyByDefault(t *testing.T) {
+	s := newTestStore(t)
+	_, dk, err := s.CreateKey("no-override-key", 0)
+	require.NoError(t, err)
+
+	got, err := s.GetKeyModelOverrides(dk.ID)
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}
+
+func TestKeyModelOverrides_MultipleUpstreamsForSamePattern(t *testing.T) {
+	s := newTestStore(t)
+	_, dk, err := s.CreateKey("multi-key", 0)
+	require.NoError(t, err)
+	u1, err := s.CreateUpstream("u1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "")
+	require.NoError(t, err)
+	u2, err := s.CreateUpstream("u2", "https://b.example.com", []string{"kb"}, 0, "", "", "", "")
+	require.NoError(t, err)
+
+	// Same model pattern, two upstreams (for failover)
+	err = s.SetKeyModelOverrides(dk.ID, []KeyModelOverrideInput{
+		{ModelPattern: "claude-*", UpstreamID: u1.ID},
+		{ModelPattern: "claude-*", UpstreamID: u2.ID},
+	})
+	require.NoError(t, err)
+
+	got, err := s.GetKeyModelOverrides(dk.ID)
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	assert.Equal(t, "claude-*", got[0].ModelPattern)
+	assert.Equal(t, "claude-*", got[1].ModelPattern)
+}
+
+func TestGetAllKeyModelOverrides(t *testing.T) {
+	s := newTestStore(t)
+	_, dk1, err := s.CreateKey("k1", 0)
+	require.NoError(t, err)
+	_, dk2, err := s.CreateKey("k2", 0)
+	require.NoError(t, err)
+	u1, err := s.CreateUpstream("u1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "")
+	require.NoError(t, err)
+
+	require.NoError(t, s.SetKeyModelOverrides(dk1.ID, []KeyModelOverrideInput{
+		{ModelPattern: "claude-*", UpstreamID: u1.ID},
+	}))
+	require.NoError(t, s.SetKeyModelOverrides(dk2.ID, []KeyModelOverrideInput{
+		{ModelPattern: "gpt-*", UpstreamID: u1.ID},
+	}))
+
+	all, err := s.GetAllKeyModelOverrides()
+	require.NoError(t, err)
+	require.Len(t, all[dk1.ID], 1)
+	assert.Equal(t, "claude-*", all[dk1.ID][0].ModelPattern)
+	require.Len(t, all[dk2.ID], 1)
+	assert.Equal(t, "gpt-*", all[dk2.ID][0].ModelPattern)
+}
+
+func TestGetAllKeyModelOverrides_Empty(t *testing.T) {
+	s := newTestStore(t)
+	all, err := s.GetAllKeyModelOverrides()
+	require.NoError(t, err)
+	assert.Empty(t, all)
+}
+
+// ---------------------------------------------------------------------------
+// InsertRequestLogBatch (additional coverage for extra fields)
+// ---------------------------------------------------------------------------
+
+func TestInsertRequestLogBatch_AllFields(t *testing.T) {
+	s := newTestStore(t)
+	_, dk, err := s.CreateKey("log-key", 0)
+	require.NoError(t, err)
+
+	now := time.Now().UTC()
+	logs := []RequestLog{
+		{
+			DownstreamKeyID: dk.ID,
+			UpstreamName:    "openai-prod",
+			UpstreamKeyIdx:  2,
+			Model:           "gpt-4o",
+			UsedProxy:       "http://proxy.example.com:8080",
+			ClientIP:        "1.2.3.4",
+			IPRegion:        "US",
+			ProviderStyle:   "openai",
+			Path:            "/v1/chat/completions",
+			StatusCode:      200,
+			LatencyMs:       150,
+			CreatedAt:       now,
+		},
+	}
+	err = s.InsertRequestLogBatch(logs)
+	require.NoError(t, err)
+
+	results, err := s.QueryLogs(dk.ID, now.Add(-time.Minute), now.Add(time.Minute), 0)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+
+	r := results[0]
+	assert.Equal(t, "openai-prod", r.UpstreamName)
+	assert.Equal(t, 2, r.UpstreamKeyIdx)
+	assert.Equal(t, "gpt-4o", r.Model)
+	assert.Equal(t, "http://proxy.example.com:8080", r.UsedProxy)
+	assert.Equal(t, "1.2.3.4", r.ClientIP)
+	assert.Equal(t, "US", r.IPRegion)
+}
+
+func TestInsertRequestLogBatch_ZeroCreatedAt(t *testing.T) {
+	s := newTestStore(t)
+	_, dk, err := s.CreateKey("zero-ts-key", 0)
+	require.NoError(t, err)
+
+	logs := []RequestLog{
+		{DownstreamKeyID: dk.ID, ProviderStyle: "openai", Path: "/v1/chat", StatusCode: 200, LatencyMs: 10},
+		// CreatedAt is zero
+	}
+	err = s.InsertRequestLogBatch(logs)
+	require.NoError(t, err)
+
+	// Should have auto-filled CreatedAt, so query with a wide window should find it
+	results, err := s.QueryLogs(dk.ID, time.Now().Add(-time.Hour), time.Now().Add(time.Hour), 0)
+	require.NoError(t, err)
+	assert.Len(t, results, 1)
+	assert.False(t, results[0].CreatedAt.IsZero(), "zero CreatedAt should be auto-filled")
+}
+
+// ---------------------------------------------------------------------------
+// IncrKeyFailures (dedicated deeper coverage)
+// ---------------------------------------------------------------------------
+
+func TestIncrKeyFailures_ReturnsNewCount(t *testing.T) {
+	s := newTestStore(t)
+	up, err := s.CreateUpstream("up", "https://a.example.com", []string{"key-a"}, 0, "", "", "", "")
+	require.NoError(t, err)
+
+	keys, err := s.GetUpstreamAllAPIKeys(up.ID)
+	require.NoError(t, err)
+	require.Len(t, keys, 1)
+	rowID := keys[0].RowID
+
+	count, err := s.IncrKeyFailures(up.ID, rowID, 0)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+
+	count, err = s.IncrKeyFailures(up.ID, rowID, 0)
+	require.NoError(t, err)
+	assert.Equal(t, 2, count)
+
+	count, err = s.IncrKeyFailures(up.ID, rowID, 0)
+	require.NoError(t, err)
+	assert.Equal(t, 3, count)
+}
+
+func TestIncrKeyFailures_AutoDisableAtThreshold(t *testing.T) {
+	s := newTestStore(t)
+	up, err := s.CreateUpstream("up", "https://a.example.com", []string{"key-a"}, 0, "", "", "", "")
+	require.NoError(t, err)
+
+	keys, err := s.GetUpstreamAllAPIKeys(up.ID)
+	require.NoError(t, err)
+	rowID := keys[0].RowID
+
+	// threshold=3: first two increments should not disable
+	count, err := s.IncrKeyFailures(up.ID, rowID, 3)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+	keysAfter, _ := s.GetUpstreamAllAPIKeys(up.ID)
+	assert.True(t, keysAfter[0].Enabled, "should still be enabled below threshold")
+
+	count, err = s.IncrKeyFailures(up.ID, rowID, 3)
+	require.NoError(t, err)
+	assert.Equal(t, 2, count)
+	keysAfter, _ = s.GetUpstreamAllAPIKeys(up.ID)
+	assert.True(t, keysAfter[0].Enabled, "should still be enabled below threshold")
+
+	// Third increment reaches threshold=3, should auto-disable
+	count, err = s.IncrKeyFailures(up.ID, rowID, 3)
+	require.NoError(t, err)
+	assert.Equal(t, 3, count)
+	keysAfter, _ = s.GetUpstreamAllAPIKeys(up.ID)
+	assert.False(t, keysAfter[0].Enabled, "should be disabled at threshold")
+}
+
+func TestIncrKeyFailures_NonExistentKey(t *testing.T) {
+	s := newTestStore(t)
+	// IncrKeyFailures on non-existent row: the UPDATE affects 0 rows, but the
+	// subsequent SELECT should fail because the row doesn't exist.
+	_, err := s.IncrKeyFailures(9999, 9999, 0)
+	require.Error(t, err, "should error when key row does not exist")
+}
+
+// ---------------------------------------------------------------------------
+// GetAllUpstreamAPIKeyRowIDs
+// ---------------------------------------------------------------------------
+
+func TestGetAllUpstreamAPIKeyRowIDs_Empty(t *testing.T) {
+	s := newTestStore(t)
+	result, err := s.GetAllUpstreamAPIKeyRowIDs()
+	require.NoError(t, err)
+	assert.Empty(t, result)
+}
+
+func TestGetAllUpstreamAPIKeyRowIDs_MultipleUpstreams(t *testing.T) {
+	s := newTestStore(t)
+	u1, err := s.CreateUpstream("up1", "https://a.example.com", []string{"k1", "k2"}, 0, "", "", "", "")
+	require.NoError(t, err)
+	u2, err := s.CreateUpstream("up2", "https://b.example.com", []string{"k3"}, 0, "", "", "", "")
+	require.NoError(t, err)
+
+	result, err := s.GetAllUpstreamAPIKeyRowIDs()
+	require.NoError(t, err)
+	assert.Len(t, result[u1.ID], 2, "upstream 1 should have 2 key row IDs")
+	assert.Len(t, result[u2.ID], 1, "upstream 2 should have 1 key row ID")
+
+	// Row IDs should be positive integers
+	for _, rowID := range result[u1.ID] {
+		assert.Positive(t, rowID)
+	}
+	assert.Positive(t, result[u2.ID][0])
+}
+
+func TestGetAllUpstreamAPIKeyRowIDs_ExcludesDisabled(t *testing.T) {
+	s := newTestStore(t)
+	up, err := s.CreateUpstream("up", "https://a.example.com", []string{"k1", "k2"}, 0, "", "", "", "")
+	require.NoError(t, err)
+
+	keys, err := s.GetUpstreamAllAPIKeys(up.ID)
+	require.NoError(t, err)
+	require.Len(t, keys, 2)
+
+	// Disable the first key
+	require.NoError(t, s.SetAPIKeyEnabled(up.ID, keys[0].RowID, false))
+
+	result, err := s.GetAllUpstreamAPIKeyRowIDs()
+	require.NoError(t, err)
+	assert.Len(t, result[up.ID], 1, "disabled key should be excluded")
+	assert.Equal(t, keys[1].RowID, result[up.ID][0])
+}
+
+// ---------------------------------------------------------------------------
+// GetKeyPlaintext
+// ---------------------------------------------------------------------------
+
+func TestGetKeyPlaintext_Success(t *testing.T) {
+	s := newTestStore(t)
+	plaintext, dk, err := s.CreateKey("test-key", 0)
+	require.NoError(t, err)
+
+	recovered, err := s.GetKeyPlaintext(dk.ID)
+	require.NoError(t, err)
+	assert.Equal(t, plaintext, recovered, "should recover the original plaintext key")
+}
+
+func TestGetKeyPlaintext_NotFound(t *testing.T) {
+	s := newTestStore(t)
+	_, err := s.GetKeyPlaintext(9999)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}
+
+func TestGetKeyPlaintext_OldKeyReturnsEmpty(t *testing.T) {
+	s := newTestStore(t)
+
+	// Simulate an old key (pre-v12 migration) that has no encrypted field
+	now := time.Now().UTC()
+	h := sha256.Sum256([]byte("sk-oldkey"))
+	keyHash := hex.EncodeToString(h[:])
+	_, err := s.db.Exec(
+		`INSERT INTO downstream_keys (key_hash, key_prefix, name, rpm_limit, enabled, key_encrypted, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, 1, '', ?, ?)`,
+		keyHash, "sk-oldke", "old-key", 0, now, now,
+	)
+	require.NoError(t, err)
+
+	var id int64
+	err = s.db.QueryRow(`SELECT id FROM downstream_keys WHERE key_hash = ?`, keyHash).Scan(&id)
+	require.NoError(t, err)
+
+	plain, err := s.GetKeyPlaintext(id)
+	require.NoError(t, err)
+	assert.Equal(t, "", plain, "old key without encrypted field should return empty string")
+}
+
+// ---------------------------------------------------------------------------
+// LookupKeyByID
+// ---------------------------------------------------------------------------
+
+func TestLookupKeyByID_Success(t *testing.T) {
+	s := newTestStore(t)
+	_, dk, err := s.CreateKey("lookup-id-key", 42)
+	require.NoError(t, err)
+
+	found, err := s.LookupKeyByID(dk.ID)
+	require.NoError(t, err)
+	assert.Equal(t, dk.ID, found.ID)
+	assert.Equal(t, "lookup-id-key", found.Name)
+	assert.Equal(t, 42, found.RPMLimit)
+	assert.True(t, found.Enabled)
+	assert.Equal(t, dk.KeyHash, found.KeyHash)
+	assert.Equal(t, dk.KeyPrefix, found.KeyPrefix)
+}
+
+func TestLookupKeyByID_NotFound(t *testing.T) {
+	s := newTestStore(t)
+	_, err := s.LookupKeyByID(9999)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}
+
+func TestLookupKeyByID_DisabledKey(t *testing.T) {
+	s := newTestStore(t)
+	_, dk, err := s.CreateKey("disabled-key", 0)
+	require.NoError(t, err)
+
+	_, err = s.UpdateKey(dk.ID, "disabled-key", 0, false)
+	require.NoError(t, err)
+
+	found, err := s.LookupKeyByID(dk.ID)
+	require.NoError(t, err)
+	assert.Equal(t, dk.ID, found.ID)
+	assert.False(t, found.Enabled, "should return the key even when disabled")
+}
+
+// ---------------------------------------------------------------------------
+// Upstream Declared Models
+// ---------------------------------------------------------------------------
+
+func TestUpstreamDeclaredModels_SetAndGet(t *testing.T) {
+	s := newTestStore(t)
+	u, err := s.CreateUpstream("up", "https://a.example.com", []string{"key"}, 0, "", "", "", "")
+	require.NoError(t, err)
+
+	err = s.SetUpstreamDeclaredModels(u.ID, []string{"gpt-4o", "gpt-4o-mini", "claude-sonnet-4-20250514"})
+	require.NoError(t, err)
+
+	models, err := s.GetUpstreamDeclaredModels(u.ID)
+	require.NoError(t, err)
+	assert.Len(t, models, 3)
+	// Sorted by model_id
+	assert.Equal(t, "claude-sonnet-4-20250514", models[0])
+	assert.Equal(t, "gpt-4o", models[1])
+	assert.Equal(t, "gpt-4o-mini", models[2])
+}
+
+func TestUpstreamDeclaredModels_Overwrite(t *testing.T) {
+	s := newTestStore(t)
+	u, err := s.CreateUpstream("up", "https://a.example.com", []string{"key"}, 0, "", "", "", "")
+	require.NoError(t, err)
+
+	err = s.SetUpstreamDeclaredModels(u.ID, []string{"gpt-4o"})
+	require.NoError(t, err)
+
+	err = s.SetUpstreamDeclaredModels(u.ID, []string{"claude-sonnet-4-20250514", "claude-haiku-3.5"})
+	require.NoError(t, err)
+
+	models, err := s.GetUpstreamDeclaredModels(u.ID)
+	require.NoError(t, err)
+	assert.Len(t, models, 2)
+	assert.Contains(t, models, "claude-sonnet-4-20250514")
+	assert.Contains(t, models, "claude-haiku-3.5")
+}
+
+func TestUpstreamDeclaredModels_ClearModels(t *testing.T) {
+	s := newTestStore(t)
+	u, err := s.CreateUpstream("up", "https://a.example.com", []string{"key"}, 0, "", "", "", "")
+	require.NoError(t, err)
+
+	err = s.SetUpstreamDeclaredModels(u.ID, []string{"gpt-4o"})
+	require.NoError(t, err)
+
+	err = s.SetUpstreamDeclaredModels(u.ID, []string{})
+	require.NoError(t, err)
+
+	models, err := s.GetUpstreamDeclaredModels(u.ID)
+	require.NoError(t, err)
+	assert.Empty(t, models)
+}
+
+func TestUpstreamDeclaredModels_EmptyByDefault(t *testing.T) {
+	s := newTestStore(t)
+	u, err := s.CreateUpstream("up", "https://a.example.com", []string{"key"}, 0, "", "", "", "")
+	require.NoError(t, err)
+
+	models, err := s.GetUpstreamDeclaredModels(u.ID)
+	require.NoError(t, err)
+	assert.Empty(t, models)
+}
+
+func TestUpstreamDeclaredModels_CascadeDeleteUpstream(t *testing.T) {
+	s := newTestStore(t)
+	u, err := s.CreateUpstream("up", "https://a.example.com", []string{"key"}, 0, "", "", "", "")
+	require.NoError(t, err)
+
+	err = s.SetUpstreamDeclaredModels(u.ID, []string{"gpt-4o", "gpt-4o-mini"})
+	require.NoError(t, err)
+
+	err = s.DeleteUpstream(u.ID)
+	require.NoError(t, err)
+
+	models, err := s.GetUpstreamDeclaredModels(u.ID)
+	require.NoError(t, err)
+	assert.Empty(t, models, "declared models should cascade delete with upstream")
+}
+
+func TestGetAllUpstreamDeclaredModels_Empty(t *testing.T) {
+	s := newTestStore(t)
+	all, err := s.GetAllUpstreamDeclaredModels()
+	require.NoError(t, err)
+	assert.Empty(t, all)
+}
+
+func TestGetAllUpstreamDeclaredModels_MultipleUpstreams(t *testing.T) {
+	s := newTestStore(t)
+	u1, err := s.CreateUpstream("up1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "")
+	require.NoError(t, err)
+	u2, err := s.CreateUpstream("up2", "https://b.example.com", []string{"kb"}, 0, "", "", "", "")
+	require.NoError(t, err)
+
+	require.NoError(t, s.SetUpstreamDeclaredModels(u1.ID, []string{"gpt-4o"}))
+	require.NoError(t, s.SetUpstreamDeclaredModels(u2.ID, []string{"claude-sonnet-4-20250514", "claude-haiku-3.5"}))
+
+	all, err := s.GetAllUpstreamDeclaredModels()
+	require.NoError(t, err)
+	assert.Len(t, all[u1.ID], 1)
+	assert.Equal(t, "gpt-4o", all[u1.ID][0])
+	assert.Len(t, all[u2.ID], 2)
+}
+
+func TestGetAllUpstreamDeclaredModels_ExcludesDisabledUpstream(t *testing.T) {
+	s := newTestStore(t)
+	u1, err := s.CreateUpstream("up1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "")
+	require.NoError(t, err)
+	u2, err := s.CreateUpstream("up2", "https://b.example.com", []string{"kb"}, 0, "", "", "", "")
+	require.NoError(t, err)
+
+	require.NoError(t, s.SetUpstreamDeclaredModels(u1.ID, []string{"gpt-4o"}))
+	require.NoError(t, s.SetUpstreamDeclaredModels(u2.ID, []string{"claude-sonnet-4-20250514"}))
+
+	// Disable u1
+	_, err = s.UpdateUpstream(u1.ID, "up1", "https://a.example.com", nil, 0, false, "", "", "", "")
+	require.NoError(t, err)
+
+	all, err := s.GetAllUpstreamDeclaredModels()
+	require.NoError(t, err)
+	assert.Empty(t, all[u1.ID], "disabled upstream should not appear in GetAllUpstreamDeclaredModels")
+	assert.Len(t, all[u2.ID], 1)
+}
+
+// ---------------------------------------------------------------------------
+// Test Models CRUD
+// ---------------------------------------------------------------------------
+
+func TestTestModel_CreateAndList(t *testing.T) {
+	s := newTestStore(t)
+
+	m1, err := s.CreateTestModel("gpt-4o", "openai")
+	require.NoError(t, err)
+	require.NotNil(t, m1)
+	assert.Positive(t, m1.ID)
+	assert.Equal(t, "gpt-4o", m1.Name)
+	assert.Equal(t, "openai", m1.Protocol)
+	assert.False(t, m1.CreatedAt.IsZero())
+
+	m2, err := s.CreateTestModel("claude-sonnet-4-20250514", "anthropic")
+	require.NoError(t, err)
+	require.NotNil(t, m2)
+
+	// List all
+	all, err := s.ListTestModels("")
+	require.NoError(t, err)
+	assert.Len(t, all, 2)
+}
+
+func TestTestModel_ListByProtocol(t *testing.T) {
+	s := newTestStore(t)
+
+	_, err := s.CreateTestModel("gpt-4o", "openai")
+	require.NoError(t, err)
+	_, err = s.CreateTestModel("gpt-4o-mini", "openai")
+	require.NoError(t, err)
+	_, err = s.CreateTestModel("claude-sonnet-4-20250514", "anthropic")
+	require.NoError(t, err)
+
+	openaiModels, err := s.ListTestModels("openai")
+	require.NoError(t, err)
+	assert.Len(t, openaiModels, 2)
+	for _, m := range openaiModels {
+		assert.Equal(t, "openai", m.Protocol)
+	}
+
+	anthropicModels, err := s.ListTestModels("anthropic")
+	require.NoError(t, err)
+	assert.Len(t, anthropicModels, 1)
+	assert.Equal(t, "claude-sonnet-4-20250514", anthropicModels[0].Name)
+}
+
+func TestTestModel_ListEmpty(t *testing.T) {
+	s := newTestStore(t)
+	models, err := s.ListTestModels("")
+	require.NoError(t, err)
+	assert.Empty(t, models)
+}
+
+func TestTestModel_Update(t *testing.T) {
+	s := newTestStore(t)
+
+	m, err := s.CreateTestModel("old-model", "openai")
+	require.NoError(t, err)
+
+	err = s.UpdateTestModel(m.ID, "new-model", "anthropic")
+	require.NoError(t, err)
+
+	// Verify the update
+	models, err := s.ListTestModels("")
+	require.NoError(t, err)
+	require.Len(t, models, 1)
+	assert.Equal(t, "new-model", models[0].Name)
+	assert.Equal(t, "anthropic", models[0].Protocol)
+}
+
+func TestTestModel_UpdateNotFound(t *testing.T) {
+	s := newTestStore(t)
+	err := s.UpdateTestModel(9999, "name", "openai")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}
+
+func TestTestModel_Delete(t *testing.T) {
+	s := newTestStore(t)
+
+	m, err := s.CreateTestModel("to-delete", "openai")
+	require.NoError(t, err)
+
+	err = s.DeleteTestModel(m.ID)
+	require.NoError(t, err)
+
+	models, err := s.ListTestModels("")
+	require.NoError(t, err)
+	assert.Empty(t, models)
+}
+
+func TestTestModel_DeleteNotFound(t *testing.T) {
+	s := newTestStore(t)
+	err := s.DeleteTestModel(9999)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}
+
+// ---------------------------------------------------------------------------
+// SetKeyModelOverrides — deeper coverage (cascade behavior)
+// ---------------------------------------------------------------------------
+
+func TestKeyModelOverrides_CascadeDeleteKey(t *testing.T) {
+	s := newTestStore(t)
+	_, dk, err := s.CreateKey("cascade-override-key", 0)
+	require.NoError(t, err)
+	u1, err := s.CreateUpstream("u1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "")
+	require.NoError(t, err)
+
+	err = s.SetKeyModelOverrides(dk.ID, []KeyModelOverrideInput{
+		{ModelPattern: "claude-*", UpstreamID: u1.ID},
+	})
+	require.NoError(t, err)
+
+	// Delete the key — overrides should cascade
+	err = s.DeleteKey(dk.ID)
+	require.NoError(t, err)
+
+	got, err := s.GetKeyModelOverrides(dk.ID)
+	require.NoError(t, err)
+	assert.Empty(t, got, "overrides should cascade delete when key is deleted")
+}
+
+func TestKeyModelOverrides_CascadeDeleteUpstream(t *testing.T) {
+	s := newTestStore(t)
+	_, dk, err := s.CreateKey("cascade-up-override-key", 0)
+	require.NoError(t, err)
+	u1, err := s.CreateUpstream("u1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "")
+	require.NoError(t, err)
+	u2, err := s.CreateUpstream("u2", "https://b.example.com", []string{"kb"}, 0, "", "", "", "")
+	require.NoError(t, err)
+
+	err = s.SetKeyModelOverrides(dk.ID, []KeyModelOverrideInput{
+		{ModelPattern: "claude-*", UpstreamID: u1.ID},
+		{ModelPattern: "gpt-*", UpstreamID: u2.ID},
+	})
+	require.NoError(t, err)
+
+	// Delete u1 — only its override should cascade
+	err = s.DeleteUpstream(u1.ID)
+	require.NoError(t, err)
+
+	got, err := s.GetKeyModelOverrides(dk.ID)
+	require.NoError(t, err)
+	require.Len(t, got, 1, "only the override for u2 should remain")
+	assert.Equal(t, "gpt-*", got[0].ModelPattern)
+	assert.Equal(t, u2.ID, got[0].UpstreamID)
+}
+
+// ===========================================================================
+// EDGE-CASE / COVERAGE TESTS
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// CreateUpstream — edge cases
+// ---------------------------------------------------------------------------
+
+func TestCreateUpstream_EmptyAPIKeys_PublicUpstream(t *testing.T) {
+	s := newTestStore(t)
+
+	up, err := s.CreateUpstream("public", "https://public.example.com", []string{}, 5, "", "", "", "")
+	require.NoError(t, err)
+	assert.Empty(t, up.APIKeys, "public upstream should have no API keys")
+	assert.Equal(t, 5, up.Priority)
+	assert.True(t, up.Enabled)
+
+	got, err := s.GetUpstream(up.ID)
+	require.NoError(t, err)
+	assert.Empty(t, got.APIKeys)
+}
+
+func TestCreateUpstream_NilAPIKeys_PublicUpstream(t *testing.T) {
+	s := newTestStore(t)
+
+	up, err := s.CreateUpstream("nil-keys", "https://nil.example.com", nil, 0, "", "", "", "")
+	require.NoError(t, err)
+	assert.Empty(t, up.APIKeys)
+}
+
+func TestCreateUpstream_MultipleAPIKeys(t *testing.T) {
+	s := newTestStore(t)
+
+	keys := []string{"sk-key1", "sk-key2", "sk-key3"}
+	up, err := s.CreateUpstream("multi-key", "https://multi.example.com", keys, 0, "", "", "", "")
+	require.NoError(t, err)
+	assert.Equal(t, keys, up.APIKeys)
+
+	got, err := s.GetUpstream(up.ID)
+	require.NoError(t, err)
+	assert.Equal(t, keys, got.APIKeys)
+}
+
+func TestCreateUpstream_WithRemark(t *testing.T) {
+	s := newTestStore(t)
+
+	up, err := s.CreateUpstream("remarked", "https://r.example.com", []string{"k"}, 0, "", "", "", "donated by Alice")
+	require.NoError(t, err)
+	assert.Equal(t, "donated by Alice", up.Remark)
+
+	got, err := s.GetUpstream(up.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "donated by Alice", got.Remark)
+}
+
+func TestCreateUpstream_WithProxyURL(t *testing.T) {
+	s := newTestStore(t)
+
+	up, err := s.CreateUpstream("proxied", "https://p.example.com", []string{"k"}, 0, "http://proxy:8080", "", "", "")
+	require.NoError(t, err)
+	assert.Equal(t, "http://proxy:8080", up.ProxyURL)
+
+	got, err := s.GetUpstream(up.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "http://proxy:8080", got.ProxyURL)
+}
+
+func TestCreateUpstream_AllAuthModes(t *testing.T) {
+	s := newTestStore(t)
+
+	// Default (empty string should become "api_key")
+	up1, err := s.CreateUpstream("default-auth", "https://a.example.com", []string{"k"}, 0, "", "", "", "")
+	require.NoError(t, err)
+	assert.Equal(t, "api_key", up1.AuthMode)
+
+	// Explicit api_key
+	up2, err := s.CreateUpstream("api-key-auth", "https://b.example.com", []string{"k"}, 0, "", "", "api_key", "")
+	require.NoError(t, err)
+	assert.Equal(t, "api_key", up2.AuthMode)
+
+	// OAuth
+	up3, err := s.CreateUpstream("oauth-auth", "https://c.example.com", []string{"k"}, 0, "", "", "oauth", "")
+	require.NoError(t, err)
+	assert.Equal(t, "oauth", up3.AuthMode)
+
+	got, err := s.GetUpstream(up3.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "oauth", got.AuthMode)
+}
+
+func TestCreateUpstream_DefaultKeySchedulingMode(t *testing.T) {
+	s := newTestStore(t)
+
+	up, err := s.CreateUpstream("sched-default", "https://s.example.com", []string{"k"}, 0, "", "", "", "")
+	require.NoError(t, err)
+	assert.Equal(t, "round-robin", up.KeySchedulingMode)
+
+	up2, err := s.CreateUpstream("sched-fill", "https://s2.example.com", []string{"k"}, 0, "", "fill", "", "")
+	require.NoError(t, err)
+	assert.Equal(t, "fill", up2.KeySchedulingMode)
+}
+
+// ---------------------------------------------------------------------------
+// UpdateUpstream — edge cases
+// ---------------------------------------------------------------------------
+
+func TestUpdateUpstream_UpdateBaseURL(t *testing.T) {
+	s := newTestStore(t)
+
+	up, err := s.CreateUpstream("up", "https://old.example.com", []string{"k"}, 0, "", "", "", "")
+	require.NoError(t, err)
+
+	updated, err := s.UpdateUpstream(up.ID, "up", "https://new.example.com", nil, 0, true, "", "", "", "")
+	require.NoError(t, err)
+	assert.Equal(t, "https://new.example.com", updated.BaseURL)
+	// apiKeys=nil means keep existing keys
+	assert.Equal(t, []string{"k"}, updated.APIKeys)
+}
+
+func TestUpdateUpstream_UpdateProxyURL(t *testing.T) {
+	s := newTestStore(t)
+
+	up, err := s.CreateUpstream("up", "https://u.example.com", []string{"k"}, 0, "", "", "", "")
+	require.NoError(t, err)
+
+	updated, err := s.UpdateUpstream(up.ID, "up", "https://u.example.com", nil, 0, true, "socks5://proxy:1080", "", "", "")
+	require.NoError(t, err)
+	assert.Equal(t, "socks5://proxy:1080", updated.ProxyURL)
+}
+
+func TestUpdateUpstream_ClearProxyURL(t *testing.T) {
+	s := newTestStore(t)
+
+	up, err := s.CreateUpstream("up", "https://u.example.com", []string{"k"}, 0, "http://proxy:8080", "", "", "")
+	require.NoError(t, err)
+
+	updated, err := s.UpdateUpstream(up.ID, "up", "https://u.example.com", nil, 0, true, "", "", "", "")
+	require.NoError(t, err)
+	assert.Equal(t, "", updated.ProxyURL, "proxy_url should be cleared")
+}
+
+func TestUpdateUpstream_UpdateRemark(t *testing.T) {
+	s := newTestStore(t)
+
+	up, err := s.CreateUpstream("up", "https://u.example.com", []string{"k"}, 0, "", "", "", "old remark")
+	require.NoError(t, err)
+
+	updated, err := s.UpdateUpstream(up.ID, "up", "https://u.example.com", nil, 0, true, "", "", "", "new remark")
+	require.NoError(t, err)
+	assert.Equal(t, "new remark", updated.Remark)
+}
+
+func TestUpdateUpstream_UpdatePriority(t *testing.T) {
+	s := newTestStore(t)
+
+	up, err := s.CreateUpstream("up", "https://u.example.com", []string{"k"}, 1, "", "", "", "")
+	require.NoError(t, err)
+
+	updated, err := s.UpdateUpstream(up.ID, "up", "https://u.example.com", nil, 99, true, "", "", "", "")
+	require.NoError(t, err)
+	assert.Equal(t, 99, updated.Priority)
+}
+
+func TestUpdateUpstream_UpdateModelPatterns_ViaUpdate(t *testing.T) {
+	s := newTestStore(t)
+
+	up, err := s.CreateUpstream("up", "https://u.example.com", []string{"k"}, 0, "", "", "", "")
+	require.NoError(t, err)
+
+	// Set patterns separately then update upstream metadata
+	require.NoError(t, s.SetUpstreamModelPatterns(up.ID, []string{"gpt-*"}))
+
+	updated, err := s.UpdateUpstream(up.ID, "renamed", "https://u.example.com", nil, 5, true, "", "", "", "")
+	require.NoError(t, err)
+	assert.Equal(t, "renamed", updated.Name)
+
+	// Patterns should still exist after upstream metadata update
+	patterns, err := s.GetUpstreamModelPatterns(up.ID)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"gpt-*"}, patterns)
+}
+
+func TestUpdateUpstream_NilAPIKeysKeepsExisting(t *testing.T) {
+	s := newTestStore(t)
+
+	up, err := s.CreateUpstream("up", "https://u.example.com", []string{"key-a", "key-b"}, 0, "", "", "", "")
+	require.NoError(t, err)
+
+	updated, err := s.UpdateUpstream(up.ID, "up", "https://u.example.com", nil, 0, true, "", "", "", "")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"key-a", "key-b"}, updated.APIKeys, "nil apiKeys should preserve existing keys")
+}
+
+// ---------------------------------------------------------------------------
+// AddUpstreamAPIKeys — edge cases
+// ---------------------------------------------------------------------------
+
+func TestAddUpstreamAPIKeys_EmptyKeyList(t *testing.T) {
+	s := newTestStore(t)
+
+	up, err := s.CreateUpstream("up", "https://u.example.com", []string{"existing-key"}, 0, "", "", "", "")
+	require.NoError(t, err)
+
+	keys, err := s.AddUpstreamAPIKeys(up.ID, []string{})
+	require.NoError(t, err)
+	require.Len(t, keys, 1)
+	assert.Equal(t, "existing-key", keys[0].Key)
+}
+
+func TestAddUpstreamAPIKeys_AddToUpstreamWithExistingKeys(t *testing.T) {
+	s := newTestStore(t)
+
+	up, err := s.CreateUpstream("up", "https://u.example.com", []string{"k1", "k2"}, 0, "", "", "", "")
+	require.NoError(t, err)
+
+	keys, err := s.AddUpstreamAPIKeys(up.ID, []string{"k3", "k4"})
+	require.NoError(t, err)
+	require.Len(t, keys, 4)
+
+	plainKeys := make([]string, len(keys))
+	for i, k := range keys {
+		plainKeys[i] = k.Key
+	}
+	assert.Equal(t, []string{"k1", "k2", "k3", "k4"}, plainKeys)
+}
+
+// ---------------------------------------------------------------------------
+// SetAPIKeyEnabled — edge cases
+// ---------------------------------------------------------------------------
+
+func TestSetAPIKeyEnabled_EnableDisable(t *testing.T) {
+	s := newTestStore(t)
+
+	up, err := s.CreateUpstream("up", "https://u.example.com", []string{"k"}, 0, "", "", "", "")
+	require.NoError(t, err)
+
+	keys, err := s.GetUpstreamAllAPIKeys(up.ID)
+	require.NoError(t, err)
+	require.Len(t, keys, 1)
+	assert.True(t, keys[0].Enabled)
+
+	// Disable
+	err = s.SetAPIKeyEnabled(up.ID, keys[0].RowID, false)
+	require.NoError(t, err)
+
+	keysAfter, err := s.GetUpstreamAllAPIKeys(up.ID)
+	require.NoError(t, err)
+	assert.False(t, keysAfter[0].Enabled)
+
+	// Enable (should also reset consecutive_failures)
+	// First add some failures
+	_, err = s.IncrKeyFailures(up.ID, keys[0].RowID, 0)
+	require.NoError(t, err)
+	_, err = s.IncrKeyFailures(up.ID, keys[0].RowID, 0)
+	require.NoError(t, err)
+
+	err = s.SetAPIKeyEnabled(up.ID, keys[0].RowID, true)
+	require.NoError(t, err)
+
+	keysAfter, err = s.GetUpstreamAllAPIKeys(up.ID)
+	require.NoError(t, err)
+	assert.True(t, keysAfter[0].Enabled)
+	assert.Equal(t, 0, keysAfter[0].ConsecutiveFails, "enabling should reset consecutive failures")
+}
+
+func TestSetAPIKeyEnabled_NonExistentKey(t *testing.T) {
+	s := newTestStore(t)
+
+	err := s.SetAPIKeyEnabled(9999, 9999, true)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}
+
+// ---------------------------------------------------------------------------
+// DeleteUpstreamAPIKey — edge cases
+// ---------------------------------------------------------------------------
+
+func TestDeleteUpstreamAPIKey_NonExistentKey(t *testing.T) {
+	s := newTestStore(t)
+
+	up, err := s.CreateUpstream("up", "https://u.example.com", []string{"k"}, 0, "", "", "", "")
+	require.NoError(t, err)
+
+	err = s.DeleteUpstreamAPIKey(up.ID, 9999)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}
+
+func TestDeleteUpstreamAPIKey_WrongUpstreamID(t *testing.T) {
+	s := newTestStore(t)
+
+	up, err := s.CreateUpstream("up", "https://u.example.com", []string{"k"}, 0, "", "", "", "")
+	require.NoError(t, err)
+
+	keys, err := s.GetUpstreamAllAPIKeys(up.ID)
+	require.NoError(t, err)
+
+	// Try to delete with wrong upstream ID
+	err = s.DeleteUpstreamAPIKey(9999, keys[0].RowID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}
+
+// ---------------------------------------------------------------------------
+// SetKeyUpstreams — edge cases
+// ---------------------------------------------------------------------------
+
+func TestSetKeyUpstreams_SetMultiple(t *testing.T) {
+	s := newTestStore(t)
+
+	_, dk, err := s.CreateKey("k", 0)
+	require.NoError(t, err)
+	u1, _ := s.CreateUpstream("u1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "")
+	u2, _ := s.CreateUpstream("u2", "https://b.example.com", []string{"kb"}, 0, "", "", "", "")
+	u3, _ := s.CreateUpstream("u3", "https://c.example.com", []string{"kc"}, 0, "", "", "", "")
+
+	err = s.SetKeyUpstreams(dk.ID, []int64{u1.ID, u2.ID, u3.ID})
+	require.NoError(t, err)
+
+	ids, err := s.GetKeyUpstreamIDs(dk.ID)
+	require.NoError(t, err)
+	assert.Len(t, ids, 3)
+}
+
+func TestSetKeyUpstreams_SetForNonExistentKey(t *testing.T) {
+	s := newTestStore(t)
+
+	u1, _ := s.CreateUpstream("u1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "")
+
+	// FK constraint on downstream_key_id should cause an error
+	err := s.SetKeyUpstreams(9999, []int64{u1.ID})
+	require.Error(t, err, "should error for nonexistent key due to FK constraint")
+}
+
+// ---------------------------------------------------------------------------
+// SetUpstreamModelPatterns — edge cases
+// ---------------------------------------------------------------------------
+
+func TestSetUpstreamModelPatterns_SetForNonExistentUpstream(t *testing.T) {
+	s := newTestStore(t)
+
+	// FK constraint on upstream_id should cause an error
+	err := s.SetUpstreamModelPatterns(9999, []string{"gpt-*"})
+	require.Error(t, err, "should error for nonexistent upstream due to FK constraint")
+}
+
+// ---------------------------------------------------------------------------
+// SetUpstreamDeclaredModels — edge cases
+// ---------------------------------------------------------------------------
+
+func TestSetUpstreamDeclaredModels_SetForNonExistentUpstream(t *testing.T) {
+	s := newTestStore(t)
+
+	err := s.SetUpstreamDeclaredModels(9999, []string{"gpt-4o"})
+	require.Error(t, err, "should error for nonexistent upstream due to FK constraint")
+}
+
+// ---------------------------------------------------------------------------
+// SetKeyModelOverrides — edge cases
+// ---------------------------------------------------------------------------
+
+func TestSetKeyModelOverrides_MultipleOverridesSamePatternFailover(t *testing.T) {
+	s := newTestStore(t)
+
+	_, dk, err := s.CreateKey("k", 0)
+	require.NoError(t, err)
+	u1, _ := s.CreateUpstream("u1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "")
+	u2, _ := s.CreateUpstream("u2", "https://b.example.com", []string{"kb"}, 0, "", "", "", "")
+	u3, _ := s.CreateUpstream("u3", "https://c.example.com", []string{"kc"}, 0, "", "", "", "")
+
+	// Three upstreams for the same pattern (failover chain)
+	err = s.SetKeyModelOverrides(dk.ID, []KeyModelOverrideInput{
+		{ModelPattern: "gpt-4o", UpstreamID: u1.ID},
+		{ModelPattern: "gpt-4o", UpstreamID: u2.ID},
+		{ModelPattern: "gpt-4o", UpstreamID: u3.ID},
+	})
+	require.NoError(t, err)
+
+	got, err := s.GetKeyModelOverrides(dk.ID)
+	require.NoError(t, err)
+	assert.Len(t, got, 3)
+	for _, o := range got {
+		assert.Equal(t, "gpt-4o", o.ModelPattern)
+	}
+}
+
+func TestSetKeyModelOverrides_ClearOverrides(t *testing.T) {
+	s := newTestStore(t)
+
+	_, dk, err := s.CreateKey("k", 0)
+	require.NoError(t, err)
+	u1, _ := s.CreateUpstream("u1", "https://a.example.com", []string{"ka"}, 0, "", "", "", "")
+
+	err = s.SetKeyModelOverrides(dk.ID, []KeyModelOverrideInput{
+		{ModelPattern: "claude-*", UpstreamID: u1.ID},
+	})
+	require.NoError(t, err)
+
+	// Clear
+	err = s.SetKeyModelOverrides(dk.ID, nil)
+	require.NoError(t, err)
+
+	got, err := s.GetKeyModelOverrides(dk.ID)
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}
+
+// ---------------------------------------------------------------------------
+// GetAllKeys (0% coverage)
+// ---------------------------------------------------------------------------
+
+func TestGetAllKeys_Empty(t *testing.T) {
+	s := newTestStore(t)
+
+	keys, err := s.GetAllKeys()
+	require.NoError(t, err)
+	assert.Empty(t, keys)
+}
+
+func TestGetAllKeys_AfterCreatingKeys(t *testing.T) {
+	s := newTestStore(t)
+
+	_, _, err := s.CreateKey("key-1", 10)
+	require.NoError(t, err)
+	_, _, err = s.CreateKey("key-2", 20)
+	require.NoError(t, err)
+	_, _, err = s.CreateKey("key-3", 30)
+	require.NoError(t, err)
+
+	keys, err := s.GetAllKeys()
+	require.NoError(t, err)
+	assert.Len(t, keys, 3)
+
+	// GetAllKeys delegates to ListKeys which orders by created_at DESC
+	names := make([]string, len(keys))
+	for i, k := range keys {
+		names[i] = k.Name
+	}
+	assert.Contains(t, names, "key-1")
+	assert.Contains(t, names, "key-2")
+	assert.Contains(t, names, "key-3")
+}
+
+// ---------------------------------------------------------------------------
+// Encrypt / Decrypt — additional edge cases
+// ---------------------------------------------------------------------------
+
+func TestEncrypt_LongPlaintext(t *testing.T) {
+	// 4 KB plaintext
+	plaintext := strings.Repeat("a]1[!@#$%^&*()", 300)
+	ciphertext, err := Encrypt(plaintext, testKey)
+	require.NoError(t, err)
+
+	decrypted, err := Decrypt(ciphertext, testKey)
+	require.NoError(t, err)
+	assert.Equal(t, plaintext, decrypted)
+}
+
+func TestEncrypt_WrongKeyLength(t *testing.T) {
+	_, err := Encrypt("text", []byte("short"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "32 bytes")
+}
+
+func TestDecrypt_WrongKeyLength(t *testing.T) {
+	_, err := Decrypt("v1:dGVzdA==", []byte("short"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "32 bytes")
+}
+
+func TestDecrypt_InvalidBase64(t *testing.T) {
+	_, err := Decrypt("v1:not-valid-base64!!!", testKey)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "base64")
+}
+
+func TestDecrypt_CiphertextTooShort(t *testing.T) {
+	// v1: prefix + very short base64 that decodes to fewer bytes than nonce size
+	shortData := "v1:YQ=="
+	_, err := Decrypt(shortData, testKey)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "too short")
+}
+
+func TestDecrypt_TamperedCiphertext(t *testing.T) {
+	ciphertext, err := Encrypt("secret-data", testKey)
+	require.NoError(t, err)
+
+	// Tamper with the ciphertext (flip a character in the base64 payload)
+	parts := strings.SplitN(ciphertext, ":", 2)
+	require.Len(t, parts, 2)
+	payload := []byte(parts[1])
+	if payload[len(payload)-2] == 'A' {
+		payload[len(payload)-2] = 'B'
+	} else {
+		payload[len(payload)-2] = 'A'
+	}
+	tampered := "v1:" + string(payload)
+
+	_, err = Decrypt(tampered, testKey)
+	require.Error(t, err, "tampered ciphertext should fail GCM authentication")
+}
+
+// ---------------------------------------------------------------------------
+// RunMigrations — verify tables
+// ---------------------------------------------------------------------------
+
+func TestRunMigrations_AllTablesExist(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "migrate-tables.db")
+	db, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	defer db.Close()
+
+	err = RunMigrations(db)
+	require.NoError(t, err)
+
+	// Verify expected tables exist by querying them
+	expectedTables := []string{
+		"_meta",
+		"upstream_providers",
+		"downstream_keys",
+		"request_logs",
+		"model_whitelist",
+		"key_upstream_bindings",
+		"upstream_model_patterns",
+		"key_model_overrides",
+		"upstream_api_keys",
+		"test_models",
+		"settings",
+		"upstream_declared_models",
+	}
+	for _, table := range expectedTables {
+		var name string
+		err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&name)
+		require.NoError(t, err, "table %q should exist", table)
+		assert.Equal(t, table, name)
+	}
+
+	// Verify schema version is at latest
+	var version int
+	err = db.QueryRow(`SELECT schema_version FROM _meta`).Scan(&version)
+	require.NoError(t, err)
+	assert.Equal(t, 21, version, "schema version should be at latest migration")
+}
+
+// ---------------------------------------------------------------------------
+// InsertRequestLogBatch — edge cases
+// ---------------------------------------------------------------------------
+
+func TestInsertRequestLogBatch_NilIsNoOp(t *testing.T) {
+	s := newTestStore(t)
+	err := s.InsertRequestLogBatch(nil)
+	assert.NoError(t, err)
+}
+
+// ---------------------------------------------------------------------------
+// DeleteLogsOlderThan — edge cases
+// ---------------------------------------------------------------------------
+
+func TestDeleteLogsOlderThan_NoMatchingLogs(t *testing.T) {
+	s := newTestStore(t)
+	_, dk, _ := s.CreateKey("k", 0)
+
+	now := time.Now().UTC()
+	logs := []RequestLog{
+		{DownstreamKeyID: dk.ID, ProviderStyle: "openai", Path: "/v1/chat", StatusCode: 200, LatencyMs: 10, CreatedAt: now},
+	}
+	require.NoError(t, s.InsertRequestLogBatch(logs))
+
+	// Delete logs older than 1 hour — none should match
+	err := s.DeleteLogsOlderThan(time.Hour)
+	require.NoError(t, err)
+
+	results, err := s.QueryLogs(dk.ID, now.Add(-time.Minute), now.Add(time.Minute), 0)
+	require.NoError(t, err)
+	assert.Len(t, results, 1, "recent log should still exist")
+}
+
+func TestDeleteLogsOlderThan_EmptyDatabase(t *testing.T) {
+	s := newTestStore(t)
+
+	// Should be a no-op on empty table, no error
+	err := s.DeleteLogsOlderThan(time.Hour)
+	require.NoError(t, err)
+}

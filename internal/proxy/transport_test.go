@@ -1,9 +1,12 @@
 package proxy
 
 import (
+	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -101,6 +104,71 @@ func TestBuildTransport_EmptyProxyURL_HasValidProxy(t *testing.T) {
 	// 没有设环境变量时返回 nil（直连），有的话返回代理 URL，两种都是合法行为
 	assert.NoError(t, err)
 	_ = proxyURL // 不关心具体值，只要不 panic 且不报错
+}
+
+func TestSafeDialContext_BlocksLoopback(t *testing.T) {
+	dialer := &net.Dialer{Timeout: 2 * time.Second, KeepAlive: 2 * time.Second}
+	dial := safeDialContext(dialer)
+	// 127.0.0.1 is loopback; should be rejected
+	_, err := dial(context.Background(), "tcp", "127.0.0.1:80")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not allowed")
+}
+
+func TestSafeDialContext_BlocksPrivateIP(t *testing.T) {
+	dialer := &net.Dialer{Timeout: 2 * time.Second, KeepAlive: 2 * time.Second}
+	dial := safeDialContext(dialer)
+	// 10.0.0.1 is private; should be rejected
+	_, err := dial(context.Background(), "tcp", "10.0.0.1:80")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not allowed")
+}
+
+func TestSafeDialContext_BlocksLinkLocal(t *testing.T) {
+	dialer := &net.Dialer{Timeout: 2 * time.Second, KeepAlive: 2 * time.Second}
+	dial := safeDialContext(dialer)
+	// 169.254.169.254 is link-local (AWS metadata endpoint)
+	_, err := dial(context.Background(), "tcp", "169.254.169.254:80")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not allowed")
+}
+
+func TestSafeDialContext_BlocksUnspecified(t *testing.T) {
+	dialer := &net.Dialer{Timeout: 2 * time.Second, KeepAlive: 2 * time.Second}
+	dial := safeDialContext(dialer)
+	// 0.0.0.0 is unspecified; should be rejected
+	_, err := dial(context.Background(), "tcp", "0.0.0.0:80")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not allowed")
+}
+
+func TestSafeDialContext_InvalidAddress(t *testing.T) {
+	dialer := &net.Dialer{Timeout: 2 * time.Second, KeepAlive: 2 * time.Second}
+	dial := safeDialContext(dialer)
+	_, err := dial(context.Background(), "tcp", "no-port")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid address")
+}
+
+func TestBuildTransport_SSRFProtection_AppliedWhenEnabled(t *testing.T) {
+	// Temporarily enable SSRF protection and clear cache
+	old := SSRFProtection
+	SSRFProtection = true
+	transportCache.Delete("")
+	defer func() {
+		SSRFProtection = old
+		transportCache.Delete("")
+	}()
+
+	tr, err := BuildTransport("")
+	require.NoError(t, err)
+	require.NotNil(t, tr)
+
+	// The safe dialer should block a request to 127.0.0.1
+	req, _ := http.NewRequest("GET", "http://127.0.0.1:1/test", nil)
+	_, err = tr.RoundTrip(req)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not allowed")
 }
 
 func TestBuildTransportUTLS_Builds(t *testing.T) {

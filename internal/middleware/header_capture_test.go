@@ -87,3 +87,118 @@ func TestHeaderCapture_MiddlewarePassesThrough(t *testing.T) {
 	assert.Equal(t, "2023-06-01", items[0].Flat["Anthropic-Version"])
 	assert.Equal(t, `{"ok":true}`, items[0].Body)
 }
+
+// ---------------------------------------------------------------------------
+// Clear
+// ---------------------------------------------------------------------------
+
+func TestHeaderCapture_Clear(t *testing.T) {
+	c := NewHeaderCapture(5)
+	c.SetEnabled(true)
+
+	// Capture a request.
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"a":1}`))
+	c.Capture(req)
+	_, items := c.Snapshot()
+	require.Len(t, items, 1, "should have 1 capture before clear")
+
+	// Clear and verify empty.
+	c.Clear()
+	_, items = c.Snapshot()
+	assert.Empty(t, items, "should be empty after clear")
+}
+
+func TestHeaderCapture_Clear_NilSafe(t *testing.T) {
+	var c *HeaderCapture
+	c.Clear() // should not panic
+}
+
+// ---------------------------------------------------------------------------
+// Latest
+// ---------------------------------------------------------------------------
+
+func TestHeaderCapture_Latest_ReturnsNewest(t *testing.T) {
+	c := NewHeaderCapture(5)
+	c.SetEnabled(true)
+
+	req1 := httptest.NewRequest(http.MethodPost, "/v1/first", strings.NewReader(`{"n":1}`))
+	c.Capture(req1)
+	req2 := httptest.NewRequest(http.MethodPost, "/v1/second", strings.NewReader(`{"n":2}`))
+	c.Capture(req2)
+
+	latest, ok := c.Latest()
+	require.True(t, ok)
+	assert.Equal(t, "/v1/second", latest.Path, "Latest should return the most recent capture")
+}
+
+func TestHeaderCapture_Latest_Empty(t *testing.T) {
+	c := NewHeaderCapture(5)
+	_, ok := c.Latest()
+	assert.False(t, ok, "Latest on empty capture should return false")
+}
+
+func TestHeaderCapture_Latest_NilSafe(t *testing.T) {
+	var c *HeaderCapture
+	_, ok := c.Latest()
+	assert.False(t, ok, "Latest on nil capture should return false")
+}
+
+// ---------------------------------------------------------------------------
+// Middleware integration (full round-trip with custom headers)
+// ---------------------------------------------------------------------------
+
+func TestHeaderCapture_Middleware_Integration(t *testing.T) {
+	c := NewHeaderCapture(10)
+	c.SetEnabled(true)
+
+	var downstreamBody string
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		downstreamBody = string(b)
+		w.WriteHeader(http.StatusCreated)
+	})
+
+	handler := c.Middleware(inner)
+
+	body := `{"model":"claude-sonnet-4-20250514","prompt":"test"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/completions?stream=true", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer sk-test-key-123")
+	req.Header.Set("X-Custom-Header", "custom-value")
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	// Downstream handler received the body.
+	assert.Equal(t, body, downstreamBody)
+	assert.Equal(t, http.StatusCreated, rr.Code)
+
+	// Capture recorded everything.
+	latest, ok := c.Latest()
+	require.True(t, ok)
+	assert.Equal(t, "/v1/completions", latest.Path)
+	assert.Equal(t, "stream=true", latest.Query)
+	assert.Equal(t, "POST", latest.Method)
+	assert.Equal(t, "Bearer sk-test-key-123", latest.Flat["Authorization"])
+	assert.Equal(t, "custom-value", latest.Flat["X-Custom-Header"])
+	assert.Equal(t, body, latest.Body)
+	assert.False(t, latest.BodyTruncated)
+}
+
+func TestHeaderCapture_Middleware_DisabledDoesNotCapture(t *testing.T) {
+	c := NewHeaderCapture(5)
+	// Not enabled.
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	handler := c.Middleware(inner)
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
+	_, items := c.Snapshot()
+	assert.Empty(t, items, "disabled capture should not record")
+}

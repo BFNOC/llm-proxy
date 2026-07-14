@@ -2,10 +2,8 @@ package middleware
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -47,8 +45,9 @@ func (n *nextRecorder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func TestBindingMW_NoKeyID_PassesThrough(t *testing.T) {
 	s := newTestStore(t)
+	bc := NewBindingCache(s)
 	next := &nextRecorder{}
-	mw := UpstreamBindingMiddleware(s, nil)(next)
+	mw := UpstreamBindingMiddleware(bc, nil)(next)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	rec := httptest.NewRecorder()
@@ -69,8 +68,9 @@ func TestBindingMW_KeyWithBindings_SetsContext(t *testing.T) {
 	err = s.SetKeyUpstreams(dk.ID, []int64{u1.ID, u2.ID})
 	require.NoError(t, err)
 
+	bc := NewBindingCache(s)
 	next := &nextRecorder{}
-	mw := UpstreamBindingMiddleware(s, nil)(next)
+	mw := UpstreamBindingMiddleware(bc, nil)(next)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/chat", nil)
 	req = withKeyID(req, dk.ID)
@@ -86,8 +86,9 @@ func TestBindingMW_KeyWithNoBindings_NoContextValue(t *testing.T) {
 	_, dk, err := s.CreateKey("unbound-key", 0)
 	require.NoError(t, err)
 
+	bc := NewBindingCache(s)
 	next := &nextRecorder{}
-	mw := UpstreamBindingMiddleware(s, nil)(next)
+	mw := UpstreamBindingMiddleware(bc, nil)(next)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/chat", nil)
 	req = withKeyID(req, dk.ID)
@@ -98,34 +99,41 @@ func TestBindingMW_KeyWithNoBindings_NoContextValue(t *testing.T) {
 	assert.Nil(t, next.allowedIDs, "unbound key should not set allowed IDs")
 }
 
-func TestBindingMW_StoreError_Returns503(t *testing.T) {
-	// Create a store, then close it to force query errors
-	dir := t.TempDir()
-	encKey := []byte("01234567890123456789012345678901")
-	s, err := store.NewStore(filepath.Join(dir, "test.db"), encKey)
+func TestBindingCache_ReloadReflectsChanges(t *testing.T) {
+	s := newTestStore(t)
+	_, dk, err := s.CreateKey("reload-key", 0)
+	require.NoError(t, err)
+	u1, err := s.CreateUpstream("up1", "https://a.example.com", []string{"key-a"}, 0, "", "", "", "")
 	require.NoError(t, err)
 
-	// Create a key first while store is open
-	_, dk, err := s.CreateKey("error-key", 0)
+	bc := NewBindingCache(s)
+	// Initially no bindings
+	assert.Nil(t, bc.GetKeyUpstreamIDs(dk.ID))
+
+	// Add binding and reload
+	err = s.SetKeyUpstreams(dk.ID, []int64{u1.ID})
+	require.NoError(t, err)
+	bc.Reload()
+
+	assert.Equal(t, []int64{u1.ID}, bc.GetKeyUpstreamIDs(dk.ID))
+}
+
+func TestBindingCache_ReloadFailureKeepsOldSnapshot(t *testing.T) {
+	s := newTestStore(t)
+	_, dk, err := s.CreateKey("keep-key", 0)
+	require.NoError(t, err)
+	u1, err := s.CreateUpstream("up1", "https://a.example.com", []string{"key-a"}, 0, "", "", "", "")
+	require.NoError(t, err)
+	err = s.SetKeyUpstreams(dk.ID, []int64{u1.ID})
 	require.NoError(t, err)
 
-	// Close the store to force DB errors
+	bc := NewBindingCache(s)
+	assert.Equal(t, []int64{u1.ID}, bc.GetKeyUpstreamIDs(dk.ID))
+
+	// Close DB to force reload failure
 	_ = s.Close()
-	// Remove the database file
-	_ = os.Remove(filepath.Join(dir, "test.db"))
+	bc.Reload() // should log error and keep old snapshot
 
-	next := &nextRecorder{}
-	mw := UpstreamBindingMiddleware(s, nil)(next)
-
-	req := httptest.NewRequest(http.MethodGet, "/v1/chat", nil)
-	req = withKeyID(req, dk.ID)
-	rec := httptest.NewRecorder()
-	mw.ServeHTTP(rec, req)
-
-	assert.False(t, next.called, "next should NOT be called on store error (fail-closed)")
-	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
-
-	var body map[string]string
-	require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
-	assert.Contains(t, body["error"], "upstream binding lookup failed")
+	// Old data still available
+	assert.Equal(t, []int64{u1.ID}, bc.GetKeyUpstreamIDs(dk.ID))
 }

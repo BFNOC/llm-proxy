@@ -29,18 +29,34 @@ func (sw *slidingWindow) add(now time.Time) {
 	sw.timestamps = append(sw.timestamps, now)
 }
 
+const rpmLimiterShards = 64
+
+type rpmShard struct {
+	mu      sync.Mutex
+	buckets map[int64]*slidingWindow
+}
+
 // PerKeyRPMLimiter tracks per-key requests per minute using a sliding window.
 type PerKeyRPMLimiter struct {
-	mu      sync.Mutex
-	windows map[int64]*slidingWindow
-	stopGC  chan struct{}
-	gcOnce  sync.Once
+	shards [rpmLimiterShards]rpmShard
+	stopGC chan struct{}
+	gcOnce sync.Once
+}
+
+func (l *PerKeyRPMLimiter) shard(keyID int64) *rpmShard {
+	idx := keyID % rpmLimiterShards
+	if idx < 0 {
+		idx = -idx
+	}
+	return &l.shards[idx]
 }
 
 func NewPerKeyRPMLimiter() *PerKeyRPMLimiter {
 	l := &PerKeyRPMLimiter{
-		windows: make(map[int64]*slidingWindow),
-		stopGC:  make(chan struct{}),
+		stopGC: make(chan struct{}),
+	}
+	for i := range l.shards {
+		l.shards[i].buckets = make(map[int64]*slidingWindow)
 	}
 	go l.gcLoop()
 	return l
@@ -61,13 +77,16 @@ func (l *PerKeyRPMLimiter) gcLoop() {
 
 // GC drops idle windows with no timestamps in the last minute.
 func (l *PerKeyRPMLimiter) GC() {
-	l.mu.Lock()
-	defer l.mu.Unlock()
 	now := time.Now()
-	for id, sw := range l.windows {
-		if sw.countInWindow(now) == 0 {
-			delete(l.windows, id)
+	for i := range l.shards {
+		s := &l.shards[i]
+		s.mu.Lock()
+		for id, sw := range s.buckets {
+			if sw.countInWindow(now) == 0 {
+				delete(s.buckets, id)
+			}
 		}
+		s.mu.Unlock()
 	}
 }
 
@@ -85,14 +104,15 @@ func (l *PerKeyRPMLimiter) Check(keyID int64, rpm int) (bool, int) {
 		return true, 0
 	}
 
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	s := l.shard(keyID)
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	now := time.Now()
-	sw, ok := l.windows[keyID]
+	sw, ok := s.buckets[keyID]
 	if !ok {
 		sw = &slidingWindow{}
-		l.windows[keyID] = sw
+		s.buckets[keyID] = sw
 	}
 
 	count := sw.countInWindow(now)
@@ -114,9 +134,10 @@ func (l *PerKeyRPMLimiter) Check(keyID int64, rpm int) (bool, int) {
 
 // RemoveKey cleans up the window for a deleted key.
 func (l *PerKeyRPMLimiter) RemoveKey(keyID int64) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	delete(l.windows, keyID)
+	s := l.shard(keyID)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.buckets, keyID)
 }
 
 // RateLimitMiddleware applies per-key RPM limiting using a sliding window.
