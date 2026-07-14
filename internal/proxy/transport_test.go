@@ -87,7 +87,7 @@ func TestProbeUpstream_NoFollowRedirect(t *testing.T) {
 	defer upstream.Close()
 
 	prober := &UpstreamProber{timeout: 5 * 1e9} // 5s
-	result := prober.probeUpstream(upstream.URL, "")
+	result, _, _ := prober.probeUpstream(upstream.URL, "")
 	// 302 < 500，应视为可达
 	assert.True(t, result, "302 should be treated as reachable")
 	// 关键断言：重定向目标绝对不应该被访问

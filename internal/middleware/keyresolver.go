@@ -11,10 +11,11 @@ import (
 
 // ResolvedKey 包含中间件所需的下游 Key 数据。
 type ResolvedKey struct {
-	ID       int64
-	Name     string
-	RPMLimit int
-	Enabled  bool
+	ID            int64
+	Name          string
+	RPMLimit      int
+	MaxConcurrent int // 并发连接数限制，0 表示不限制
+	Enabled       bool
 }
 
 // KeySnapshot 是一个从 key_hash 到 ResolvedKey 的不可变映射。
@@ -50,10 +51,11 @@ func (kc *KeyCache) Reload(s *store.Store) error {
 	m := make(map[string]*ResolvedKey, len(allKeys))
 	for _, dk := range allKeys {
 		m[dk.KeyHash] = &ResolvedKey{
-			ID:       dk.ID,
-			Name:     dk.Name,
-			RPMLimit: dk.RPMLimit,
-			Enabled:  dk.Enabled,
+			ID:            dk.ID,
+			Name:          dk.Name,
+			RPMLimit:      dk.RPMLimit,
+			MaxConcurrent: dk.MaxConcurrent,
+			Enabled:       dk.Enabled,
 		}
 	}
 
@@ -81,11 +83,12 @@ func KeyResolverMiddleware(cache *KeyCache) func(http.Handler) http.Handler {
 			}
 
 			ctx := context.WithValue(r.Context(), ctxKeyResolvedKey, &store.DownstreamKey{
-				ID:       resolved.ID,
-				KeyHash:  hash,
-				Name:     resolved.Name,
-				RPMLimit: resolved.RPMLimit,
-				Enabled:  resolved.Enabled,
+				ID:            resolved.ID,
+				KeyHash:       hash,
+				Name:          resolved.Name,
+				RPMLimit:      resolved.RPMLimit,
+				MaxConcurrent: resolved.MaxConcurrent,
+				Enabled:       resolved.Enabled,
 			})
 			ctx = context.WithValue(ctx, ctxKeyDownstreamKeyID, resolved.ID)
 			next.ServeHTTP(w, r.WithContext(ctx))

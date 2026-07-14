@@ -409,7 +409,7 @@ func TestKey_Update(t *testing.T) {
 	_, dk, err := s.CreateKey("original", 10)
 	require.NoError(t, err)
 
-	updated, err := s.UpdateKey(dk.ID, "renamed", 99, false)
+	updated, err := s.UpdateKey(dk.ID, "renamed", 99, false, nil)
 	require.NoError(t, err)
 	assert.Equal(t, dk.ID, updated.ID)
 	assert.Equal(t, "renamed", updated.Name)
@@ -419,7 +419,7 @@ func TestKey_Update(t *testing.T) {
 
 func TestKey_UpdateNotFound(t *testing.T) {
 	s := newTestStore(t)
-	_, err := s.UpdateKey(9999, "name", 0, true)
+	_, err := s.UpdateKey(9999, "name", 0, true, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
 }
@@ -768,7 +768,7 @@ func TestCountKeys_IncludesDisabledKeys(t *testing.T) {
 	s := newTestStore(t)
 	_, dk, _ := s.CreateKey("disabled-key", 0)
 	// Disable the key
-	_, err := s.UpdateKey(dk.ID, "disabled-key", 0, false)
+	_, err := s.UpdateKey(dk.ID, "disabled-key", 0, false, nil)
 	require.NoError(t, err)
 
 	count, err := s.CountKeys()
@@ -1626,7 +1626,7 @@ func TestLookupKeyByID_DisabledKey(t *testing.T) {
 	_, dk, err := s.CreateKey("disabled-key", 0)
 	require.NoError(t, err)
 
-	_, err = s.UpdateKey(dk.ID, "disabled-key", 0, false)
+	_, err = s.UpdateKey(dk.ID, "disabled-key", 0, false, nil)
 	require.NoError(t, err)
 
 	found, err := s.LookupKeyByID(dk.ID)
@@ -2453,7 +2453,7 @@ func TestRunMigrations_AllTablesExist(t *testing.T) {
 	var version int
 	err = db.QueryRow(`SELECT schema_version FROM _meta`).Scan(&version)
 	require.NoError(t, err)
-	assert.Equal(t, 22, version, "schema version should be at latest migration")
+	assert.Equal(t, 25, version, "schema version should be at latest migration")
 }
 
 // ---------------------------------------------------------------------------
@@ -2495,4 +2495,505 @@ func TestDeleteLogsOlderThan_EmptyDatabase(t *testing.T) {
 	// Should be a no-op on empty table, no error
 	err := s.DeleteLogsOlderThan(time.Hour)
 	require.NoError(t, err)
+}
+
+// ---------------------------------------------------------------------------
+// Health History（上游健康探测历史）
+// ---------------------------------------------------------------------------
+
+func TestRecordHealthProbe(t *testing.T) {
+	s := newTestStore(t)
+	up, err := s.CreateUpstream("up", "https://a.example.com", []string{"k"}, 0, "", "", "", "", false)
+	require.NoError(t, err)
+
+	// 记录一次健康探测
+	err = s.RecordHealthProbe(up.ID, true, 42, "")
+	require.NoError(t, err)
+
+	// 记录一次不健康探测
+	err = s.RecordHealthProbe(up.ID, false, 0, "connection refused")
+	require.NoError(t, err)
+
+	// 查询验证两条记录都已插入
+	records, err := s.GetHealthHistory(up.ID, 1, 0)
+	require.NoError(t, err)
+	assert.Len(t, records, 2)
+
+	// 最新的在前（DESC 排序），不健康的应该是最后插入的
+	assert.False(t, records[0].Healthy)
+	assert.Equal(t, "connection refused", records[0].ErrorMessage)
+	assert.True(t, records[1].Healthy)
+	assert.Equal(t, int64(42), records[1].LatencyMs)
+}
+
+func TestGetHealthHistory(t *testing.T) {
+	s := newTestStore(t)
+	up, err := s.CreateUpstream("up", "https://a.example.com", []string{"k"}, 0, "", "", "", "", false)
+	require.NoError(t, err)
+
+	// 插入多条探测记录
+	for i := 0; i < 5; i++ {
+		err = s.RecordHealthProbe(up.ID, i%2 == 0, int64(i*10), "")
+		require.NoError(t, err)
+	}
+
+	// 查询全部（hours=24，limit=0 表示不限制）
+	all, err := s.GetHealthHistory(up.ID, 24, 0)
+	require.NoError(t, err)
+	assert.Len(t, all, 5)
+
+	// 验证 DESC 排序：第一条的 created_at 应大于等于最后一条
+	assert.True(t, !all[0].CreatedAt.Before(all[len(all)-1].CreatedAt),
+		"结果应按 created_at DESC 排序")
+
+	// 验证 limit 生效
+	limited, err := s.GetHealthHistory(up.ID, 24, 3)
+	require.NoError(t, err)
+	assert.Len(t, limited, 3)
+}
+
+func TestGetHealthHistory_EmptyResult(t *testing.T) {
+	s := newTestStore(t)
+
+	// 查询不存在的上游 ID，应返回空切片
+	records, err := s.GetHealthHistory(99999, 24, 0)
+	require.NoError(t, err)
+	assert.Empty(t, records)
+}
+
+func TestCleanHealthHistory(t *testing.T) {
+	s := newTestStore(t)
+	up, err := s.CreateUpstream("up", "https://a.example.com", []string{"k"}, 0, "", "", "", "", false)
+	require.NoError(t, err)
+
+	// 手动插入一条"旧"记录（10 天前）
+	oldTime := time.Now().UTC().Add(-10 * 24 * time.Hour)
+	_, err = s.db.Exec(
+		`INSERT INTO upstream_health_history (upstream_id, healthy, latency_ms, error_message, created_at)
+		 VALUES (?, ?, ?, ?, ?)`,
+		up.ID, true, 50, "", oldTime,
+	)
+	require.NoError(t, err)
+
+	// 插入一条"新"记录（当前时间）
+	err = s.RecordHealthProbe(up.ID, true, 30, "")
+	require.NoError(t, err)
+
+	// 清理保留 3 天以内的记录，旧的应被删除
+	err = s.CleanHealthHistory(3)
+	require.NoError(t, err)
+
+	records, err := s.GetHealthHistory(up.ID, 24*365, 0)
+	require.NoError(t, err)
+	assert.Len(t, records, 1, "只有新记录应保留")
+	assert.Equal(t, int64(30), records[0].LatencyMs)
+}
+
+func TestCleanHealthHistory_InvalidRetention(t *testing.T) {
+	s := newTestStore(t)
+
+	// retentionDays=0 应返回错误
+	err := s.CleanHealthHistory(0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "retentionDays")
+}
+
+// ---------------------------------------------------------------------------
+// Latency Stats（上游延迟统计）
+// ---------------------------------------------------------------------------
+
+func TestGetUpstreamLatencyStats(t *testing.T) {
+	s := newTestStore(t)
+	_, dk, err := s.CreateKey("lat-key", 0)
+	require.NoError(t, err)
+
+	now := time.Now().UTC()
+	logs := []RequestLog{
+		{DownstreamKeyID: dk.ID, UpstreamName: "openai", ProviderStyle: "openai", Path: "/v1/chat", StatusCode: 200, LatencyMs: 100, CreatedAt: now},
+		{DownstreamKeyID: dk.ID, UpstreamName: "openai", ProviderStyle: "openai", Path: "/v1/chat", StatusCode: 200, LatencyMs: 200, CreatedAt: now},
+		{DownstreamKeyID: dk.ID, UpstreamName: "openai", ProviderStyle: "openai", Path: "/v1/chat", StatusCode: 200, LatencyMs: 300, CreatedAt: now},
+		{DownstreamKeyID: dk.ID, UpstreamName: "anthropic", ProviderStyle: "anthropic", Path: "/v1/messages", StatusCode: 200, LatencyMs: 50, CreatedAt: now},
+		{DownstreamKeyID: dk.ID, UpstreamName: "anthropic", ProviderStyle: "anthropic", Path: "/v1/messages", StatusCode: 200, LatencyMs: 150, CreatedAt: now},
+	}
+	require.NoError(t, s.InsertRequestLogBatch(logs))
+
+	stats, err := s.GetUpstreamLatencyStats(24)
+	require.NoError(t, err)
+	require.Len(t, stats, 2)
+
+	// 构建按名称索引的 map 方便断言
+	byName := make(map[string]map[string]interface{})
+	for _, st := range stats {
+		byName[st["upstream_name"].(string)] = st
+	}
+
+	// 验证 openai：avg=200, min=100, max=300
+	openaiStats := byName["openai"]
+	require.NotNil(t, openaiStats)
+	assert.Equal(t, 3, openaiStats["total"])
+	assert.InDelta(t, 200.0, openaiStats["avg_latency"].(float64), 0.1)
+	assert.InDelta(t, 100.0, openaiStats["min_latency"].(float64), 0.1)
+	assert.InDelta(t, 300.0, openaiStats["max_latency"].(float64), 0.1)
+
+	// 验证 anthropic：avg=100, min=50, max=150
+	anthropicStats := byName["anthropic"]
+	require.NotNil(t, anthropicStats)
+	assert.Equal(t, 2, anthropicStats["total"])
+	assert.InDelta(t, 100.0, anthropicStats["avg_latency"].(float64), 0.1)
+	assert.InDelta(t, 50.0, anthropicStats["min_latency"].(float64), 0.1)
+	assert.InDelta(t, 150.0, anthropicStats["max_latency"].(float64), 0.1)
+}
+
+func TestGetUpstreamLatencyStats_NoLogs(t *testing.T) {
+	s := newTestStore(t)
+
+	stats, err := s.GetUpstreamLatencyStats(24)
+	require.NoError(t, err)
+	assert.Empty(t, stats)
+}
+
+// ---------------------------------------------------------------------------
+// Config Export / Import（配置导出/导入）
+// ---------------------------------------------------------------------------
+
+func TestExportConfig(t *testing.T) {
+	s := newTestStore(t)
+
+	// 创建上游（含 API Key）
+	up, err := s.CreateUpstream("export-up", "https://e.example.com", []string{"secret-key-123"}, 5, "", "", "", "备注", false)
+	require.NoError(t, err)
+	require.NoError(t, s.SetUpstreamModelPatterns(up.ID, []string{"gpt-*"}))
+
+	// 创建下游 Key
+	_, _, err = s.CreateKey("export-key", 60)
+	require.NoError(t, err)
+
+	// 创建白名单
+	_, err = s.AddModelWhitelist("claude-*")
+	require.NoError(t, err)
+
+	// 创建设置
+	require.NoError(t, s.SetSetting("auto_disable_threshold", "5"))
+
+	// 导出
+	cfg, err := s.ExportConfig()
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+	assert.Equal(t, "1", cfg.Version)
+	assert.False(t, cfg.ExportedAt.IsZero())
+
+	// 验证上游导出（不含 API Key）
+	require.Len(t, cfg.Upstreams, 1)
+	assert.Equal(t, "export-up", cfg.Upstreams[0].Name)
+	assert.Equal(t, "https://e.example.com", cfg.Upstreams[0].BaseURL)
+	assert.Equal(t, 5, cfg.Upstreams[0].Priority)
+	assert.Equal(t, "备注", cfg.Upstreams[0].Remark)
+	assert.Equal(t, []string{"gpt-*"}, cfg.Upstreams[0].ModelPatterns)
+
+	// 验证下游 Key 导出（不含哈希和明文）
+	require.Len(t, cfg.Keys, 1)
+	assert.Equal(t, "export-key", cfg.Keys[0].Name)
+	assert.Equal(t, 60, cfg.Keys[0].RPMLimit)
+
+	// 验证白名单
+	require.Len(t, cfg.Whitelist, 1)
+	assert.Equal(t, "claude-*", cfg.Whitelist[0])
+
+	// 验证设置
+	assert.Equal(t, "5", cfg.Settings["auto_disable_threshold"])
+}
+
+func TestImportConfig(t *testing.T) {
+	s := newTestStore(t)
+
+	cfg := &ConfigExport{
+		Version:    "1",
+		ExportedAt: time.Now().UTC(),
+		Upstreams: []UpstreamExport{
+			{
+				Name:              "imported-up",
+				BaseURL:           "https://imported.example.com",
+				Priority:          3,
+				Enabled:           true,
+				KeySchedulingMode: "round-robin",
+				AuthMode:          "api_key",
+				Remark:            "导入测试",
+				ModelPatterns:     []string{"gpt-*", "claude-*"},
+			},
+		},
+		Keys: []KeyExport{
+			{Name: "imported-key", RPMLimit: 30, Enabled: true, MaxConcurrent: 5},
+		},
+		Whitelist: []string{"o1-*"},
+		Settings: map[string]string{
+			"auto_disable_threshold": "10",
+		},
+	}
+
+	err := s.ImportConfig(cfg)
+	require.NoError(t, err)
+
+	// 验证上游已创建
+	upstreams, err := s.ListUpstreams()
+	require.NoError(t, err)
+	require.Len(t, upstreams, 1)
+	assert.Equal(t, "imported-up", upstreams[0].Name)
+	assert.Equal(t, "https://imported.example.com", upstreams[0].BaseURL)
+	assert.Equal(t, 3, upstreams[0].Priority)
+
+	// 验证模型模式已导入
+	patterns, err := s.GetUpstreamModelPatterns(upstreams[0].ID)
+	require.NoError(t, err)
+	assert.Len(t, patterns, 2)
+	assert.Contains(t, patterns, "gpt-*")
+	assert.Contains(t, patterns, "claude-*")
+
+	// 验证下游 Key 已创建
+	keys, err := s.ListKeys()
+	require.NoError(t, err)
+	require.Len(t, keys, 1)
+	assert.Equal(t, "imported-key", keys[0].Name)
+	assert.Equal(t, 30, keys[0].RPMLimit)
+	assert.Equal(t, 5, keys[0].MaxConcurrent)
+
+	// 验证白名单已创建
+	wl, err := s.ListModelWhitelist()
+	require.NoError(t, err)
+	require.Len(t, wl, 1)
+	assert.Equal(t, "o1-*", wl[0].Pattern)
+
+	// 验证设置已导入
+	val, err := s.GetSetting("auto_disable_threshold", "0")
+	require.NoError(t, err)
+	assert.Equal(t, "10", val)
+}
+
+func TestImportConfig_SkipDuplicates(t *testing.T) {
+	s := newTestStore(t)
+
+	cfg := &ConfigExport{
+		Version:    "1",
+		ExportedAt: time.Now().UTC(),
+		Upstreams: []UpstreamExport{
+			{Name: "dup-up", BaseURL: "https://dup.example.com", Priority: 1, Enabled: true},
+		},
+		Keys: []KeyExport{
+			{Name: "dup-key", RPMLimit: 10, Enabled: true},
+		},
+		Whitelist: []string{"dup-pattern-*"},
+	}
+
+	// 第一次导入
+	err := s.ImportConfig(cfg)
+	require.NoError(t, err)
+
+	// 第二次导入同样的配置，不应报错也不应创建重复记录
+	err = s.ImportConfig(cfg)
+	require.NoError(t, err)
+
+	upstreams, err := s.ListUpstreams()
+	require.NoError(t, err)
+	assert.Len(t, upstreams, 1, "不应创建重复上游")
+
+	keys, err := s.ListKeys()
+	require.NoError(t, err)
+	assert.Len(t, keys, 1, "不应创建重复 Key")
+
+	wl, err := s.ListModelWhitelist()
+	require.NoError(t, err)
+	assert.Len(t, wl, 1, "不应创建重复白名单条目")
+}
+
+func TestImportConfig_SettingsWhitelist(t *testing.T) {
+	s := newTestStore(t)
+
+	cfg := &ConfigExport{
+		Version:    "1",
+		ExportedAt: time.Now().UTC(),
+		Settings: map[string]string{
+			"auto_disable_threshold": "5",    // 已知 key，应被导入
+			"unknown_evil_setting":   "hack", // 未知 key，应被跳过
+		},
+	}
+
+	err := s.ImportConfig(cfg)
+	require.NoError(t, err)
+
+	// 已知 key 应已导入
+	val, err := s.GetSetting("auto_disable_threshold", "0")
+	require.NoError(t, err)
+	assert.Equal(t, "5", val)
+
+	// 未知 key 应使用默认值（未导入）
+	val, err = s.GetSetting("unknown_evil_setting", "default")
+	require.NoError(t, err)
+	assert.Equal(t, "default", val, "未知设置项应被跳过")
+}
+
+// ---------------------------------------------------------------------------
+// Key CRUD with MaxConcurrent（下游 Key 并发限制）
+// ---------------------------------------------------------------------------
+
+func TestCreateKey_MaxConcurrent(t *testing.T) {
+	s := newTestStore(t)
+
+	_, dk, err := s.CreateKey("mc-key", 10)
+	require.NoError(t, err)
+	assert.Equal(t, 0, dk.MaxConcurrent, "默认 max_concurrent 应为 0")
+
+	// 通过 LookupKeyByID 也应该返回 0
+	found, err := s.LookupKeyByID(dk.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 0, found.MaxConcurrent)
+}
+
+func TestUpdateKey_MaxConcurrent(t *testing.T) {
+	s := newTestStore(t)
+
+	_, dk, err := s.CreateKey("mc-update-key", 10)
+	require.NoError(t, err)
+	assert.Equal(t, 0, dk.MaxConcurrent)
+
+	// 更新 maxConcurrent 为 50
+	mc := 50
+	updated, err := s.UpdateKey(dk.ID, "mc-update-key", 10, true, &mc)
+	require.NoError(t, err)
+	assert.Equal(t, 50, updated.MaxConcurrent)
+
+	// 持久化验证
+	found, err := s.LookupKeyByID(dk.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 50, found.MaxConcurrent)
+}
+
+func TestUpdateKey_MaxConcurrent_Nil(t *testing.T) {
+	s := newTestStore(t)
+
+	_, dk, err := s.CreateKey("mc-nil-key", 10)
+	require.NoError(t, err)
+
+	// 先设置 maxConcurrent 为 20
+	mc := 20
+	_, err = s.UpdateKey(dk.ID, "mc-nil-key", 10, true, &mc)
+	require.NoError(t, err)
+
+	// 传 nil 不应修改 maxConcurrent
+	updated, err := s.UpdateKey(dk.ID, "mc-nil-key", 10, true, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 20, updated.MaxConcurrent, "nil maxConcurrent 不应改变已有值")
+}
+
+// ---------------------------------------------------------------------------
+// RequestLog with sizes（请求/响应大小字段）
+// ---------------------------------------------------------------------------
+
+func TestInsertRequestLogBatch_WithSizes(t *testing.T) {
+	s := newTestStore(t)
+	_, dk, err := s.CreateKey("size-key", 0)
+	require.NoError(t, err)
+
+	now := time.Now().UTC()
+	logs := []RequestLog{
+		{
+			DownstreamKeyID: dk.ID,
+			ProviderStyle:   "openai",
+			Path:            "/v1/chat/completions",
+			StatusCode:      200,
+			LatencyMs:       100,
+			RequestSize:     1024,
+			ResponseSize:    4096,
+			CreatedAt:       now,
+		},
+		{
+			DownstreamKeyID: dk.ID,
+			ProviderStyle:   "anthropic",
+			Path:            "/v1/messages",
+			StatusCode:      200,
+			LatencyMs:       200,
+			RequestSize:     512,
+			ResponseSize:    8192,
+			CreatedAt:       now,
+		},
+	}
+	err = s.InsertRequestLogBatch(logs)
+	require.NoError(t, err)
+
+	// 查询并验证 size 字段
+	results, err := s.QueryLogs(dk.ID, now.Add(-time.Minute), now.Add(time.Minute), 0)
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+
+	// 结果按 DESC 排序，但两条 CreatedAt 相同，按插入顺序的反序
+	// 遍历检查所有记录的 size 都正确
+	sizeMap := make(map[string][2]int64) // path -> {requestSize, responseSize}
+	for _, r := range results {
+		sizeMap[r.Path] = [2]int64{r.RequestSize, r.ResponseSize}
+	}
+	assert.Equal(t, [2]int64{1024, 4096}, sizeMap["/v1/chat/completions"])
+	assert.Equal(t, [2]int64{512, 8192}, sizeMap["/v1/messages"])
+}
+
+func TestQueryLogs_IncludesSizes(t *testing.T) {
+	s := newTestStore(t)
+	_, dk, err := s.CreateKey("size-query-key", 0)
+	require.NoError(t, err)
+
+	now := time.Now().UTC()
+	logs := []RequestLog{
+		{
+			DownstreamKeyID: dk.ID,
+			ProviderStyle:   "openai",
+			Path:            "/v1/chat",
+			StatusCode:      200,
+			LatencyMs:       50,
+			RequestSize:     256,
+			ResponseSize:    2048,
+			CreatedAt:       now,
+		},
+	}
+	require.NoError(t, s.InsertRequestLogBatch(logs))
+
+	results, err := s.QueryLogs(dk.ID, now.Add(-time.Minute), now.Add(time.Minute), 0)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+
+	r := results[0]
+	assert.Equal(t, int64(256), r.RequestSize, "QueryLogs 应返回 request_size")
+	assert.Equal(t, int64(2048), r.ResponseSize, "QueryLogs 应返回 response_size")
+}
+
+// ---------------------------------------------------------------------------
+// SetWebSocketEnabled（WebSocket 透传开关）
+// ---------------------------------------------------------------------------
+
+func TestSetWebSocketEnabled(t *testing.T) {
+	s := newTestStore(t)
+
+	up, err := s.CreateUpstream("ws-up", "https://ws.example.com", []string{"k"}, 0, "", "", "", "", false)
+	require.NoError(t, err)
+	assert.False(t, up.WebSocketEnabled, "默认应为 false")
+
+	// 启用 WebSocket
+	err = s.SetWebSocketEnabled(up.ID, true)
+	require.NoError(t, err)
+
+	got, err := s.GetUpstream(up.ID)
+	require.NoError(t, err)
+	assert.True(t, got.WebSocketEnabled, "应已启用 WebSocket")
+
+	// 禁用 WebSocket
+	err = s.SetWebSocketEnabled(up.ID, false)
+	require.NoError(t, err)
+
+	got, err = s.GetUpstream(up.ID)
+	require.NoError(t, err)
+	assert.False(t, got.WebSocketEnabled, "应已禁用 WebSocket")
+}
+
+func TestSetWebSocketEnabled_NotFound(t *testing.T) {
+	s := newTestStore(t)
+
+	err := s.SetWebSocketEnabled(99999, true)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
 }

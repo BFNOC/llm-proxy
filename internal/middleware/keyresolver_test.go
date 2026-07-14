@@ -86,7 +86,7 @@ func TestKeyCache_Reload_ReflectsDisabledKey(t *testing.T) {
 	assert.True(t, r.Enabled)
 
 	// Disable the key in the store
-	_, err = s.UpdateKey(dk.ID, "disable-me", 0, false)
+	_, err = s.UpdateKey(dk.ID, "disable-me", 0, false, nil)
 	require.NoError(t, err)
 
 	// Reload picks up the change
@@ -203,7 +203,7 @@ func TestKeyResolverMiddleware_DisabledKey(t *testing.T) {
 	hash := proxy.HashKey(plaintext)
 
 	// Disable the key
-	_, err = s.UpdateKey(dk.ID, "disabled-key", 0, false)
+	_, err = s.UpdateKey(dk.ID, "disabled-key", 0, false, nil)
 	require.NoError(t, err)
 
 	kc := NewKeyCache()

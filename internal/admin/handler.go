@@ -146,6 +146,14 @@ func (h *AdminHandler) RegisterRoutes(r *mux.Router) {
 	api.HandleFunc("/settings", h.getSettings).Methods("GET")
 	api.HandleFunc("/settings", h.updateSettings).Methods("PUT")
 
+	// 延迟统计与健康历史
+	api.HandleFunc("/stats/latency", h.getLatencyStats).Methods("GET")
+	api.HandleFunc("/upstreams/{id}/health-history", h.getHealthHistory).Methods("GET")
+
+	// 配置导入导出
+	api.HandleFunc("/config/export", h.exportConfig).Methods("GET")
+	api.HandleFunc("/config/import", h.importConfig).Methods("POST")
+
 	// Header 抓取（Claude Code / 客户端指纹调试）
 	api.HandleFunc("/header-capture", h.getHeaderCapture).Methods("GET")
 	api.HandleFunc("/header-capture", h.updateHeaderCapture).Methods("PUT")
@@ -552,19 +560,20 @@ func (h *AdminHandler) listKeys(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type keyResponse struct {
-		ID        int64     `json:"id"`
-		KeyPrefix string    `json:"key_prefix"`
-		Name      string    `json:"name"`
-		RPMLimit  int       `json:"rpm_limit"`
-		Enabled   bool      `json:"enabled"`
-		CreatedAt time.Time `json:"created_at"`
-		UpdatedAt time.Time `json:"updated_at"`
+		ID            int64     `json:"id"`
+		KeyPrefix     string    `json:"key_prefix"`
+		Name          string    `json:"name"`
+		RPMLimit      int       `json:"rpm_limit"`
+		MaxConcurrent int       `json:"max_concurrent"`
+		Enabled       bool      `json:"enabled"`
+		CreatedAt     time.Time `json:"created_at"`
+		UpdatedAt     time.Time `json:"updated_at"`
 	}
 	result := make([]keyResponse, len(keys))
 	for i, k := range keys {
 		result[i] = keyResponse{
 			ID: k.ID, KeyPrefix: k.KeyPrefix, Name: k.Name,
-			RPMLimit: k.RPMLimit, Enabled: k.Enabled,
+			RPMLimit: k.RPMLimit, MaxConcurrent: k.MaxConcurrent, Enabled: k.Enabled,
 			CreatedAt: k.CreatedAt, UpdatedAt: k.UpdatedAt,
 		}
 	}
@@ -573,8 +582,9 @@ func (h *AdminHandler) listKeys(w http.ResponseWriter, r *http.Request) {
 
 func (h *AdminHandler) createKey(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name     string `json:"name"`
-		RPMLimit int    `json:"rpm_limit"`
+		Name          string `json:"name"`
+		RPMLimit      int    `json:"rpm_limit"`
+		MaxConcurrent int    `json:"max_concurrent"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid JSON")
@@ -592,19 +602,28 @@ func (h *AdminHandler) createKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 若指定了 max_concurrent，额外更新该字段
+	if req.MaxConcurrent > 0 {
+		mc := req.MaxConcurrent
+		if _, err := h.store.UpdateKey(key.ID, key.Name, key.RPMLimit, key.Enabled, &mc); err != nil {
+			slog.Warn("admin: failed to set max_concurrent on new key", "error", err)
+		}
+	}
+
 	// 重新加载 Key 缓存
 	if err := h.keyCache.Reload(h.store); err != nil {
 		slog.Error("admin: failed to reload key cache", "error", err)
 	}
 
-	slog.Info("admin: created key", "id", key.ID, "name", key.Name)
+	slog.Info("admin: created key", "id", key.ID, "name", key.Name, "max_concurrent", req.MaxConcurrent)
 	w.WriteHeader(http.StatusCreated)
 	// 明文仅返回一次
 	jsonOK(w, map[string]interface{}{
-		"id":        key.ID,
-		"key":       plaintext,
-		"name":      key.Name,
-		"rpm_limit": key.RPMLimit,
+		"id":             key.ID,
+		"key":            plaintext,
+		"name":           key.Name,
+		"rpm_limit":      key.RPMLimit,
+		"max_concurrent": req.MaxConcurrent,
 	})
 }
 
@@ -623,9 +642,10 @@ func (h *AdminHandler) updateKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Name     *string `json:"name"`
-		RPMLimit *int    `json:"rpm_limit"`
-		Enabled  *bool   `json:"enabled"`
+		Name          *string `json:"name"`
+		RPMLimit      *int    `json:"rpm_limit"`
+		Enabled       *bool   `json:"enabled"`
+		MaxConcurrent *int    `json:"max_concurrent"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid JSON")
@@ -645,7 +665,7 @@ func (h *AdminHandler) updateKey(w http.ResponseWriter, r *http.Request) {
 		enabled = *req.Enabled
 	}
 
-	key, err := h.store.UpdateKey(id, name, rpmLimit, enabled)
+	key, err := h.store.UpdateKey(id, name, rpmLimit, enabled, req.MaxConcurrent)
 	if err != nil {
 		slog.Error("admin: store error", "error", err)
 		jsonError(w, http.StatusInternalServerError, "internal error")
@@ -658,7 +678,11 @@ func (h *AdminHandler) updateKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("admin: updated key", "id", key.ID)
-	jsonOK(w, map[string]interface{}{"id": key.ID, "name": key.Name, "rpm_limit": key.RPMLimit, "enabled": key.Enabled})
+	resp := map[string]interface{}{"id": key.ID, "name": key.Name, "rpm_limit": key.RPMLimit, "enabled": key.Enabled}
+	if req.MaxConcurrent != nil {
+		resp["max_concurrent"] = *req.MaxConcurrent
+	}
+	jsonOK(w, resp)
 }
 
 func (h *AdminHandler) deleteKey(w http.ResponseWriter, r *http.Request) {
@@ -2523,16 +2547,23 @@ func (h *AdminHandler) getSettings(w http.ResponseWriter, r *http.Request) {
 	if retentionDays <= 0 {
 		retentionDays = 15
 	}
+	slowThresholdStr, _ := h.store.GetSetting("slow_request_threshold_ms", "30000")
+	slowThresholdMs, _ := strconv.Atoi(slowThresholdStr)
+	if slowThresholdMs < 0 {
+		slowThresholdMs = 30000
+	}
 	jsonOK(w, map[string]interface{}{
-		"auto_disable_threshold": threshold,
-		"log_retention_days":     retentionDays,
+		"auto_disable_threshold":    threshold,
+		"log_retention_days":        retentionDays,
+		"slow_request_threshold_ms": slowThresholdMs,
 	})
 }
 
 func (h *AdminHandler) updateSettings(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		AutoDisableThreshold *int `json:"auto_disable_threshold"`
-		LogRetentionDays     *int `json:"log_retention_days"`
+		AutoDisableThreshold  *int `json:"auto_disable_threshold"`
+		LogRetentionDays      *int `json:"log_retention_days"`
+		SlowRequestThresholdMs *int `json:"slow_request_threshold_ms"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid JSON")
@@ -2565,7 +2596,135 @@ func (h *AdminHandler) updateSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		slog.Info("admin: updated log_retention_days", "value", val)
 	}
+	if body.SlowRequestThresholdMs != nil {
+		val := *body.SlowRequestThresholdMs
+		if val < 0 {
+			jsonError(w, http.StatusBadRequest, "slow_request_threshold_ms must be >= 0")
+			return
+		}
+		if err := h.store.SetSetting("slow_request_threshold_ms", strconv.Itoa(val)); err != nil {
+			slog.Error("admin: failed to save setting", "error", err)
+			jsonError(w, http.StatusInternalServerError, "failed to save")
+			return
+		}
+		slog.Info("admin: updated slow_request_threshold_ms", "value", val)
+	}
 	jsonOK(w, map[string]interface{}{"status": "updated"})
+}
+
+// --- 延迟统计与健康历史 ---
+
+// getLatencyStats 返回各上游的延迟统计（默认最近 24 小时）。
+func (h *AdminHandler) getLatencyStats(w http.ResponseWriter, r *http.Request) {
+	hours := 24
+	if v := r.URL.Query().Get("hours"); v != "" {
+		parsed, err := strconv.Atoi(v)
+		if err != nil || parsed <= 0 {
+			jsonError(w, http.StatusBadRequest, "invalid hours parameter")
+			return
+		}
+		hours = parsed
+	}
+	if hours > 720 {
+		hours = 720
+	}
+	stats, err := h.store.GetUpstreamLatencyStats(hours)
+	if err != nil {
+		slog.Error("admin: store error", "error", err)
+		jsonError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if stats == nil {
+		stats = []map[string]interface{}{}
+	}
+	jsonOK(w, stats)
+}
+
+// getHealthHistory 返回指定上游的健康探测历史。
+func (h *AdminHandler) getHealthHistory(w http.ResponseWriter, r *http.Request) {
+	id, err := parseID(r)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	hours := 24
+	if v := r.URL.Query().Get("hours"); v != "" {
+		parsed, err := strconv.Atoi(v)
+		if err != nil || parsed <= 0 {
+			jsonError(w, http.StatusBadRequest, "invalid hours parameter")
+			return
+		}
+		hours = parsed
+	}
+	if hours > 720 {
+		hours = 720
+	}
+	limit := 100
+	if v := r.URL.Query().Get("limit"); v != "" {
+		parsed, err := strconv.Atoi(v)
+		if err != nil || parsed <= 0 {
+			jsonError(w, http.StatusBadRequest, "invalid limit parameter")
+			return
+		}
+		limit = parsed
+	}
+	history, err := h.store.GetHealthHistory(id, hours, limit)
+	if err != nil {
+		slog.Error("admin: store error", "error", err)
+		jsonError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	jsonOK(w, history)
+}
+
+// --- 配置导入导出 ---
+
+// exportConfig 导出完整配置为 JSON 文件（上游、Key、绑定、白名单、设置等）。
+func (h *AdminHandler) exportConfig(w http.ResponseWriter, r *http.Request) {
+	cfg, err := h.store.ExportConfig()
+	if err != nil {
+		slog.Error("admin: export config failed", "error", err)
+		jsonError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	w.Header().Set("Content-Disposition", "attachment; filename=llm-proxy-config.json")
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(cfg)
+}
+
+// importConfig 从 JSON 导入配置。
+func (h *AdminHandler) importConfig(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 10<<20) // 10 MB
+	var cfg store.ConfigExport
+	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if err := h.store.ImportConfig(&cfg); err != nil {
+		slog.Error("admin: import config failed", "error", err)
+		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("import failed: %v", err))
+		return
+	}
+	// 导入后刷新所有内存缓存
+	if err := h.keyCache.Reload(h.store); err != nil {
+		slog.Error("admin: failed to reload key cache after import", "error", err)
+	}
+	if h.overrideCache != nil {
+		h.overrideCache.Reload()
+	}
+	if h.bindingCache != nil {
+		h.bindingCache.Reload()
+	}
+	if h.modelFilter != nil {
+		h.modelFilter.Reload()
+		h.modelFilter.ReloadDeclaredModels()
+	}
+	go func() {
+		defer func() { recover() }()
+		h.prober.ProbeNow()
+	}()
+	slog.Info("admin: config imported successfully")
+	jsonOK(w, map[string]interface{}{"status": "imported", "message": "配置导入成功，所有缓存已刷新"})
 }
 
 // getHeaderCapture 返回抓取启用标志 + 最近的快照（最新的排在前面）。

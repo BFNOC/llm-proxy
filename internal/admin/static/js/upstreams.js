@@ -102,6 +102,7 @@ function renderUpstreamsTable() {
         '<button class="btn btn-ghost btn-sm" onclick="editUpstream('+u.id+')">编辑</button>'+
         '<div class="action-more"><button class="action-more-btn" onclick="toggleActionMenu(event)">···</button>'+
         '<div class="action-menu">'+
+        '<button onclick="showHealthHistory('+u.id+')">健康历史</button>'+
         '<button onclick="checkQuota(event,'+u.id+')">查额</button>'+
         '<button onclick="openCFDialog('+u.id+')" style="'+(getCFConfig(u.id)?'color:var(--green)':'')+'">CF 绕过</button>'+
         '<button onclick="toggleWebSocket('+u.id+','+(!u.websocket_enabled)+')">'+(u.websocket_enabled?'关闭 WS':'开启 WS')+'</button>'+

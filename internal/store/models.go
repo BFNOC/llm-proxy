@@ -28,14 +28,15 @@ type APIKeyInfo struct {
 }
 
 type DownstreamKey struct {
-	ID        int64
-	KeyHash   string
-	KeyPrefix string
-	Name      string
-	RPMLimit  int
-	Enabled   bool
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID            int64
+	KeyHash       string
+	KeyPrefix     string
+	Name          string
+	RPMLimit      int
+	MaxConcurrent int  `json:"max_concurrent"` // 并发连接数限制，0 表示不限制
+	Enabled       bool
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 type RequestLog struct {
@@ -51,6 +52,8 @@ type RequestLog struct {
 	Path            string
 	StatusCode      int
 	LatencyMs       int64
+	RequestSize     int64  `json:"request_size"`  // 请求体大小（字节）
+	ResponseSize    int64  `json:"response_size"` // 响应体大小（字节）
 	CreatedAt       time.Time
 }
 
@@ -81,6 +84,16 @@ type KeyModelOverride struct {
 	ModelPattern    string
 	UpstreamID      int64
 	CreatedAt       time.Time
+}
+
+// HealthRecord 表示一次上游健康探测记录。
+type HealthRecord struct {
+	ID           int64     `json:"id"`
+	UpstreamID   int64     `json:"upstream_id"`
+	Healthy      bool      `json:"healthy"`
+	LatencyMs    int64     `json:"latency_ms"`
+	ErrorMessage string    `json:"error_message"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 // TestModel 表示一个可复用的测试模型配置。

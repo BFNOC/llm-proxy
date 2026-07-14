@@ -271,6 +271,35 @@ ALTER TABLE upstream_providers ADD COLUMN auth_mode TEXT NOT NULL DEFAULT 'api_k
 		version: 22,
 		up: `ALTER TABLE upstream_providers ADD COLUMN websocket_enabled BOOLEAN NOT NULL DEFAULT 0;`,
 	},
+	{
+		// v23: 下游 Key 增加并发连接数限制，0 表示不限制。
+		version: 23,
+		up: `ALTER TABLE downstream_keys ADD COLUMN max_concurrent INTEGER NOT NULL DEFAULT 0;`,
+	},
+	{
+		// v24: 请求日志增加请求/响应体大小字段，用于流量统计。
+		version: 24,
+		up: `
+ALTER TABLE request_logs ADD COLUMN request_size INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE request_logs ADD COLUMN response_size INTEGER NOT NULL DEFAULT 0;
+`,
+	},
+	{
+		// v25: 上游健康探测历史表，记录每次探活结果和延迟。
+		version: 25,
+		up: `
+CREATE TABLE IF NOT EXISTS upstream_health_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    upstream_id INTEGER NOT NULL,
+    healthy BOOLEAN NOT NULL,
+    latency_ms INTEGER NOT NULL DEFAULT 0,
+    error_message TEXT NOT NULL DEFAULT '',
+    created_at DATETIME NOT NULL,
+    FOREIGN KEY (upstream_id) REFERENCES upstream_providers(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_health_history_upstream_time ON upstream_health_history(upstream_id, created_at DESC);
+`,
+	},
 }
 
 // RunMigrations 按顺序应用所有待执行的 schema 迁移。

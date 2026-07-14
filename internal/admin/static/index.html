@@ -132,8 +132,8 @@
                     </div>
                 </div>
                 <div class="table-container">
-                <table><thead><tr><th class="hide-on-mobile">ID</th><th class="hide-on-mobile">前缀</th><th>名称</th><th>RPM</th><th>当前 RPM</th><th>状态</th><th class="hide-on-mobile">绑定上游</th><th class="hide-on-mobile">模型路由</th><th>操作</th></tr></thead>
-                <tbody id="keys-table"><tr><td colspan="9" class="loading-cell"><span class="loading-dot"></span><span class="loading-dot"></span><span class="loading-dot"></span></td></tr></tbody></table>
+                <table><thead><tr><th class="hide-on-mobile">ID</th><th class="hide-on-mobile">前缀</th><th>名称</th><th>RPM</th><th>当前 RPM</th><th class="hide-on-mobile">并发上限</th><th>状态</th><th class="hide-on-mobile">绑定上游</th><th class="hide-on-mobile">模型路由</th><th>操作</th></tr></thead>
+                <tbody id="keys-table"><tr><td colspan="10" class="loading-cell"><span class="loading-dot"></span><span class="loading-dot"></span><span class="loading-dot"></span></td></tr></tbody></table>
                 </div>
             </div>
             <div class="card" id="key-stats-card" style="display:none;">
@@ -176,7 +176,7 @@
                     <div class="form-group"><label>&nbsp;</label><button type="submit" class="btn btn-primary">查询</button></div>
                 </form>
                 <div class="table-container">
-                <table><thead><tr><th class="hide-on-mobile">ID</th><th>密钥</th><th>上游</th><th class="hide-on-mobile">Key#</th><th class="hide-on-mobile">模型</th><th class="hide-on-mobile">代理</th><th class="hide-on-mobile">IP</th><th>地区</th><th class="hide-on-mobile">风格</th><th class="hide-on-mobile">路径</th><th>状态码</th><th class="hide-on-mobile">延迟</th><th>时间</th></tr></thead>
+                <table><thead><tr><th class="hide-on-mobile">ID</th><th>密钥</th><th>上游</th><th class="hide-on-mobile">Key#</th><th class="hide-on-mobile">模型</th><th class="hide-on-mobile">代理</th><th class="hide-on-mobile">IP</th><th>地区</th><th class="hide-on-mobile">风格</th><th class="hide-on-mobile">路径</th><th>状态码</th><th class="hide-on-mobile">延迟</th><th class="hide-on-mobile">请求大小</th><th class="hide-on-mobile">响应大小</th><th>时间</th></tr></thead>
                 <tbody id="logs-table"></tbody></table>
                 </div>
             </div>
@@ -190,6 +190,10 @@
                     <button class="btn btn-ghost btn-sm" onclick="loadStatus()">刷新</button>
                 </div>
                 <div id="status-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-bottom:24px;"></div>
+                <div id="latency-chart-container" style="margin-bottom:24px;display:none;">
+                    <h3 style="font-family:var(--font);font-size:1rem;margin-bottom:14px;letter-spacing:-0.02em;">延迟统计（24h）</h3>
+                    <div style="height:260px;"><canvas id="latency-chart"></canvas></div>
+                </div>
                 <h3 style="font-family:var(--font);font-size:1rem;margin-bottom:14px;letter-spacing:-0.02em;">上游健康</h3>
                 <div id="status-upstreams" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;"></div>
             </div>
@@ -208,9 +212,24 @@
                         <p style="color:var(--text-dim);font-size:0.78rem;margin-top:4px;">连续 429 达到此次数立即禁用 Key，0 = 不禁用</p>
                     </div>
                     <div class="form-group">
+                        <label>慢请求阈值 (ms)</label>
+                        <input id="setting-slow-threshold" type="number" min="0" style="width:100px;" value="30000">
+                        <p style="color:var(--text-dim);font-size:0.78rem;margin-top:4px;">延迟超过此值的请求将在日志中高亮显示，0 = 不高亮</p>
+                    </div>
+                    <div class="form-group">
                         <label>&nbsp;</label>
                         <button class="btn btn-primary btn-sm" onclick="saveSettings()">保存</button>
                     </div>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-header">
+                    <h2>配置导入导出</h2>
+                </div>
+                <p class="card-desc">导出当前上游与密钥配置为 JSON 文件，或从 JSON 文件导入配置（不覆盖现有数据，仅追加）。</p>
+                <div style="display:flex;gap:8px;">
+                    <button class="btn btn-primary btn-sm" onclick="exportConfig()">导出配置</button>
+                    <button class="btn btn-ghost btn-sm" onclick="importConfig()">导入配置</button>
                 </div>
             </div>
             <div class="card">
@@ -344,6 +363,7 @@
         <div class="dlg-body">
             <div class="form-group"><label>密钥名称</label><input name="name" placeholder="如 user-1" required></div>
             <div class="form-group"><label>RPM 限制 <span style="font-weight:400;color:var(--text-dim)">（0 = 不限）</span></label><input name="rpm_limit" type="number" value="0" min="0"></div>
+            <div class="form-group"><label>并发上限 <small>(0=无限)</small></label><input type="number" name="max_concurrent" min="0" value="0"></div>
         </div>
         <div class="dialog-actions">
             <button type="button" class="btn btn-ghost" onclick="this.closest('dialog').close()">取消</button>
@@ -360,6 +380,7 @@
             <input type="hidden" name="id">
             <div class="form-group"><label>名称</label><input name="name" required></div>
             <div class="form-group"><label>RPM 限制 <span style="font-weight:400;color:var(--text-dim)">（0 = 不限）</span></label><input name="rpm_limit" type="number" min="0"></div>
+            <div class="form-group"><label>并发上限 <small>(0=无限)</small></label><input type="number" name="max_concurrent" min="0" value="0"></div>
         </div>
         <div class="dialog-actions">
             <button type="button" class="btn btn-ghost" onclick="this.closest('dialog').close()">取消</button>
@@ -535,6 +556,7 @@
         </div>
     </form>
 </dialog>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
     <script src="/admin/assets/js/core.js"></script>
     <script src="/admin/assets/js/upstreams.js"></script>
     <script src="/admin/assets/js/upstream-test.js"></script>
@@ -543,5 +565,6 @@
     <script src="/admin/assets/js/models.js"></script>
     <script src="/admin/assets/js/tools.js"></script>
     <script src="/admin/assets/js/status.js"></script>
+    <script src="/admin/assets/js/charts.js"></script>
 </body>
 </html>

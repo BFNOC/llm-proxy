@@ -124,8 +124,8 @@ func (al *AuditLogger) Stop() {
 	<-al.done
 }
 
-// responseStatusCapture 包装 ResponseWriter，用于捕获状态码和内部头信息
-// （如 X-Upstream-Name, X-API-Key-Index），在 WriteHeader 发送给客户端前拦截。
+// responseStatusCapture 包装 ResponseWriter，用于捕获状态码、内部头信息
+// （如 X-Upstream-Name, X-API-Key-Index）以及响应体大小，在 WriteHeader 发送给客户端前拦截。
 type responseStatusCapture struct {
 	http.ResponseWriter
 	statusCode     int
@@ -133,6 +133,7 @@ type responseStatusCapture struct {
 	upstreamKeyIdx int    // 从 X-API-Key-Index 头捕获
 	model          string // 从 X-Model 头捕获
 	usedProxy      string // 从 X-Used-Proxy 头捕获
+	responseSize   int64  // 累计写入的响应体字节数
 }
 
 func (r *responseStatusCapture) WriteHeader(code int) {
@@ -152,6 +153,13 @@ func (r *responseStatusCapture) WriteHeader(code int) {
 	r.usedProxy = r.Header().Get("X-Used-Proxy")
 	r.Header().Del("X-Used-Proxy")
 	r.ResponseWriter.WriteHeader(code)
+}
+
+// Write 拦截响应体写入以累计响应大小。
+func (r *responseStatusCapture) Write(b []byte) (int, error) {
+	n, err := r.ResponseWriter.Write(b)
+	r.responseSize += int64(n)
+	return n, err
 }
 
 // Flush 透传底层 ResponseWriter 的流式刷新能力。
@@ -177,6 +185,12 @@ func AuditLogMiddleware(logger *AuditLogger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
+
+			// 请求体大小：优先使用 ContentLength，未知时记为 0。
+			requestSize := r.ContentLength
+			if requestSize < 0 {
+				requestSize = 0
+			}
 
 			capture := &responseStatusCapture{ResponseWriter: w, statusCode: http.StatusOK}
 			next.ServeHTTP(capture, r)
@@ -220,6 +234,8 @@ func AuditLogMiddleware(logger *AuditLogger) func(http.Handler) http.Handler {
 				Path:            r.URL.Path,
 				StatusCode:      capture.statusCode,
 				LatencyMs:       latency,
+				RequestSize:     requestSize,
+				ResponseSize:    capture.responseSize,
 				CreatedAt:       time.Now().UTC(),
 			})
 		})

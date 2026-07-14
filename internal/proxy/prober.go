@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -15,13 +16,14 @@ import (
 // UpstreamProber 周期性探测所有已配置的上游，并更新 DynamicProxy，
 // 使其指向优先级最高的健康上游。
 type UpstreamProber struct {
-	store          *store.Store
-	proxy          *DynamicProxy
-	interval       time.Duration
-	timeout        time.Duration
-	currentID      int64
-	lastHealthyCnt int // 上次探活健康数，仅变化时打日志
-	mu             sync.Mutex
+	store              *store.Store
+	proxy              *DynamicProxy
+	interval           time.Duration
+	timeout            time.Duration
+	currentID          int64
+	lastHealthyCnt     int // 上次探活健康数，仅变化时打日志
+	lastHealthCleanup  time.Time
+	mu                 sync.Mutex
 }
 
 // NewUpstreamProber 创建一个探测器，按给定的 interval 检查上游，
@@ -116,7 +118,12 @@ func (p *UpstreamProber) probeOnce() {
 
 	var healthy []*ActiveUpstream
 	for _, u := range enabled {
-		if !p.probeUpstream(u.BaseURL, u.ProxyURL) {
+		ok, latencyMs, errMsg := p.probeUpstream(u.BaseURL, u.ProxyURL)
+		// 记录探测结果到健康历史表
+		if err := p.store.RecordHealthProbe(u.ID, ok, latencyMs, errMsg); err != nil {
+			slog.Warn("prober: failed to record health probe", "upstream_id", u.ID, "error", err)
+		}
+		if !ok {
 			slog.Warn("prober: upstream unhealthy", "id", u.ID, "name", u.Name)
 			continue
 		}
@@ -159,16 +166,24 @@ func (p *UpstreamProber) probeOnce() {
 		slog.Info("prober: updated upstream list", "healthy_count", len(healthy))
 		p.lastHealthyCnt = len(healthy)
 	}
+
+	// 每小时清理一次历史探测记录，保留最近 7 天
+	if time.Since(p.lastHealthCleanup) > 1*time.Hour {
+		if err := p.store.CleanHealthHistory(7); err != nil {
+			slog.Warn("prober: failed to clean health history", "error", err)
+		}
+		p.lastHealthCleanup = time.Now()
+	}
 }
 
 // probeUpstream 向 baseURL/v1/models 发起 HEAD 请求（可选经由配置的代理），
-// 当服务器可达时返回 true（任何低于 500 的 HTTP 状态码都算数，
-// 包括 401，因为这仍然说明服务器是启动着的）。
-func (p *UpstreamProber) probeUpstream(baseURL, proxyURL string) bool {
+// 返回 (healthy, latencyMs, errorMsg)。任何低于 500 的 HTTP 状态码都视为健康
+// （包括 401，因为这仍然说明服务器是启动着的）。
+func (p *UpstreamProber) probeUpstream(baseURL, proxyURL string) (bool, int64, string) {
 	transport, err := BuildTransport(proxyURL)
 	if err != nil {
 		slog.Warn("prober: failed to build transport", "proxy", proxyURL, "error", err)
-		return false
+		return false, 0, fmt.Sprintf("build transport: %v", err)
 	}
 	client := &http.Client{
 		Transport: transport,
@@ -178,12 +193,19 @@ func (p *UpstreamProber) probeUpstream(baseURL, proxyURL string) bool {
 			return http.ErrUseLastResponse
 		},
 	}
+	start := time.Now()
 	resp, err := client.Head(baseURL + "/v1/models")
+	latencyMs := time.Since(start).Milliseconds()
 	if err != nil {
-		return false
+		return false, latencyMs, err.Error()
 	}
 	resp.Body.Close()
-	return resp.StatusCode < 500
+	healthy := resp.StatusCode < 500
+	var errMsg string
+	if !healthy {
+		errMsg = fmt.Sprintf("HTTP %d", resp.StatusCode)
+	}
+	return healthy, latencyMs, errMsg
 }
 
 // ProbeNow 立即触发一次探测周期。适用于 admin 修改配置之后的场景。

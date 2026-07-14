@@ -28,11 +28,11 @@ function renderKeysTable() {
     const countEl = document.getElementById('key-count');
     if (countEl) countEl.textContent = list.length + (list.length !== keysCache.length ? ' / ' + keysCache.length : '');
     if (keysCache.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="9" class="empty-state"><strong>还没有下游密钥</strong><p>创建密钥后，客户端用它访问代理</p><button class="btn btn-primary btn-sm" onclick="document.getElementById(\'dlg-key\').showModal()">创建密钥</button></td></tr>';
+        tbody.innerHTML = '<tr><td colspan="10" class="empty-state"><strong>还没有下游密钥</strong><p>创建密钥后，客户端用它访问代理</p><button class="btn btn-primary btn-sm" onclick="document.getElementById(\'dlg-key\').showModal()">创建密钥</button></td></tr>';
         return;
     }
     if (list.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="9" class="empty-state"><strong>无匹配结果</strong><p>试试调整搜索词或状态筛选</p></td></tr>';
+        tbody.innerHTML = '<tr><td colspan="10" class="empty-state"><strong>无匹配结果</strong><p>试试调整搜索词或状态筛选</p></td></tr>';
         return;
     }
     tbody.innerHTML = list.map(k => {
@@ -51,7 +51,8 @@ function renderKeysTable() {
         const currentRpm = keysRpmData[k.id] || 0;
         const limitText = k.rpm_limit || '不限';
         const rpmColor = k.rpm_limit > 0 && currentRpm >= k.rpm_limit * 0.8 ? 'var(--red)' : currentRpm > 0 ? 'var(--green)' : 'var(--text-dim)';
-        return '<tr><td class="hide-on-mobile">'+k.id+'</td><td class="hide-on-mobile"><code>'+esc(k.key_prefix)+'...</code></td><td>'+esc(k.name)+'</td><td>'+(k.rpm_limit||'不限')+'</td><td><span style="color:'+rpmColor+';font-weight:600">'+currentRpm+'</span><span style="color:var(--text-dim)">/'+ limitText+'</span></td><td>'+
+        const concurrentText = (k.max_concurrent && k.max_concurrent > 0) ? k.max_concurrent : '∞';
+        return '<tr><td class="hide-on-mobile">'+k.id+'</td><td class="hide-on-mobile"><code>'+esc(k.key_prefix)+'...</code></td><td>'+esc(k.name)+'</td><td>'+(k.rpm_limit||'不限')+'</td><td><span style="color:'+rpmColor+';font-weight:600">'+currentRpm+'</span><span style="color:var(--text-dim)">/'+ limitText+'</span></td><td class="hide-on-mobile">'+concurrentText+'</td><td>'+
         (k.enabled?'<span class="badge badge-green">启用</span>':'<span class="badge badge-red">禁用</span>')+
         '</td><td class="hide-on-mobile">'+bindText+'</td><td class="hide-on-mobile"><div class="model-tags" style="gap:4px">'+overrideText+'</div></td><td class="actions">'+
         '<button class="btn btn-ghost btn-sm" onclick="copyKey(event,'+k.id+')">复制</button> '+
@@ -107,7 +108,8 @@ function createKey(e) {
     e.preventDefault();
     const f = new FormData(e.target);
     api('/keys', {method:'POST', body: JSON.stringify({
-        name: f.get('name'), rpm_limit: parseInt(f.get('rpm_limit')||'0')
+        name: f.get('name'), rpm_limit: parseInt(f.get('rpm_limit')||'0'),
+        max_concurrent: parseInt(f.get('max_concurrent')||'0')
     })}).then(d => {
         if(d.error) { toastErr(d.error); return; }
         document.getElementById('new-key-value').textContent = d.key;
@@ -129,6 +131,7 @@ function editKey(id) {
         dlg.querySelector('[name=id]').value = id;
         dlg.querySelector('[name=name]').value = k.name;
         dlg.querySelector('[name=rpm_limit]').value = k.rpm_limit;
+        dlg.querySelector('[name=max_concurrent]').value = k.max_concurrent || 0;
         dlg.showModal();
     });
 }
@@ -138,7 +141,8 @@ function submitEditKey(e) {
     const f = new FormData(e.target);
     const id = f.get('id');
     api('/keys/'+id, {method:'PUT', body: JSON.stringify({
-        name: f.get('name'), rpm_limit: parseInt(f.get('rpm_limit')||'0')
+        name: f.get('name'), rpm_limit: parseInt(f.get('rpm_limit')||'0'),
+        max_concurrent: parseInt(f.get('max_concurrent')||'0')
     })}).then(d => {
         if(d.error) toastErr(d.error);
         else { document.getElementById('dlg-edit-key').close(); loadKeys(); }

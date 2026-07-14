@@ -325,11 +325,14 @@ func main() {
 	// 中间件装配顺序（后 Wrap 的在更外层）：
 	// CORS → HeaderCapture → Stats → Classifier → KeyResolver → Binding →
 	// PerKeyStats → Audit → RateLimit → Streaming → ModelFilter → Proxy
-	// Audit 必须在 RateLimit 外侧，这样 429 限流也会写入审计日志。
+	// Audit 必须在 RateLimit 和 ConcurrencyLimit 外侧，
+	// 这样 429 限流和并发超限也会写入审计日志。
+	concurrencyLimiter := middleware.NewConcurrencyLimiter()
 	proxyChain := http.Handler(dynamicProxy)
 	proxyChain = middleware.ModelFilterMiddleware(modelFilter)(proxyChain)
 	proxyChain = middleware.StreamingMiddleware()(proxyChain)
 	proxyChain = middleware.RateLimitMiddleware(rateLimiter)(proxyChain)
+	proxyChain = middleware.ConcurrencyMiddleware(concurrencyLimiter)(proxyChain)
 	if auditLogger != nil {
 		proxyChain = middleware.AuditLogMiddleware(auditLogger)(proxyChain)
 	}

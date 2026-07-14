@@ -1,5 +1,6 @@
 // --- Status ---
 function loadStatus() {
+    if (typeof loadLatencyChart === 'function') loadLatencyChart();
     api('/status').then(d => {
         const grid = document.getElementById('status-grid');
         const statCard = (label, value, color) => '<div style="background:var(--bg);padding:16px;border-radius:var(--radius-sm);border:1px solid var(--border);text-align:center;"><div style="font-size:1.5rem;font-weight:700;color:'+(color||'var(--text)')+';">'+value+'</div><div style="font-size:0.75rem;color:var(--text-dim);margin-top:4px;">'+label+'</div></div>';
