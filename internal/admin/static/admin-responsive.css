@@ -1,0 +1,56 @@
+        /* Mobile */
+        @media (max-width: 900px) {
+            #main-section.is-ready, #main-section[style*="block"] {
+                grid-template-columns: 1fr !important;
+            }
+            .rail {
+                position: sticky; top: 0; height: auto;
+                flex-direction: row; flex-wrap: wrap; align-items: center;
+                padding: 10px 12px; gap: 8px;
+                border-right: none; border-bottom: 1px solid oklch(1 0 0 / 0.08);
+            }
+            .rail-brand { border-bottom: none; padding: 0 8px 0 0; margin: 0; }
+            .rail-brand small { display: none; }
+            .tab-nav {
+                flex-direction: row; flex: 1; overflow-x: auto;
+                gap: 2px; padding: 0; scrollbar-width: none;
+            }
+            .tab-nav::-webkit-scrollbar { display: none; }
+            .tab-nav button { width: auto; padding: 8px 12px; font-size: 0.8rem; }
+            .tab-nav button .nav-ico { display: none; }
+            .tab-nav button.active { box-shadow: inset 0 -2px 0 var(--rail-active); }
+            .rail-foot {
+                flex-direction: row; align-items: center; margin: 0;
+                padding: 0; border: none; gap: 6px;
+            }
+            .logout-btn { width: auto; padding: 6px 10px; }
+            .topbar { padding: 14px 16px 8px; }
+            .page { padding: 4px 16px 32px; }
+            .topbar h2 { font-size: 1.2rem; }
+        }
+        @media (max-width: 768px) {
+            .dlg-grid-2 { grid-template-columns: 1fr; }
+            .card { padding: 16px; border-radius: 8px; }
+            .card::before { top: 10px; bottom: 10px; }
+            .hide-on-mobile { display: none !important; }
+            .form-grid { grid-template-columns: 1fr; }
+            dialog { width: calc(100vw - 16px); max-height: min(92dvh, 900px); }
+            .dlg-header, .dlg-body, .dialog-actions { padding-left: 16px; padding-right: 16px; }
+            .dialog-actions { flex-wrap: wrap; }
+            .dialog-actions .btn { flex: 1 1 auto; min-width: 100px; }
+            .table-container table { font-size: 0.82rem; }
+            .table-container thead th { padding: var(--space-sm) var(--space-xs); }
+            .table-container tbody td { padding: 10px var(--space-xs); }
+            .truncate-url { max-width: 90px; }
+            .actions { gap: var(--space-sm); }
+            .api-key-add { grid-template-columns: 1fr; }
+            .auth-card { padding: 28px 22px; }
+			.log-session-item { grid-template-columns: minmax(0, 1fr) auto; gap: 12px; }
+			.log-session-stats { grid-column: 1 / -1; justify-content: flex-start; flex-wrap: wrap; white-space: normal; }
+			.log-session-item > .btn { grid-column: 2; grid-row: 1; }
+			.log-turn-dialogue, .log-turn-details { grid-template-columns: 1fr; }
+			.log-turn-header { flex-direction: column; }
+			.log-turn-badges { justify-content: flex-start; }
+			.setting-toggle-row { align-items: flex-start; }
+			.recording-key-list { grid-template-columns: 1fr; }
+        }

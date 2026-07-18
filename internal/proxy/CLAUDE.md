@@ -2,7 +2,7 @@
 
 # internal/proxy — 反向代理核心
 
-> 最后更新：2026-05-15 15:03:30
+> 最后更新：2026-07-18
 
 ## 模块职责
 
@@ -22,7 +22,12 @@
 
 | 文件 | 行数 | 关键导出 |
 |------|------|----------|
-| `dynamic.go` | ~640 | `DynamicProxy`, `ActiveUpstream`, `KeyModelOverrideRule`, `ContextWith*`, `*FromContext`, `extractModelFromBody` (内部) |
+| `dynamic.go` | 核心 | `DynamicProxy`、构造、活跃请求计数和 `ServeHTTP` 入口 |
+| `upstream.go` | 上游 | `ActiveUpstream` 与多 Key 调度状态 |
+| `forwarding.go` | 转发 | 单上游请求构造、转发、响应写回和脱敏 |
+| `routing.go` | 路由 | 上游过滤、模型模式和 per-Key 覆盖匹配 |
+| `dynamic_context.go` | 上下文 | 绑定、覆盖规则和上下文辅助函数 |
+| `dynamic_websocket.go` | WebSocket | WebSocket 升级与双向转发 |
 | `prober.go` | ~196 | `UpstreamProber`, `NewUpstreamProber`, `Start`, `ProbeNow` |
 | `transport.go` | ~102 | `BuildTransport`, `RemoveTransport`, `TransportPoolStats` |
 | `style.go` | ~33 | `ProviderStyle`, `StyleOpenAI`/`StyleAnthropic`, `DetectProviderStyle` |
@@ -146,10 +151,10 @@ prober.ProbeNow()                 // admin 修改后立即触发
 | 想做的事 | 修改位置 |
 |---------|---------|
 | 支持新协议风格 | `style.go` 加 const + `DetectProviderStyle` 加规则 + `extract.go` / `authrewrite.go` 加 case |
-| 新增故障切换条件 | `dynamic.go` ServeHTTP 内 `if resp.StatusCode in {...}` 那段 |
-| 新增 Key 调度策略 | `ActiveUpstream.NextAPIKey` switch case + `migrations.go` 兼容值 |
+| 新增故障切换条件 | `forwarding.go` 的单上游转发结果处理 |
+| 新增 Key 调度策略 | `upstream.go` 的 `ActiveUpstream.NextAPIKey` + `migrations.go` 兼容值 |
 | 新增脱敏规则 | `sanitize.go` 的 `sanitizeRules` 数组追加（白名单式扩展） |
-| 改请求体上限 | `dynamic.go` `maxBodySize` 常量 |
+| 改请求体上限 | `dynamic.go` 的 `maxBodySize` 常量 |
 | 自定义探活逻辑 | `prober.go` `probeUpstream`（当前 HEAD `/v1/models`，500+ 视为不健康） |
 
 ## 测试与质量
@@ -176,6 +181,11 @@ prober.ProbeNow()                 // admin 修改后立即触发
 ## 相关文件清单
 
 - `internal/proxy/dynamic.go`
+- `internal/proxy/dynamic_context.go`
+- `internal/proxy/dynamic_websocket.go`
+- `internal/proxy/upstream.go`
+- `internal/proxy/forwarding.go`
+- `internal/proxy/routing.go`
 - `internal/proxy/prober.go`
 - `internal/proxy/transport.go`
 - `internal/proxy/style.go`
@@ -186,4 +196,5 @@ prober.ProbeNow()                 // admin 修改后立即触发
 
 ## 变更记录 (Changelog)
 
+- 2026-07-18：按代理入口、上游状态、转发、路由、上下文和 WebSocket 职责拆分 `dynamic.go`，并拆分集成测试
 - 2026-05-15 15:03:30：初始化模块文档

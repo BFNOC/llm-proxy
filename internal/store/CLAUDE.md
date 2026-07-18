@@ -2,7 +2,7 @@
 
 # internal/store — SQLite 持久层
 
-> 最后更新：2026-05-15 15:03:30
+> 最后更新：2026-07-18
 
 ## 模块职责
 
@@ -18,7 +18,12 @@
 
 | 文件 | 行数 | 说明 |
 |------|------|------|
-| `store.go` | ~1190 | `Store` 结构 + 全部 CRUD + 聚合方法 |
+| `store.go` | 核心 | `Store` 结构、构造、关闭和事务辅助方法 |
+| `store_upstreams.go` / `store_upstream_*.go` | 上游 | 上游、上游 Key、速率限制和失败计数 |
+| `store_keys.go` / `store_routing.go` | 路由 | 下游 Key、绑定、模型覆盖和白名单 |
+| `store_logs.go` / `store_recording.go` | 日志 | 请求日志、批量写入和统计查询 |
+| `store_test_models.go` / `store_settings.go` | 配置 | 测试模型和动态设置 |
+| `store_health.go` / `store_config.go` | 运维 | 健康检查与配置导入导出 |
 | `models.go` | ~93 | `UpstreamProvider`, `APIKeyInfo`, `DownstreamKey`, `RequestLog`, `ModelWhitelistEntry`, `UpstreamModelPattern`, `KeyModelOverride`, `TestModel` |
 | `migrations.go` | ~295 | `migrations []migration` + `RunMigrations` |
 | `encrypt.go` | ~83 | `Encrypt`/`Decrypt`（v1 前缀格式：`v1:base64(nonce+ciphertext)`） |
@@ -167,14 +172,14 @@ _meta           (schema_version)
 |---------|---------|
 | 新增表 / 列 | `migrations.go` 追加新 `migration{version: N+1, up: "..."}`；**不改旧条目** |
 | 新增加密版本 | `encrypt.go` 加 `v2:` 前缀分支；解密保留 v1 兼容 |
-| 新增聚合查询 | `store.go` 加方法；尽量提供 `GetAllX()` 批量版本避免 N+1 |
+| 新增聚合查询 | 在对应 `store_*.go` 加方法；尽量提供 `GetAllX()` 批量版本避免 N+1 |
 | 切换数据库 | 重写 `NewStore` + 占位符；模型字段不变即可保持上层 API 兼容 |
 
 ## 测试与质量
 
 | 测试文件 | 覆盖 |
 |---------|------|
-| `store_test.go` | NewStore 校验、加解密、所有 CRUD、聚合查询、绑定/覆盖、settings、Failure 计数 |
+| `store_test.go` / `store_*_test.go` | NewStore 校验、加解密、各领域 CRUD、聚合查询、绑定/覆盖、settings、Failure 计数 |
 
 惯用做法：
 
@@ -195,12 +200,13 @@ func newTestStore(t *testing.T) *Store {
 
 ## 相关文件清单
 
-- `internal/store/store.go`
+- `internal/store/store.go`、`internal/store/store_*.go`
 - `internal/store/models.go`
 - `internal/store/migrations.go`
 - `internal/store/encrypt.go`
-- `internal/store/store_test.go`
+- `internal/store/store_test.go`、`internal/store/store_*_test.go`
 
 ## 变更记录 (Changelog)
 
+- 2026-07-18：将集中在 `store.go` 的持久化方法按领域拆分，并同步拆分大型测试文件
 - 2026-05-15 15:03:30：初始化模块文档（schema v19，含 fork 扩展 v17/v18）

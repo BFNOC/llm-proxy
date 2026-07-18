@@ -5,11 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LLM Proxy · 控制台</title>
     <link rel="stylesheet" href="/admin/assets/admin.css">
-    <style>
-    .toast-undo { position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:var(--bg-card,var(--bg)); border:1px solid var(--orange); border-radius:var(--radius-sm,6px); padding:12px 20px; z-index:9999; display:flex; align-items:center; gap:12px; box-shadow:0 4px 12px rgba(0,0,0,0.15); }
-    .toast-undo button { color:var(--accent); font-weight:600; background:none; border:none; cursor:pointer; }
-    .toast-undo .countdown { color:var(--text-dim); font-size:0.8rem; }
-    </style>
+    <link rel="stylesheet" href="/admin/assets/admin-components.css">
+    <link rel="stylesheet" href="/admin/assets/admin-dialogs.css">
+    <link rel="stylesheet" href="/admin/assets/admin-utilities.css">
+    <link rel="stylesheet" href="/admin/assets/admin-responsive.css">
 </head>
 <body>
 <div class="app-shell">
@@ -611,11 +610,21 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
     <script src="/admin/assets/js/core.js"></script>
     <script src="/admin/assets/js/upstreams.js"></script>
+    <script src="/admin/assets/js/upstream-keys.js"></script>
+    <script src="/admin/assets/js/upstream-models.js"></script>
+    <script src="/admin/assets/js/upstream-tools.js"></script>
     <script src="/admin/assets/js/upstream-test.js"></script>
+    <script src="/admin/assets/js/upstream-quota.js"></script>
     <script src="/admin/assets/js/keys.js"></script>
     <script src="/admin/assets/js/logs.js"></script>
+    <script src="/admin/assets/js/log-content.js"></script>
+    <script src="/admin/assets/js/log-actions.js"></script>
     <script src="/admin/assets/js/models.js"></script>
     <script src="/admin/assets/js/tools.js"></script>
+    <script src="/admin/assets/js/header-capture.js"></script>
+    <script src="/admin/assets/js/settings.js"></script>
+    <script src="/admin/assets/js/test-models.js"></script>
+    <script src="/admin/assets/js/config-tools.js"></script>
     <script src="/admin/assets/js/status.js"></script>
     <script src="/admin/assets/js/charts.js"></script>
     <script src="/admin/assets/js/sse.js"></script>

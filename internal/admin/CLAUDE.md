@@ -2,13 +2,13 @@
 
 # internal/admin — 管理面板与管理 API
 
-> 最后更新：2026-05-15 15:03:30
+> 最后更新：2026-07-18
 
 ## 模块职责
 
 提供运维控制台：
 
-1. 单页管理面板（`static/index.html` + `admin.css` + `admin.js`，`go:embed` 进二进制；仍零 npm 依赖）
+1. 单页管理面板（`static/index.html` + 分层 CSS + 按域拆分的 JS，`go:embed` 进二进制；仍零 npm 依赖）
 2. JSON REST API：上游 / 下游 Key / 绑定 / 模型路由覆盖 / 模型白名单 / 测试模型 / 日志查询 / 系统状态 / 设置
 3. 上游连通性 & Key 测试（OpenAI / Anthropic / Responses 三种协议；可携带 CF 绕过参数）
 4. 上游额度查询（new-api 风格 `/api/usage/token`）
@@ -20,10 +20,15 @@
 
 | 文件 | 说明 |
 |------|------|
-| `handler.go` | 主 handler；构造函数 + 全部路由 + 业务逻辑 |
+| `handler.go` | `AdminHandler`、构造函数、路由注册和认证中间件 |
+| `handler_upstreams.go` / `handler_upstream_*.go` | 上游 CRUD、Key、探测、模型与配额接口 |
+| `handler_keys.go` / `handler_routing.go` | 下游 Key、绑定、模型覆盖和白名单接口 |
+| `handler_logs.go` / `handler_status.go` | 日志查询、统计与系统状态接口 |
+| `handler_settings.go` / `handler_test_models.go` | 动态设置和测试模型接口 |
+| `handler_helpers.go` | URL 校验、响应与出站请求等共用辅助逻辑 |
 | `static.go` | `go:embed static/*`；`dashboardHTML` + `/admin/assets/` 文件服务 |
 | `static/index.html` | 页面结构（登录壳、tabs、对话框） |
-| `static/admin.css` | 样式 |
+| `static/admin*.css` | 基础、组件、对话框、工具类和响应式样式 |
 | `static/js/*.js` | 前端逻辑按域拆分（vanilla，无构建；经典 script 顺序加载） |
 
 构造与注册：
@@ -97,19 +102,15 @@ adminHandler.RegisterRoutes(r)   // r 是 mux.Router
 
 | 想做的事 | 修改位置 |
 |---------|---------|
-| 新 admin API | `RegisterRoutes` 注册 + 同步根 CLAUDE.md 与本文件 |
-| 替换 dashboard 前端 | 改 `static/index.html` / `admin.css` / `static/js/*`；`go build` 自动 embed，无需 npm |
+| 新 admin API | `RegisterRoutes` 注册，在对应 `handler_*.go` 实现，并同步根 CLAUDE.md 与本文件 |
+| 替换 dashboard 前端 | 改 `static/index.html` / `admin*.css` / `static/js/*`；`go build` 自动 embed，无需 npm |
 | 新增 setting 项 | `getSettings` + `updateSettings` 增加字段 + `store.GetSetting/SetSetting` 持久化 |
 | 支持新上游协议测试 | `testUpstreamAPIKey` 的 `switch req.Protocol` 中加 case |
 | 新增连接池可观测项 | 修改 `proxy.TransportPoolStats()`，在 `getStatus` 自动暴露 |
 
 ## 测试与质量
 
-模块当前无 `*_test.go`（admin 主要是 wire-up）。功能正确性依赖：
-- 底层 store / middleware 单测覆盖
-- 手工 e2e（dashboard / curl）
-
-如需引入测试：用 `httptest.NewRecorder` + `mux.NewRouter` + 内存 SQLite 模拟。
+模块使用 `httptest.NewRecorder` + `mux.NewRouter` + 临时 SQLite 覆盖管理 API、边界校验和出站请求行为；前端静态资源需同时做脚本语法检查与浏览器加载检查。
 
 ## 常见问题 (FAQ)
 
@@ -119,20 +120,14 @@ adminHandler.RegisterRoutes(r)   // r 是 mux.Router
 
 ## 相关文件清单
 
-- `internal/admin/handler.go`
+- `internal/admin/handler.go`、`internal/admin/handler_*.go`
 - `internal/admin/static.go`
 - `internal/admin/static/index.html`
-- `internal/admin/static/admin.css`
-- `internal/admin/static/js/core.js`
-- `internal/admin/static/js/upstreams.js`
-- `internal/admin/static/js/upstream-test.js`
-- `internal/admin/static/js/keys.js`
-- `internal/admin/static/js/models.js`
-- `internal/admin/static/js/logs.js`
-- `internal/admin/static/js/tools.js`
-- `internal/admin/static/js/status.js`
+- `internal/admin/static/admin*.css`
+- `internal/admin/static/js/*.js`
 
 ## 变更记录 (Changelog)
 
+- 2026-07-18：Go handler、管理页 CSS/JS 和大型边界测试按职责拆分，保持路由与经典脚本加载顺序不变
 - 2026-07-11：前端从 `templates.go` 拆为 embed 静态文件；JS 再按域拆到 `static/js/`
 - 2026-05-15 15:03:30：初始化模块文档

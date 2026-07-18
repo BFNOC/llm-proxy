@@ -820,7 +820,17 @@ func TestDeleteUpstreamAPIKey_NotFound(t *testing.T) {
 
 func TestSetAPIKeyEnabled(t *testing.T) {
 	_, router, s := setupTestAdminWithStore(t)
-	uID := seedUpstream(t, s, "toggle-key-upstream")
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(upstreamServer.Close)
+
+	upstream, err := s.CreateUpstream(
+		"toggle-key-upstream", upstreamServer.URL, []string{"sk-test-key"}, 10,
+		"", "round-robin", "api_key", "", false, false, 0,
+	)
+	require.NoError(t, err)
+	uID := upstream.ID
 
 	keys, err := s.GetUpstreamAllAPIKeys(uID)
 	require.NoError(t, err)

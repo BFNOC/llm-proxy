@@ -2,7 +2,7 @@
 
 # internal/middleware — HTTP 中间件链
 
-> 最后更新：2026-05-15 15:03:30
+> 最后更新：2026-07-18
 
 ## 模块职责
 
@@ -24,7 +24,10 @@
 | `keyresolver.go` | `KeyCache`, `NewKeyCache`, `(*KeyCache).Reload`, `KeyResolverMiddleware`, `ResolvedKey` |
 | `bindingmw.go` | `ModelOverrideCache`, `NewModelOverrideCache`, `(*ModelOverrideCache).Reload/Get`, `UpstreamBindingMiddleware` |
 | `ratelimit_v2.go` | `PerKeyRPMLimiter`, `NewPerKeyRPMLimiter`, `RateLimitMiddleware`, `(*PerKeyRPMLimiter).RemoveKey` |
-| `auditlog.go` | `AuditLogger`, `NewAuditLogger`, `Log/Stop/DroppedCount`, `AuditLogMiddleware` |
+| `auditlog.go` | 审计中间件入口、请求元数据提取和客户端 IP 解析 |
+| `audit_logger.go` | `AuditLogger`、异步队列、批量写入与关闭流程 |
+| `audit_response.go` | `responseStatusCapture`、流式接口和内部响应头捕获 |
+| `audit_capture.go` | 请求/响应体捕获、大小限制与共享内存预算 |
 | `streaming.go` | `StreamingMiddleware` |
 | `modelfilter.go` | `ModelFilter`, `NewModelFilter`, `(*ModelFilter).Reload/MatchModel`, `ModelFilterMiddleware` |
 | `stats_middleware.go` | `StatsMiddleware`, `PerKeyStatsMiddleware` |
@@ -122,8 +125,8 @@ oc.Get(keyID) []proxy.KeyModelOverrideRule
 |---------|---------|
 | 新中间件 | 加 `xxx.go` + 在 `cmd/llm-proxy/main.go` 装配（参考"中间件链顺序"） |
 | 替换限流算法 | `ratelimit_v2.go` 内重写 `Check`；接口保持 `(allowed, retryAfter)` |
-| 异步日志改 Kafka | 替换 `auditLogger.run()` 内的 `store.InsertRequestLogBatch` 调用 |
-| 新增内部响应头 | `auditlog.go` `responseStatusCapture.WriteHeader` 同步处理；否则会泄漏到客户端 |
+| 异步日志改 Kafka | 替换 `audit_logger.go` 中 `auditLogger.run()` 的批量写入调用 |
+| 新增内部响应头 | 在 `audit_response.go` 的 `responseStatusCapture.WriteHeader` 同步处理；否则会泄漏到客户端 |
 | Bucket 更细粒度 | `request_counter.go` 把 60 改成 600 + 调整索引算法 |
 
 ## 测试与质量
@@ -148,4 +151,5 @@ oc.Get(keyID) []proxy.KeyModelOverrideRule
 
 ## 变更记录 (Changelog)
 
+- 2026-07-18：将审计中间件按采集、异步写入、响应捕获和入口职责拆分
 - 2026-05-15 15:03:30：初始化模块文档
