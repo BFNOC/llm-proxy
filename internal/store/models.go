@@ -3,34 +3,34 @@ package store
 import "time"
 
 type UpstreamProvider struct {
-	ID                 int64
-	Name               string
-	BaseURL            string
-	APIKeys            []string // 读取时解密；在 upstream_api_keys 表中加密存储
-	ProxyURL           string   // 可选代理地址，支持 http/https/socks5，空表示继承环境代理
-	Priority           int
-	Enabled            bool   // 持久化字段；禁用的上游会被 prober 跳过
-	KeySchedulingMode  string // "round-robin"（默认）或 "fill"
-	AuthMode           string // "api_key"（默认，x-api-key）或 "oauth"（Authorization: Bearer）
-	Remark             string // 管理员备注（Key 来源、用途等）
-	WebSocketEnabled   bool       `json:"websocket_enabled"`            // 是否允许 WebSocket 透传
-	AutoDiscoverModels bool       `json:"auto_discover_models"`          // 是否启用模型自动发现
-	LastModelDiscovery *time.Time `json:"last_model_discovery,omitempty"` // 上次成功发现模型的时间
+	ID                            int64
+	Name                          string
+	BaseURL                       string
+	APIKeys                       []string // 读取时解密；在 upstream_api_keys 表中加密存储
+	ProxyURL                      string   // 可选代理地址，支持 http/https/socks5，空表示继承环境代理
+	Priority                      int
+	Enabled                       bool       // 持久化字段；禁用的上游会被 prober 跳过
+	KeySchedulingMode             string     // "round-robin"（默认）或 "fill"
+	AuthMode                      string     // "api_key"（默认，x-api-key）或 "oauth"（Authorization: Bearer）
+	Remark                        string     // 管理员备注（Key 来源、用途等）
+	WebSocketEnabled              bool       `json:"websocket_enabled"`                // 是否允许 WebSocket 透传
+	AutoDiscoverModels            bool       `json:"auto_discover_models"`             // 是否启用模型自动发现
+	LastModelDiscovery            *time.Time `json:"last_model_discovery,omitempty"`   // 上次成功发现模型的时间
 	UpstreamRPMLimit              int        `json:"upstream_rpm_limit"`               // 上游每分钟请求限制，0 表示不限制
 	CircuitBreakerThreshold       int        `json:"circuit_breaker_threshold"`        // 连续失败多少次后触发熔断
 	CircuitBreakerRecoverySeconds int        `json:"circuit_breaker_recovery_seconds"` // 熔断后恢复探测的间隔秒数
 	DeletedAt                     *time.Time `json:"deleted_at,omitempty"`             // 软删除时间，非 nil 表示已删除
-	Healthy            bool       // 仅运行时使用，不持久化
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
+	Healthy                       bool       // 仅运行时使用，不持久化
+	CreatedAt                     time.Time
+	UpdatedAt                     time.Time
 }
 
 // APIKeyInfo 表示单个 API Key 及其启用状态，用于管理面板展示。
 type APIKeyInfo struct {
-	RowID              int64  // upstream_api_keys 表主键
-	Key                string // 已解密的明文 Key
-	Enabled            bool
-	ConsecutiveFails   int // 连续失败次数
+	RowID            int64  // upstream_api_keys 表主键
+	Key              string // 已解密的明文 Key
+	Enabled          bool
+	ConsecutiveFails int // 连续失败次数
 }
 
 type DownstreamKey struct {
@@ -39,7 +39,7 @@ type DownstreamKey struct {
 	KeyPrefix     string
 	Name          string
 	RPMLimit      int
-	MaxConcurrent int  `json:"max_concurrent"` // 并发连接数限制，0 表示不限制
+	MaxConcurrent int `json:"max_concurrent"` // 并发连接数限制，0 表示不限制
 	Enabled       bool
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
@@ -58,9 +58,73 @@ type RequestLog struct {
 	Path            string
 	StatusCode      int
 	LatencyMs       int64
-	RequestSize     int64  `json:"request_size"`  // 请求体大小（字节）
-	ResponseSize    int64  `json:"response_size"` // 响应体大小（字节）
+	RequestSize     int64 `json:"request_size"`  // 请求体大小（字节）
+	ResponseSize    int64 `json:"response_size"` // 响应体大小（字节）
 	CreatedAt       time.Time
+	HasFullRecord   bool              `json:"has_full_record"`
+	Detail          *RequestLogDetail `json:"-"` // 仅用于与轻量日志同事务写入
+	// RetainedDetailBytes 由审计队列用于追踪尚未落库的完整正文内存，不写入数据库。
+	RetainedDetailBytes int64 `json:"-"`
+}
+
+// RequestLogDetail 保存按运行时策略选中的完整请求记录。
+// Header 已在进入存储层前完成脱敏；正文达到上限时通过 Truncated 字段明确标记。
+type RequestLogDetail struct {
+	RequestLogID          int64  `json:"request_log_id"`
+	SessionID             string `json:"session_id"`
+	SessionSource         string `json:"session_source"`
+	SessionPreview        string `json:"session_preview"`
+	ResponseID            string `json:"response_id"`
+	ParentResponseID      string `json:"parent_response_id"`
+	Method                string `json:"method"`
+	RawQuery              string `json:"raw_query"`
+	RequestHeadersJSON    string `json:"request_headers_json"`
+	RequestBody           string `json:"request_body"`
+	RequestBodyTruncated  bool   `json:"request_body_truncated"`
+	ResponseHeadersJSON   string `json:"response_headers_json"`
+	ResponseBody          string `json:"response_body"`
+	ResponseBodyTruncated bool   `json:"response_body_truncated"`
+	CaptureStatus         string `json:"capture_status"`
+}
+
+// FullRecordingConfig 表示全量记录运行时策略。
+// AllKeys 独立保存“全部密钥”语义，避免指定密钥被删除后空列表意外扩大记录范围。
+type FullRecordingConfig struct {
+	Enabled          bool    `json:"enabled"`
+	AllKeys          bool    `json:"all_keys"`
+	DownstreamKeyIDs []int64 `json:"downstream_key_ids"`
+}
+
+// LogQuery 是管理端日志查询与导出的共享过滤条件。
+type LogQuery struct {
+	KeyID       int64
+	SessionID   string
+	SessionKeys []LogSessionKey
+	From        time.Time
+	To          time.Time
+	Limit       int
+	FullOnly    bool
+	StatusCode  int
+	Model       string
+	Path        string
+}
+
+// LogSessionKey 精确标识一个下游 Key 下的会话，避免相同 session_id 跨 Key 混合。
+type LogSessionKey struct {
+	DownstreamKeyID int64
+	SessionID       string
+}
+
+// RequestLogSession 汇总一个下游 Key 下的连续会话。
+type RequestLogSession struct {
+	SessionID       string    `json:"session_id"`
+	SessionSource   string    `json:"session_source"`
+	SessionPreview  string    `json:"session_preview"`
+	DownstreamKeyID int64     `json:"downstream_key_id"`
+	FirstAt         time.Time `json:"first_at"`
+	LastAt          time.Time `json:"last_at"`
+	RequestCount    int       `json:"request_count"`
+	ErrorCount      int       `json:"error_count"`
 }
 
 // ModelWhitelistEntry 是用于过滤 /v1/models 响应的 glob 模式。
@@ -131,4 +195,3 @@ type UpstreamTemplate struct {
 	AuthMode      string   `json:"auth_mode"`
 	ModelPatterns []string `json:"model_patterns"`
 }
-

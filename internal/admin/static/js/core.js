@@ -19,7 +19,11 @@ function clearToken() {
     document.cookie = 'admin_token=; max-age=0; path=/admin';
 }
 
-function esc(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
+function esc(s) {
+    return (s == null ? '' : String(s)).replace(/[&<>"']/g, ch => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    })[ch]);
+}
 function toast(msg, type) {
     type = type || 'info';
     const root = document.getElementById('toast-root');
@@ -211,9 +215,10 @@ function showTab(name, btn) {
     const pt = document.getElementById('page-title');
     if (pt && titles[name]) pt.textContent = titles[name];
     if (name === 'status') { loadStatus(); startStatusTimer(); } else { stopStatusTimer(); }
-    if (name === 'models') loadModelWhitelist();
-    if (name === 'keys') loadKeys();
-    if (name === 'tools') { loadTestModels(); loadSettings(); loadHeaderCapture(); }
+	if (name === 'models') loadModelWhitelist();
+	if (name === 'keys') loadKeys();
+	if (name === 'logs') loadLogs();
+	if (name === 'tools') { loadTestModels(); loadSettings(); loadHeaderCapture(); }
 }
 function startStatusTimer() {
     stopStatusTimer();

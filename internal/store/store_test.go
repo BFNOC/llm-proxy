@@ -129,6 +129,69 @@ func TestRunMigrations_Idempotent(t *testing.T) {
 	require.NoError(t, err, "second migration run should be idempotent")
 }
 
+func TestMigration31_PreservesSelectedScopeAndDefaultsEmptyScopeToAll(t *testing.T) {
+	for _, testCase := range []struct {
+		name            string
+		insertSelected  bool
+		expectedAllKeys bool
+	}{
+		{name: "selected scope", insertSelected: true, expectedAllKeys: false},
+		{name: "empty legacy scope", insertSelected: false, expectedAllKeys: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			dbPath := filepath.Join(t.TempDir(), "migrate-v31.db")
+			db, err := sql.Open("sqlite", dbPath)
+			require.NoError(t, err)
+			defer db.Close()
+
+			require.NoError(t, runMigrationsThrough(db, 30))
+			if testCase.insertSelected {
+				_, err = db.Exec(`INSERT INTO downstream_keys (key_hash, key_prefix, name, rpm_limit, enabled) VALUES ('hash', 'prefix', 'selected', 0, 1)`)
+				require.NoError(t, err)
+				var keyID int64
+				require.NoError(t, db.QueryRow(`SELECT id FROM downstream_keys WHERE name = 'selected'`).Scan(&keyID))
+				_, err = db.Exec(`INSERT INTO full_recording_keys (downstream_key_id) VALUES (?)`, keyID)
+				require.NoError(t, err)
+			}
+
+			require.NoError(t, RunMigrations(db))
+			var allKeys bool
+			require.NoError(t, db.QueryRow(`SELECT record_all_keys FROM full_recording_config WHERE id = 1`).Scan(&allKeys))
+			assert.Equal(t, testCase.expectedAllKeys, allKeys)
+		})
+	}
+}
+
+func runMigrationsThrough(db *sql.DB, targetVersion int) error {
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS _meta (schema_version INTEGER NOT NULL DEFAULT 0)`); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`INSERT INTO _meta (schema_version) SELECT 0 WHERE NOT EXISTS (SELECT 1 FROM _meta)`); err != nil {
+		return err
+	}
+	for _, item := range migrations {
+		if item.version > targetVersion {
+			break
+		}
+		tx, err := db.Begin()
+		if err != nil {
+			return err
+		}
+		if _, err = tx.Exec(item.up); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+		if _, err = tx.Exec(`UPDATE _meta SET schema_version = ?`, item.version); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+		if err = tx.Commit(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // Upstream CRUD
 // ---------------------------------------------------------------------------
@@ -2441,6 +2504,9 @@ func TestRunMigrations_AllTablesExist(t *testing.T) {
 		"test_models",
 		"settings",
 		"upstream_declared_models",
+		"full_recording_config",
+		"full_recording_keys",
+		"request_log_details",
 	}
 	for _, table := range expectedTables {
 		var name string
@@ -2453,7 +2519,7 @@ func TestRunMigrations_AllTablesExist(t *testing.T) {
 	var version int
 	err = db.QueryRow(`SELECT schema_version FROM _meta`).Scan(&version)
 	require.NoError(t, err)
-	assert.Equal(t, 29, version, "schema version should be at latest migration")
+	assert.Equal(t, 31, version, "schema version should be at latest migration")
 }
 
 // ---------------------------------------------------------------------------

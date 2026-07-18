@@ -1,63 +1,310 @@
 // --- Logs ---
 let slowRequestThreshold = 30000;
+let currentLogSession = null;
+let logListRequestVersion = 0;
+let logSessionRequestVersion = 0;
+
 function loadSlowThreshold() {
     api('/settings').then(data => {
-        if (data && data.slow_request_threshold_ms != null) {
-            slowRequestThreshold = data.slow_request_threshold_ms;
-        }
+        if (data && data.slow_request_threshold_ms != null) slowRequestThreshold = data.slow_request_threshold_ms;
     }).catch(() => {});
 }
+
 function formatBytes(bytes) {
     if (!bytes || bytes === 0) return '-';
     if (bytes < 1024) return bytes + ' B';
     if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
     return (bytes / 1048576).toFixed(1) + ' MB';
 }
+
+function populateLogKeyOptions() {
+    const select = document.getElementById('logs-key-id');
+    if (!select) return Promise.resolve();
+    const render = keys => {
+        const current = select.value;
+        select.innerHTML = '<option value="">全部</option>' + (keys || []).map(k =>
+            '<option value="' + Number(k.id) + '">#' + Number(k.id) + ' ' + esc(k.name || k.key_prefix || '') + '</option>'
+        ).join('');
+        select.value = current;
+    };
+    if (keysCache.length > 0) {
+        render(keysCache);
+        return Promise.resolve();
+    }
+    return api('/keys').then(data => {
+        if (Array.isArray(data)) {
+            keysCache = data;
+            render(keysCache);
+        }
+    }).catch(() => {});
+}
+
+function buildLogQuery(extra, options) {
+    const form = document.getElementById('logs-query-form');
+    const formData = form ? new FormData(form) : new FormData();
+    const params = new URLSearchParams();
+    const fields = ['key_id', 'model', 'path', 'status_code'];
+    if (!options || options.includeLimit !== false) fields.push('limit');
+    fields.forEach(name => {
+        const value = String(formData.get(name) || '').trim();
+        if (value) params.set(name, value);
+    });
+    Object.keys(extra || {}).forEach(name => {
+        const value = extra[name];
+        if (value !== null && value !== undefined && value !== '') params.set(name, String(value));
+    });
+    return '?' + params.toString();
+}
+
 function loadLogs(e) {
-    if(e) e.preventDefault();
-    const f = e ? new FormData(e.target) : new FormData();
-    let q = '?limit='+(f.get('limit')||50);
-    if(f.get('key_id')) q += '&key_id='+f.get('key_id');
+    if (e) e.preventDefault();
+    const list = document.getElementById('log-session-list');
+    if (!list) return;
+    populateLogKeyOptions();
     loadSlowThreshold();
-    api('/logs'+q).then(data => {
-        const tbody = document.getElementById('logs-table');
-        if (!data || data.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="16" class="empty-state">暂无日志</td></tr>';
+    const requestVersion = ++logListRequestVersion;
+    list.innerHTML = '<div class="empty-state"><span class="loading-dot"></span><span class="loading-dot"></span><span class="loading-dot"></span></div>';
+    api('/logs/sessions' + buildLogQuery()).then(data => {
+        if (requestVersion !== logListRequestVersion) return;
+        if (data && data.error) {
+            list.innerHTML = '<div class="empty-state"><strong>查询失败</strong><p>' + esc(data.error) + '</p></div>';
             return;
         }
-        tbody.innerHTML = (data||[]).map(l => {
-            const keyIdx = l.UpstreamKeyIdx;
-            const keyIdxText = keyIdx >= 0 ? '#' + (keyIdx + 1) : '-';
-            const modelText = l.Model || '-';
-            const proxyText = l.UsedProxy ? esc(l.UsedProxy) : '<span style="color:var(--text-secondary)">直连</span>';
-            const isSlow = slowRequestThreshold > 0 && l.LatencyMs > slowRequestThreshold;
-            const latencyHtml = isSlow
-                ? '<span class="badge badge-red" title="慢请求">'+l.LatencyMs+'ms</span>'
-                : l.LatencyMs+'ms';
-            const rowStyle = isSlow ? ' style="background:rgba(239,68,68,0.06);"' : '';
-            return '<tr'+rowStyle+'><td class="hide-on-mobile">'+l.ID+'</td><td>'+l.DownstreamKeyID+'</td><td>'+esc(l.UpstreamName||'-')+'</td><td class="hide-on-mobile"><span class="badge badge-purple" style="font-size:0.7rem">'+keyIdxText+'</span></td><td class="hide-on-mobile"><code style="font-size:0.78rem">'+esc(modelText)+'</code></td><td class="hide-on-mobile" style="font-size:0.78rem;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(l.UsedProxy||'')+'">'+proxyText+'</td><td class="hide-on-mobile">'+esc(l.ClientIP||'-')+'</td><td>'+esc(l.IPRegion||'-')+'</td><td class="hide-on-mobile">'+esc(l.ProviderStyle)+'</td><td class="hide-on-mobile">'+esc(l.Path)+'</td><td><span class="badge '+(l.StatusCode<400?'badge-green':'badge-red')+'">'+l.StatusCode+'</span></td><td class="hide-on-mobile">'+latencyHtml+'</td><td class="hide-on-mobile">'+formatBytes(l.RequestSize)+'</td><td class="hide-on-mobile">'+formatBytes(l.ResponseSize)+'</td><td>'+fmtTime(l.CreatedAt)+'</td><td class="actions"><button class="btn btn-ghost btn-sm" onclick="replayLog('+l.ID+')">重放</button></td></tr>';
-        }).join('');
+        renderLogSessions(Array.isArray(data) ? data : []);
+    }).catch(() => {
+        if (requestVersion !== logListRequestVersion) return;
+        list.innerHTML = '<div class="empty-state"><strong>查询失败</strong><p>无法获取请求会话</p></div>';
     });
 }
 
+function renderLogSessions(sessions) {
+    const list = document.getElementById('log-session-list');
+    if (sessions.length === 0) {
+        list.innerHTML = '<div class="empty-state"><strong>暂无会话</strong><p>当前条件下没有完整请求记录</p></div>';
+        return;
+    }
+    const sourceLabels = {
+        'header:x-claude-code-session-id': 'Claude Code',
+        'header:session-id': 'Session Header',
+        'header:thread-id': 'Thread Header',
+        'body:conversation': 'Responses Conversation',
+        'body:session_id': '请求 Session',
+        'body:client_metadata.session_id': '客户端 Session',
+        'body:metadata.user_id.session_id': 'Claude Metadata',
+        'body:prompt_cache_key': 'Prompt Cache',
+        'derived:message_root': '历史指纹',
+        'response_id': 'Responses 链',
+        'previous_response_id': 'Responses 链'
+    };
+    list.innerHTML = sessions.map(session => {
+        const encodedSessionID = encodeURIComponent(session.session_id || '');
+        const source = sourceLabels[session.session_source] || session.session_source || '会话';
+        const preview = session.session_preview || session.session_id || '未命名会话';
+        const errors = Number(session.error_count || 0);
+        return '<article class="log-session-item" data-testid="log-session" data-key-id="' + Number(session.downstream_key_id) + '" data-session-id="' + encodedSessionID + '">' +
+            '<div class="log-session-main"><div class="log-session-kicker"><span class="badge badge-purple">' + esc(source) + '</span><span>Key #' + Number(session.downstream_key_id) + '</span></div>' +
+            '<h3>' + esc(preview) + '</h3><code class="log-session-id">' + esc(session.session_id) + '</code></div>' +
+            '<div class="log-session-stats"><span><strong>' + Number(session.request_count || 0) + '</strong> 次调用</span>' +
+            (errors > 0 ? '<span class="badge badge-red">' + errors + ' 错误</span>' : '<span class="badge badge-green">无错误</span>') +
+            '<span>' + fmtTime(session.first_at) + ' 至 ' + fmtTime(session.last_at) + '</span></div>' +
+            '<button type="button" class="btn btn-ghost btn-sm" data-action="open-session">查看会话</button></article>';
+    }).join('');
+    list.querySelectorAll('[data-action="open-session"]').forEach(button => {
+        button.addEventListener('click', () => {
+            const item = button.closest('[data-testid="log-session"]');
+            openLogSession(Number(item.dataset.keyId), decodeURIComponent(item.dataset.sessionId));
+        });
+    });
+}
+
+function openLogSession(keyID, sessionID) {
+    const dialog = document.getElementById('dlg-log-session');
+    const recordsBox = document.getElementById('log-session-records');
+    document.getElementById('log-session-title').textContent = '请求会话';
+    document.getElementById('log-session-meta').textContent = 'Key #' + keyID + ' · ' + sessionID;
+    recordsBox.innerHTML = '<div class="empty-state"><span class="loading-dot"></span><span class="loading-dot"></span><span class="loading-dot"></span></div>';
+    currentLogSession = {keyID: keyID, sessionID: sessionID};
+    const requestVersion = ++logSessionRequestVersion;
+    document.getElementById('log-session-export').onclick = exportCurrentLogSession;
+    dialog.showModal();
+    api('/logs/session?key_id=' + encodeURIComponent(keyID) + '&session_id=' + encodeURIComponent(sessionID) + '&limit=5000').then(data => {
+        if (requestVersion !== logSessionRequestVersion) return;
+        if (data && data.error) {
+            recordsBox.innerHTML = '<div class="empty-state"><strong>加载失败</strong><p>' + esc(data.error) + '</p></div>';
+            return;
+        }
+        renderLogSessionRecords(Array.isArray(data.records) ? data.records : [], data.truncated === true, Number(data.limit || 5000));
+    }).catch(() => {
+        if (requestVersion !== logSessionRequestVersion) return;
+        recordsBox.innerHTML = '<div class="empty-state"><strong>加载失败</strong><p>无法获取会话详情</p></div>';
+    });
+}
+
+function renderLogSessionRecords(records, truncated, limit) {
+    const box = document.getElementById('log-session-records');
+    if (records.length === 0) {
+        box.innerHTML = '<div class="empty-state">暂无会话记录</div>';
+        return;
+    }
+    const warning = truncated
+        ? '<div class="log-session-warning">会话过长，仅显示最近 ' + Number(limit || records.length) + ' 次调用。</div>'
+        : '';
+    box.innerHTML = warning + records.map((record, index) => renderLogTurn(record, index)).join('');
+    box.querySelectorAll('[data-action="replay-log"]').forEach(button => {
+        button.addEventListener('click', () => replayLog(Number(button.dataset.logId)));
+    });
+}
+
+function renderLogTurn(record, index) {
+    const log = record.log || {};
+    const detail = record.detail || {};
+    const requestText = extractRequestText(detail.request_body || '');
+    const responseText = extractResponseText(detail.response_body || '');
+    const isSlow = slowRequestThreshold > 0 && Number(log.LatencyMs || 0) > slowRequestThreshold;
+    const truncated = detail.request_body_truncated || detail.response_body_truncated;
+    return '<section class="log-turn" data-testid="log-session-record" data-log-id="' + Number(log.ID || 0) + '">' +
+        '<div class="log-turn-marker">' + (index + 1) + '</div><div class="log-turn-content">' +
+        '<div class="log-turn-header"><div><strong>' + fmtTime(log.CreatedAt) + '</strong><span>' + esc(log.Model || '-') + ' · ' + esc(log.Path || '-') + '</span></div>' +
+        '<div class="log-turn-badges"><span class="badge ' + (Number(log.StatusCode) < 400 ? 'badge-green' : 'badge-red') + '">' + Number(log.StatusCode || 0) + '</span>' +
+        '<span class="badge ' + (isSlow ? 'badge-red' : 'badge-muted') + '">' + Number(log.LatencyMs || 0) + 'ms</span>' +
+        (truncated ? '<span class="badge badge-orange">已截断</span>' : '') +
+        '<button type="button" class="btn btn-ghost btn-sm" data-action="replay-log" data-log-id="' + Number(log.ID || 0) + '">重放</button></div></div>' +
+        '<div class="log-turn-dialogue"><div class="log-message log-message-request"><span>请求</span><p data-testid="request-body">' + esc(requestText || '无可读文本') + '</p></div>' +
+        '<div class="log-message log-message-response"><span>响应</span><p data-testid="response-body">' + esc(responseText || '无可读文本') + '</p></div></div>' +
+        '<div class="log-turn-details">' +
+        renderLogDetails('请求 Header', prettyJSON(detail.request_headers)) +
+        renderLogDetails('请求 Body · ' + formatBytes(log.request_size || log.RequestSize), prettyBody(detail.request_body || '')) +
+        renderLogDetails('响应 Header', prettyJSON(detail.response_headers)) +
+        renderLogDetails('响应 Body · ' + formatBytes(log.response_size || log.ResponseSize), prettyBody(detail.response_body || '')) +
+        '</div></div></section>';
+}
+
+function renderLogDetails(label, value) {
+    return '<details><summary>' + esc(label) + '</summary><pre>' + esc(value || '') + '</pre></details>';
+}
+
+function prettyJSON(value) {
+    try { return JSON.stringify(value || {}, null, 2); } catch (_) { return String(value || ''); }
+}
+
+function prettyBody(value) {
+    if (!value) return '';
+    try { return JSON.stringify(JSON.parse(value), null, 2); } catch (_) { return value; }
+}
+
+function contentToText(content) {
+    if (typeof content === 'string') return content;
+    if (!Array.isArray(content)) return '';
+    return content.map(block => {
+        if (!block || typeof block !== 'object') return '';
+        return block.text || block.input_text || block.output_text || '';
+    }).filter(Boolean).join('\n');
+}
+
+function extractRequestText(body) {
+	try {
+		const data = JSON.parse(body);
+		if (typeof data.input === 'string') return data.input;
+		if (typeof data.prompt === 'string') return data.prompt;
+        const messages = Array.isArray(data.messages) ? data.messages : (Array.isArray(data.input) ? data.input : []);
+        for (let i = messages.length - 1; i >= 0; i--) {
+            if (messages[i] && messages[i].role === 'user') {
+                const text = contentToText(messages[i].content);
+                if (text) return text;
+            }
+        }
+    } catch (_) {}
+    return '';
+}
+
+function extractResponseText(body) {
+    const extract = data => {
+        if (!data || typeof data !== 'object') return '';
+		if (typeof data.output_text === 'string') return data.output_text;
+		if (data.choices && data.choices[0] && typeof data.choices[0].text === 'string') return data.choices[0].text;
+		if (data.choices && data.choices[0] && data.choices[0].message) return contentToText(data.choices[0].message.content);
+		if (data.choices && data.choices[0] && data.choices[0].delta) return contentToText(data.choices[0].delta.content);
+		if (Array.isArray(data.content)) return contentToText(data.content);
+        if (Array.isArray(data.output)) {
+            return data.output.map(item => contentToText(item && item.content)).filter(Boolean).join('\n');
+        }
+        if (data.response) return extract(data.response);
+        if (data.message) return extract(data.message);
+        if (typeof data.delta === 'string') return data.delta;
+        if (data.delta && typeof data.delta.text === 'string') return data.delta.text;
+        return '';
+    };
+    try { return extract(JSON.parse(body)); } catch (_) {}
+    const chunks = [];
+    String(body || '').split(/\r?\n/).forEach(line => {
+        if (!line.trim().startsWith('data:')) return;
+        const payload = line.trim().slice(5).trim();
+        if (!payload || payload === '[DONE]') return;
+        try {
+            const text = extract(JSON.parse(payload));
+            if (text) chunks.push(text);
+        } catch (_) {}
+    });
+    return chunks.join('');
+}
+
+function exportLogSessions() {
+    const limitInput = document.getElementById('logs-session-limit');
+    const sessionLimit = Math.max(1, Number(limitInput && limitInput.value) || 50);
+    downloadLogExport(buildLogQuery({full_only: true, session_limit: sessionLimit}, {includeLimit: false}), 'request-logs.ndjson');
+}
+
+function exportCurrentLogSession() {
+    if (!currentLogSession) return;
+    const query = '?key_id=' + encodeURIComponent(currentLogSession.keyID) + '&session_id=' + encodeURIComponent(currentLogSession.sessionID);
+    downloadLogExport(query, 'request-session.ndjson');
+}
+
+function downloadLogExport(query, filename) {
+    fetch('/admin/api/logs/export' + query, {headers: {'Authorization': 'Bearer ' + TOKEN}}).then(async response => {
+        if (!response.ok) {
+            let message = '导出失败';
+            try { message = (await response.json()).error || message; } catch (_) {}
+            throw new Error(message);
+        }
+        return {
+            blob: await response.blob(),
+            truncated: response.headers.get('X-Export-Truncated') === 'true',
+            recordLimit: Number(response.headers.get('X-Export-Record-Limit') || 10000)
+        };
+    }).then(result => {
+        const url = URL.createObjectURL(result.blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+        if (result.truncated) toastErr('导出已达到 ' + result.recordLimit + ' 条上限，文件仅包含最近的请求记录。');
+    }).catch(error => toastErr(error.message));
+}
+
 function replayLog(logId) {
-    api('/logs/' + logId + '/replay', {method:'POST'}).then(function(d) {
+    api('/logs/' + logId + '/replay', {method: 'POST'}).then(function(d) {
         if (d.error) { toastErr(d.error); return; }
         var upstream = allUpstreams.find(function(u) { return u.name === d.upstream_name; });
-        if (upstream) {
+		if (upstream) {
+			const sessionDialog = document.getElementById('dlg-log-session');
+			if (sessionDialog && sessionDialog.open) sessionDialog.close();
             document.querySelector('[data-tab="upstreams"]').click();
             openTestUpstreamDialog(upstream.id, true);
             setTimeout(function() {
                 var modelInput = document.getElementById('tu-model');
                 if (modelInput && d.model) modelInput.value = d.model;
-                var protoMap = {openai:'openai', anthropic:'anthropic'};
-                if (d.provider_style && protoMap[d.provider_style]) {
-                    setTuProtocol(protoMap[d.provider_style]);
-                }
+                var protoMap = {openai: 'openai', anthropic: 'anthropic', responses: 'responses'};
+                if (d.provider_style && protoMap[d.provider_style]) setTuProtocol(protoMap[d.provider_style]);
+                var promptInput = document.getElementById('tu-prompt');
+                var prompt = extractRequestText(d.request_body || '');
+                if (promptInput && prompt) promptInput.value = prompt;
             }, 200);
         } else {
             toastErr('未找到上游: ' + d.upstream_name);
         }
-    });
+    }).catch(error => toastErr(error && error.message ? error.message : '重放失败'));
 }
-

@@ -173,6 +173,15 @@ func main() {
 	}
 	defer db.Close()
 	slog.Info("SQLite store opened", "path", yamlConfig.Storage.SQLitePath)
+	fullRecordingConfig, err := db.GetFullRecordingConfig()
+	if err != nil {
+		slog.Error("Failed to load full recording config", "error", err)
+		os.Exit(1)
+	}
+	fullRecordingPolicy := middleware.NewFullRecordingPolicy(fullRecordingConfig)
+	if fullRecordingConfig.Enabled && !yamlConfig.Audit.Enabled {
+		slog.Warn("Full recording is enabled but audit logging is disabled; no records will be captured")
+	}
 
 	// 创建 Key 缓存并加载快照
 	keyCache := middleware.NewKeyCache()
@@ -337,7 +346,7 @@ func main() {
 	bindingCache := middleware.NewBindingCache(db)
 
 	if yamlConfig.Admin.Enabled {
-		adminHandler := admin.NewAdminHandler(db, keyCache, rateLimiter, prober, dynamicProxy, auditLogger, modelFilter, globalCounter, perKeyStats, overrideCache, bindingCache, headerCapture, circuitBreaker, adminToken, version)
+		adminHandler := admin.NewAdminHandler(db, keyCache, rateLimiter, prober, dynamicProxy, auditLogger, modelFilter, globalCounter, perKeyStats, overrideCache, bindingCache, headerCapture, circuitBreaker, adminToken, version, fullRecordingPolicy)
 		adminHandler.RegisterRoutes(r)
 		slog.Info("Admin interface enabled", "dashboard", "/admin/", "api", "/admin/api/")
 	}
@@ -360,7 +369,7 @@ func main() {
 	proxyChain = middleware.RateLimitMiddleware(rateLimiter)(proxyChain)
 	proxyChain = middleware.ConcurrencyMiddleware(concurrencyLimiter)(proxyChain)
 	if auditLogger != nil {
-		proxyChain = middleware.AuditLogMiddleware(auditLogger)(proxyChain)
+		proxyChain = middleware.AuditLogMiddleware(auditLogger, fullRecordingPolicy)(proxyChain)
 	}
 	// per-key 统计放在 KeyResolver 之后，确保只记录已通过鉴权的请求
 	proxyChain = middleware.PerKeyStatsMiddleware(perKeyStats)(proxyChain)

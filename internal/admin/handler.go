@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -33,6 +34,7 @@ type AdminHandler struct {
 	prober         *proxy.UpstreamProber
 	dynamicProxy   *proxy.DynamicProxy
 	auditLogger    *middleware.AuditLogger
+	fullRecording  *middleware.FullRecordingPolicy
 	modelFilter    *middleware.ModelFilter
 	requestCounter *middleware.GlobalRequestCounter
 	perKeyStats    *middleware.PerKeyStatsCollector
@@ -60,7 +62,19 @@ func NewAdminHandler(
 	cb *middleware.CircuitBreaker,
 	adminToken string,
 	version string,
+	fullRecordingPolicies ...*middleware.FullRecordingPolicy,
 ) *AdminHandler {
+	var fullRecording *middleware.FullRecordingPolicy
+	if len(fullRecordingPolicies) > 0 {
+		fullRecording = fullRecordingPolicies[0]
+	}
+	if fullRecording == nil {
+		config, err := s.GetFullRecordingConfig()
+		if err != nil {
+			config = store.FullRecordingConfig{}
+		}
+		fullRecording = middleware.NewFullRecordingPolicy(config)
+	}
 	return &AdminHandler{
 		store:          s,
 		keyCache:       kc,
@@ -68,6 +82,7 @@ func NewAdminHandler(
 		prober:         prober,
 		dynamicProxy:   dp,
 		auditLogger:    al,
+		fullRecording:  fullRecording,
 		modelFilter:    mf,
 		requestCounter: rc,
 		perKeyStats:    pks,
@@ -131,6 +146,10 @@ func (h *AdminHandler) RegisterRoutes(r *mux.Router) {
 	// 日志
 	api.HandleFunc("/logs", h.queryLogs).Methods("GET")
 	api.HandleFunc("/logs/key-stats", h.getKeyUsageStats).Methods("GET")
+	api.HandleFunc("/logs/export", h.exportLogs).Methods("GET")
+	api.HandleFunc("/logs/sessions", h.queryLogSessions).Methods("GET")
+	api.HandleFunc("/logs/session", h.getLogSession).Methods("GET")
+	api.HandleFunc("/logs/{id}", h.getLogDetail).Methods("GET")
 	api.HandleFunc("/logs/{id}/replay", h.replayRequest).Methods("POST")
 
 	// 模型白名单
@@ -228,22 +247,22 @@ func (h *AdminHandler) listUpstreams(w http.ResponseWriter, r *http.Request) {
 		Enabled bool   `json:"enabled"`
 	}
 	type upstreamResponse struct {
-		ID                   int64        `json:"id"`
-		Name                 string       `json:"name"`
-		BaseURL              string       `json:"base_url"`
-		APIKeys              []string     `json:"api_keys"`
-		APIKeyDetails        []apiKeyInfo `json:"api_key_details"`
-		ProxyURL             string       `json:"proxy_url"`
-		Priority             int          `json:"priority"`
-		Enabled              bool         `json:"enabled"`
-		KeySchedulingMode    string       `json:"key_scheduling_mode"`
-		AuthMode             string       `json:"auth_mode"`
-		Remark               string       `json:"remark"`
-		WebSocketEnabled     bool         `json:"websocket_enabled"`
-		AutoDiscoverModels   bool         `json:"auto_discover_models"`
-		LastModelDiscovery   *time.Time   `json:"last_model_discovery"`
-		CreatedAt            time.Time    `json:"created_at"`
-		UpdatedAt            time.Time    `json:"updated_at"`
+		ID                 int64        `json:"id"`
+		Name               string       `json:"name"`
+		BaseURL            string       `json:"base_url"`
+		APIKeys            []string     `json:"api_keys"`
+		APIKeyDetails      []apiKeyInfo `json:"api_key_details"`
+		ProxyURL           string       `json:"proxy_url"`
+		Priority           int          `json:"priority"`
+		Enabled            bool         `json:"enabled"`
+		KeySchedulingMode  string       `json:"key_scheduling_mode"`
+		AuthMode           string       `json:"auth_mode"`
+		Remark             string       `json:"remark"`
+		WebSocketEnabled   bool         `json:"websocket_enabled"`
+		AutoDiscoverModels bool         `json:"auto_discover_models"`
+		LastModelDiscovery *time.Time   `json:"last_model_discovery"`
+		CreatedAt          time.Time    `json:"created_at"`
+		UpdatedAt          time.Time    `json:"updated_at"`
 	}
 	result := make([]upstreamResponse, len(upstreams))
 	for i, u := range upstreams {
@@ -772,6 +791,7 @@ func (h *AdminHandler) deleteKey(w http.ResponseWriter, r *http.Request) {
 	if h.bindingCache != nil {
 		h.bindingCache.Reload()
 	}
+	h.reloadFullRecordingPolicy()
 
 	slog.Info("admin: deleted key", "id", id)
 	jsonOK(w, map[string]string{"status": "deleted"})
@@ -798,49 +818,14 @@ func (h *AdminHandler) revealKey(w http.ResponseWriter, r *http.Request) {
 // --- 日志 ---
 
 func (h *AdminHandler) queryLogs(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-
-	var keyID int64
-	if v := q.Get("key_id"); v != "" {
-		parsed, err := strconv.ParseInt(v, 10, 64)
-		if err != nil {
-			jsonError(w, http.StatusBadRequest, "invalid key_id")
-			return
-		}
-		keyID = parsed
+	w.Header().Set("Cache-Control", "no-store")
+	filter, err := parseLogQuery(r, 100, 1000)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 
-	from := time.Now().UTC().Add(-24 * time.Hour)
-	if v := q.Get("from"); v != "" {
-		t, err := time.Parse(time.RFC3339, v)
-		if err != nil {
-			jsonError(w, http.StatusBadRequest, "invalid from date (use RFC3339)")
-			return
-		}
-		from = t
-	}
-
-	to := time.Now().UTC()
-	if v := q.Get("to"); v != "" {
-		t, err := time.Parse(time.RFC3339, v)
-		if err != nil {
-			jsonError(w, http.StatusBadRequest, "invalid to date (use RFC3339)")
-			return
-		}
-		to = t
-	}
-
-	limit := 100
-	if v := q.Get("limit"); v != "" {
-		parsed, err := strconv.Atoi(v)
-		if err != nil {
-			jsonError(w, http.StatusBadRequest, "invalid limit")
-			return
-		}
-		limit = parsed
-	}
-
-	logs, err := h.store.QueryLogs(keyID, from, to, limit)
+	logs, err := h.store.QueryLogsFiltered(filter)
 	if err != nil {
 		slog.Error("admin: store error", "error", err)
 		jsonError(w, http.StatusInternalServerError, "internal error")
@@ -1351,9 +1336,10 @@ func (h *AdminHandler) deleteTestModel(w http.ResponseWriter, r *http.Request) {
 
 // --- 请求重放 ---
 
-// replayRequest 根据日志 ID 返回请求元数据，供前端预填测试对话框。
-// 由于日志不存储请求体，"重放"实际上是读取日志条目的上游/模型/路径等信息。
+// replayRequest 根据日志 ID 返回请求元数据和可用的完整请求，供前端预填测试对话框。
+// 该接口只准备重放数据，不主动向外部上游发起请求。
 func (h *AdminHandler) replayRequest(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	id, err := parseID(r)
 	if err != nil {
 		jsonError(w, http.StatusBadRequest, err.Error())
@@ -1371,14 +1357,31 @@ func (h *AdminHandler) replayRequest(w http.ResponseWriter, r *http.Request) {
 		providerStyle = "openai"
 	}
 
+	response := map[string]interface{}{
+		"log_id":          logEntry.ID,
+		"upstream_name":   logEntry.UpstreamName,
+		"model":           logEntry.Model,
+		"path":            logEntry.Path,
+		"provider_style":  providerStyle,
+		"has_full_record": logEntry.HasFullRecord,
+	}
+	if logEntry.HasFullRecord {
+		detail, detailErr := h.store.GetRequestLogDetail(id)
+		if detailErr != nil {
+			slog.Error("admin: 读取重放详情失败", "log_id", id, "error", detailErr)
+			jsonError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		response["method"] = detail.Method
+		response["raw_query"] = detail.RawQuery
+		response["request_headers"] = rawJSONOrEmptyObject(detail.RequestHeadersJSON)
+		response["request_body"] = detail.RequestBody
+		response["session_id"] = detail.SessionID
+		response["session_source"] = detail.SessionSource
+	}
+
 	slog.Info("admin: 请求重放预填", "log_id", logEntry.ID)
-	jsonOK(w, map[string]interface{}{
-		"log_id":         logEntry.ID,
-		"upstream_name":  logEntry.UpstreamName,
-		"model":          logEntry.Model,
-		"path":           logEntry.Path,
-		"provider_style": providerStyle,
-	})
+	jsonOK(w, response)
 }
 
 // --- 模型自动发现 ---
@@ -2302,12 +2305,12 @@ func (h *AdminHandler) testUpstreamAPIKey(w http.ResponseWriter, r *http.Request
 	}
 
 	var req struct {
-		Protocol     string `json:"protocol"`      // "openai" | "anthropic" | "responses"
-		Model        string `json:"model"`         // 测试模型
-		Prompt       string `json:"prompt"`        // 测试提示词
-		CFClearance  string `json:"cf_clearance"`  // CF 绕过
-		CFUserAgent  string `json:"cf_user_agent"` // CF 绕过
-		ClientSpoof  *bool  `json:"client_spoof"`  // 客户端伪装：Claude Code / Codex（仅本测试）
+		Protocol    string `json:"protocol"`      // "openai" | "anthropic" | "responses"
+		Model       string `json:"model"`         // 测试模型
+		Prompt      string `json:"prompt"`        // 测试提示词
+		CFClearance string `json:"cf_clearance"`  // CF 绕过
+		CFUserAgent string `json:"cf_user_agent"` // CF 绕过
+		ClientSpoof *bool  `json:"client_spoof"`  // 客户端伪装：Claude Code / Codex（仅本测试）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid JSON")
@@ -2868,18 +2871,30 @@ func (h *AdminHandler) getSettings(w http.ResponseWriter, r *http.Request) {
 	if slowThresholdMs < 0 {
 		slowThresholdMs = 30000
 	}
+	fullRecording, err := h.store.GetFullRecordingConfig()
+	if err != nil {
+		slog.Error("admin: 读取全量记录设置失败", "error", err)
+		jsonError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
 	jsonOK(w, map[string]interface{}{
 		"auto_disable_threshold":    threshold,
 		"log_retention_days":        retentionDays,
 		"slow_request_threshold_ms": slowThresholdMs,
+		"full_recording_enabled":    fullRecording.Enabled,
+		"full_recording_all_keys":   fullRecording.AllKeys,
+		"full_recording_key_ids":    fullRecording.DownstreamKeyIDs,
 	})
 }
 
 func (h *AdminHandler) updateSettings(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		AutoDisableThreshold  *int `json:"auto_disable_threshold"`
-		LogRetentionDays      *int `json:"log_retention_days"`
-		SlowRequestThresholdMs *int `json:"slow_request_threshold_ms"`
+		AutoDisableThreshold   *int     `json:"auto_disable_threshold"`
+		LogRetentionDays       *int     `json:"log_retention_days"`
+		SlowRequestThresholdMs *int     `json:"slow_request_threshold_ms"`
+		FullRecordingEnabled   *bool    `json:"full_recording_enabled"`
+		FullRecordingAllKeys   *bool    `json:"full_recording_all_keys"`
+		FullRecordingKeyIDs    *[]int64 `json:"full_recording_key_ids"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid JSON")
@@ -2924,6 +2939,21 @@ func (h *AdminHandler) updateSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		slog.Info("admin: updated slow_request_threshold_ms", "value", val)
+	}
+	if body.FullRecordingEnabled != nil || body.FullRecordingAllKeys != nil || body.FullRecordingKeyIDs != nil {
+		if err := h.updateFullRecordingConfig(body.FullRecordingEnabled, body.FullRecordingAllKeys, body.FullRecordingKeyIDs); err != nil {
+			if errors.Is(err, errAuditLoggingDisabled) {
+				jsonError(w, http.StatusConflict, err.Error())
+				return
+			}
+			if errors.Is(err, errInvalidFullRecordingKey) {
+				jsonError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			slog.Error("admin: 更新全量记录设置失败", "error", err)
+			jsonError(w, http.StatusInternalServerError, "failed to save")
+			return
+		}
 	}
 	jsonOK(w, map[string]interface{}{"status": "updated"})
 }
@@ -3130,20 +3160,20 @@ func (h *AdminHandler) getUpstreamRateInfo(w http.ResponseWriter, r *http.Reques
 
 	// 合并两个来源的数据
 	type rateInfo struct {
-		UpstreamID     int64       `json:"upstream_id"`
-		RPMLimit       int         `json:"rpm_limit,omitempty"`
-		RPMUsed        int         `json:"rpm_used,omitempty"`
-		RPMRemaining   int         `json:"rpm_remaining,omitempty"`
-		Last429At      *time.Time  `json:"last_429_at,omitempty"`
-		Consecutive429s  int         `json:"total_429_count,omitempty"`
+		UpstreamID      int64      `json:"upstream_id"`
+		RPMLimit        int        `json:"rpm_limit,omitempty"`
+		RPMUsed         int        `json:"rpm_used,omitempty"`
+		RPMRemaining    int        `json:"rpm_remaining,omitempty"`
+		Last429At       *time.Time `json:"last_429_at,omitempty"`
+		Consecutive429s int        `json:"total_429_count,omitempty"`
 	}
 
 	merged := make(map[int64]*rateInfo)
 	// 先填充持久化数据
 	for _, p := range persistedInfo {
 		merged[p.UpstreamID] = &rateInfo{
-			UpstreamID:    p.UpstreamID,
-			Last429At:     p.Last429At,
+			UpstreamID:      p.UpstreamID,
+			Last429At:       p.Last429At,
 			Consecutive429s: p.Consecutive429s,
 		}
 	}

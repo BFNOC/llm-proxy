@@ -91,7 +91,7 @@ adminHandler.RegisterRoutes(r)   // r 是 mux.Router
 - **重定向防御**：所有出站测试 client 都拒跟随重定向（防 302 → 内网 SSRF），`checkUpstreamQuota` 例外但限制同 host 且 ≤5 跳
 - **响应体限流**：测试响应读取 `io.LimitReader(..., 256KB)`、quota 限 64KB
 - **明文密钥仅返回一次**：`createKey` 直接返回；`revealKey` 解密历史明文（v12+ 创建的）
-- **管理 Token**：常量时间比较缺失（直接 `==`）——若需要可引入 `subtle.ConstantTimeCompare`
+- **管理 Token**：使用 `subtle.ConstantTimeCompare` 常量时间比较（Bearer 头与 SSE `/events` 查询参数两处）
 
 ## 扩展点
 

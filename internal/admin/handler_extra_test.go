@@ -148,6 +148,7 @@ func TestQueryLogs_FilterByKeyID(t *testing.T) {
 
 	rec := extraDoReq(t, router, "GET", fmt.Sprintf("/admin/api/logs?key_id=%d", dk1.ID), nil)
 	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "no-store", rec.Header().Get("Cache-Control"))
 
 	logs := extraDecodeArray(t, rec)
 	assert.Len(t, logs, 2)

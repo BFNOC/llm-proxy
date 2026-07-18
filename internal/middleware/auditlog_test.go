@@ -3,6 +3,7 @@ package middleware
 import (
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -28,11 +29,13 @@ func newAuditTestStore(t *testing.T) *store.Store {
 
 func newChannelOnlyLogger(bufSize int) *AuditLogger {
 	return &AuditLogger{
-		ch:            make(chan store.RequestLog, bufSize),
-		batchSize:     1000,
-		flushInterval: time.Hour,
-		stopCh:        make(chan struct{}),
-		done:          make(chan struct{}),
+		ch:             make(chan store.RequestLog, bufSize),
+		batchSize:      1000,
+		flushInterval:  time.Hour,
+		fullRecordWait: fullRecordEnqueueTimeout,
+		fullRecordMem:  &fullRecordMemoryBudget{limit: maxFullRecordRetainedBytes},
+		stopCh:         make(chan struct{}),
+		done:           make(chan struct{}),
 	}
 }
 
@@ -112,6 +115,39 @@ func TestAuditLogger_DroppedCount(t *testing.T) {
 	al.Log(store.RequestLog{ClientIP: "3.3.3.3"})
 
 	assert.GreaterOrEqual(t, al.DroppedCount(), int64(1), "should have at least 1 dropped")
+}
+
+func TestLimitedBodyCapture_GlobalBudgetMarksTruncation(t *testing.T) {
+	budget := &fullRecordMemoryBudget{limit: 5}
+	first := limitedBodyCapture{limit: 10, budget: budget}
+	second := limitedBodyCapture{limit: 10, budget: budget}
+
+	first.append([]byte("1234"))
+	second.append([]byte("abcd"))
+
+	assert.Equal(t, "1234", string(first.data))
+	assert.Equal(t, "a", string(second.data))
+	assert.True(t, second.truncated)
+	assert.Equal(t, int64(5), atomic.LoadInt64(&budget.used))
+	budget.release(first.reserved + second.reserved)
+	assert.Zero(t, atomic.LoadInt64(&budget.used))
+}
+
+func TestAuditLogger_FullRecordBackpressureTimesOutAndReleasesBudget(t *testing.T) {
+	al := newChannelOnlyLogger(1)
+	al.fullRecordWait = 20 * time.Millisecond
+	al.Log(store.RequestLog{Detail: &store.RequestLogDetail{}})
+	atomic.StoreInt64(&al.fullRecordMem.used, 5)
+
+	started := time.Now()
+	al.Log(store.RequestLog{
+		Detail:              &store.RequestLogDetail{RequestBody: "12345"},
+		RetainedDetailBytes: 5,
+	})
+	assert.GreaterOrEqual(t, time.Since(started), 20*time.Millisecond)
+	assert.Less(t, time.Since(started), 500*time.Millisecond)
+	assert.Equal(t, int64(1), al.DroppedCount())
+	assert.Zero(t, atomic.LoadInt64(&al.fullRecordMem.used))
 }
 
 // ---------------------------------------------------------------------------

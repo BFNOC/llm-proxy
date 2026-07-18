@@ -269,12 +269,12 @@ ALTER TABLE upstream_providers ADD COLUMN auth_mode TEXT NOT NULL DEFAULT 'api_k
 	{
 		// v22: 上游 WebSocket 支持开关，启用后代理层允许 HTTP Upgrade 透传。
 		version: 22,
-		up: `ALTER TABLE upstream_providers ADD COLUMN websocket_enabled BOOLEAN NOT NULL DEFAULT 0;`,
+		up:      `ALTER TABLE upstream_providers ADD COLUMN websocket_enabled BOOLEAN NOT NULL DEFAULT 0;`,
 	},
 	{
 		// v23: 下游 Key 增加并发连接数限制，0 表示不限制。
 		version: 23,
-		up: `ALTER TABLE downstream_keys ADD COLUMN max_concurrent INTEGER NOT NULL DEFAULT 0;`,
+		up:      `ALTER TABLE downstream_keys ADD COLUMN max_concurrent INTEGER NOT NULL DEFAULT 0;`,
 	},
 	{
 		// v24: 请求日志增加请求/响应体大小字段，用于流量统计。
@@ -348,6 +348,65 @@ CREATE TABLE IF NOT EXISTS upstream_rate_info (
 		version: 29,
 		up: `
 ALTER TABLE upstream_providers ADD COLUMN deleted_at DATETIME;
+`,
+	},
+	{
+		// v30: 按下游 Key 保存完整请求记录。
+		// 配置独立存储，避免配置导入导出时把当前实例的 Key ID 带到另一实例。
+		version: 30,
+		up: `
+CREATE TABLE IF NOT EXISTS full_recording_config (
+    id      INTEGER PRIMARY KEY CHECK(id = 1),
+    enabled BOOLEAN NOT NULL DEFAULT 0
+);
+INSERT OR IGNORE INTO full_recording_config (id, enabled) VALUES (1, 0);
+
+CREATE TABLE IF NOT EXISTS full_recording_keys (
+    downstream_key_id INTEGER PRIMARY KEY,
+    FOREIGN KEY (downstream_key_id) REFERENCES downstream_keys(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS request_log_details (
+    request_log_id           INTEGER PRIMARY KEY,
+    session_id               TEXT NOT NULL DEFAULT '',
+    session_source           TEXT NOT NULL DEFAULT '',
+    session_preview          TEXT NOT NULL DEFAULT '',
+    response_id              TEXT NOT NULL DEFAULT '',
+    parent_response_id       TEXT NOT NULL DEFAULT '',
+    method                   TEXT NOT NULL DEFAULT '',
+    raw_query                TEXT NOT NULL DEFAULT '',
+    request_headers_json     TEXT NOT NULL DEFAULT '{}',
+    request_body             TEXT NOT NULL DEFAULT '',
+    request_body_truncated   BOOLEAN NOT NULL DEFAULT 0,
+    response_headers_json    TEXT NOT NULL DEFAULT '{}',
+    response_body            TEXT NOT NULL DEFAULT '',
+    response_body_truncated  BOOLEAN NOT NULL DEFAULT 0,
+    capture_status           TEXT NOT NULL DEFAULT 'captured',
+    FOREIGN KEY (request_log_id) REFERENCES request_logs(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_request_logs_key_created_at
+    ON request_logs (downstream_key_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_request_log_details_session
+    ON request_log_details (session_id, request_log_id);
+CREATE INDEX IF NOT EXISTS idx_request_log_details_response_id
+    ON request_log_details (response_id);
+CREATE INDEX IF NOT EXISTS idx_request_log_details_parent_response_id
+    ON request_log_details (parent_response_id);
+`,
+	},
+	{
+		// v31: 显式保存完整记录的范围模式。
+		// 不能再用空 Key 列表表示“全部”，否则删除最后一个指定 Key 会意外扩大记录范围。
+		version: 31,
+		up: `
+ALTER TABLE full_recording_config ADD COLUMN record_all_keys BOOLEAN NOT NULL DEFAULT 0;
+UPDATE full_recording_config
+SET record_all_keys = CASE
+    WHEN EXISTS(SELECT 1 FROM full_recording_keys) THEN 0
+    ELSE 1
+END
+WHERE id = 1;
 `,
 	},
 }

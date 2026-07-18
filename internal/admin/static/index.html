@@ -172,17 +172,21 @@
         <div id="tab-logs" class="tab-content">
             <div class="card">
                 <div class="card-header">
-                    <h2>请求日志</h2>
+                    <div>
+                        <h2>请求会话</h2>
+                        <p class="card-desc">最近 24 小时</p>
+                    </div>
+                    <button type="button" class="btn btn-ghost btn-sm" onclick="exportLogSessions()">导出 NDJSON</button>
                 </div>
-                <form onsubmit="loadLogs(event)" class="form-grid" style="margin-bottom:20px;">
-                    <div class="form-group"><label>密钥 ID</label><input name="key_id" type="number" placeholder="全部"></div>
-                    <div class="form-group"><label>条数</label><input name="limit" type="number" value="50"></div>
-                    <div class="form-group"><label>&nbsp;</label><button type="submit" class="btn btn-primary">查询</button></div>
+                <form id="logs-query-form" onsubmit="loadLogs(event)" class="form-grid logs-filter" style="margin-bottom:20px;">
+                    <div class="form-group"><label for="logs-key-id">下游密钥</label><select id="logs-key-id" name="key_id"><option value="">全部</option></select></div>
+                    <div class="form-group"><label for="logs-model">模型</label><input id="logs-model" name="model" placeholder="全部"></div>
+                    <div class="form-group"><label for="logs-path">路径</label><input id="logs-path" name="path" placeholder="全部"></div>
+                    <div class="form-group"><label for="logs-status-code">状态码</label><input id="logs-status-code" name="status_code" type="number" min="100" max="599" placeholder="全部"></div>
+                    <div class="form-group"><label for="logs-session-limit">会话数</label><input id="logs-session-limit" name="limit" type="number" min="1" max="1000" value="50"></div>
+                    <div class="form-group" style="align-self:end;"><button type="submit" class="btn btn-primary">查询</button></div>
                 </form>
-                <div class="table-container">
-                <table><thead><tr><th class="hide-on-mobile">ID</th><th>密钥</th><th>上游</th><th class="hide-on-mobile">Key#</th><th class="hide-on-mobile">模型</th><th class="hide-on-mobile">代理</th><th class="hide-on-mobile">IP</th><th>地区</th><th class="hide-on-mobile">风格</th><th class="hide-on-mobile">路径</th><th>状态码</th><th class="hide-on-mobile">延迟</th><th class="hide-on-mobile">请求大小</th><th class="hide-on-mobile">响应大小</th><th>时间</th><th>操作</th></tr></thead>
-                <tbody id="logs-table"></tbody></table>
-                </div>
+                <div id="log-session-list" class="log-session-list"><div class="empty-state">选择查询条件后加载会话</div></div>
             </div>
         </div>
 
@@ -231,8 +235,28 @@
                     </div>
                     <div class="form-group">
                         <label>&nbsp;</label>
-                        <button class="btn btn-primary btn-sm" onclick="saveSettings()">保存</button>
+                        <button id="settings-save" class="btn btn-primary btn-sm" onclick="saveSettings()">保存</button>
                     </div>
+                </div>
+                <div class="settings-divider"></div>
+                <div class="recording-settings">
+                    <div class="setting-toggle-row">
+                        <div>
+                            <label for="setting-full-recording-enabled">完整请求记录</label>
+                        </div>
+                        <label class="switch-control">
+                            <input type="checkbox" id="setting-full-recording-enabled" onchange="updateFullRecordingControls()">
+                            <span aria-hidden="true"></span>
+                        </label>
+                    </div>
+                    <fieldset id="setting-full-recording-scope" class="recording-scope">
+                        <legend>记录范围</legend>
+                        <div class="segmented-control" role="radiogroup" aria-label="完整请求记录范围">
+                            <label><input type="radio" name="full-recording-mode" value="all" id="setting-full-recording-all-keys" onchange="updateFullRecordingControls()"><span>全部密钥</span></label>
+                            <label><input type="radio" name="full-recording-mode" value="selected" onchange="updateFullRecordingControls()"><span>指定密钥</span></label>
+                        </div>
+                        <div id="setting-full-recording-keys" class="recording-key-list"></div>
+                    </fieldset>
                 </div>
             </div>
             <div class="card">
@@ -557,6 +581,20 @@
             <button type="button" class="btn btn-primary" onclick="saveCFConfig()">保存</button>
         </div>
     </form>
+</dialog>
+
+<!-- Continuous Request Session Dialog -->
+<dialog id="dlg-log-session" class="dlg-log-session">
+    <div class="dlg-header">
+        <h3 id="log-session-title">请求会话</h3>
+        <p id="log-session-meta" class="dlg-desc"></p>
+    </div>
+    <div id="log-session-records" class="dlg-body log-session-records"></div>
+    <div class="dialog-actions">
+        <button type="button" class="btn btn-ghost" id="log-session-export">导出会话</button>
+        <span class="spacer"></span>
+        <button type="button" class="btn btn-primary" onclick="document.getElementById('dlg-log-session').close()">关闭</button>
+    </div>
 </dialog>
 
 <div id="toast-root" aria-live="polite" aria-atomic="true"></div>

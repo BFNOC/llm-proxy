@@ -117,6 +117,8 @@ curl -X PUT http://localhost:9002/admin/api/upstreams/1/declared-models \
 - 测试指定上游 Key：`POST /admin/api/upstreams/{id}/apikeys/{key_id}/test`
 - 管理常用测试模型：`/admin/api/test-models`
 - 查看请求日志：`GET /admin/api/logs`
+- 按会话查看完整请求：`GET /admin/api/logs/sessions`、`GET /admin/api/logs/session`
+- 导出日志或单个会话：`GET /admin/api/logs/export`
 - 查看 Key 使用统计：`GET /admin/api/logs/key-stats`
 - 查看运行状态和连接池：`GET /admin/api/status`
 - 修改运行时设置：`GET/PUT /admin/api/settings`
@@ -204,6 +206,11 @@ DynamicProxy                    选择上游，重写认证头，按错误切换
 | 方法 | 路径 | 说明 |
 | ---- | ---- | ---- |
 | `GET` | `/admin/api/logs` | 查询请求日志 |
+| `GET` | `/admin/api/logs/sessions` | 按下游 Key 与 `session_id` 汇总最近 24 小时会话 |
+| `GET` | `/admin/api/logs/session` | 查询一个会话的完整时间线，必须传 `key_id`、`session_id` |
+| `GET` | `/admin/api/logs/{id}` | 查询单条日志及完整记录详情 |
+| `GET` | `/admin/api/logs/export` | 按相同过滤条件导出 NDJSON |
+| `POST` | `/admin/api/logs/{id}/replay` | 返回历史请求供管理面板预填重放 |
 | `GET` | `/admin/api/logs/key-stats` | 查询 Key 使用统计 |
 | `GET` | `/admin/api/models/whitelist` | 列出模型白名单 |
 | `POST` | `/admin/api/models/whitelist` | 添加模型白名单 |
@@ -217,3 +224,30 @@ DynamicProxy                    选择上游，重写认证头，按错误切换
 | `DELETE` | `/admin/api/test-models/{id}` | 删除测试模型 |
 | `GET` | `/admin/api/settings` | 获取运行时设置 |
 | `PUT` | `/admin/api/settings` | 更新运行时设置 |
+
+## 完整请求记录
+
+完整记录依赖 `configs/*.yml` 中的 `audit.enabled: true`。运行时设置示例：
+
+```bash
+curl -X PUT http://localhost:9002/admin/api/settings \
+  -H "Authorization: Bearer my-secret-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "full_recording_enabled": true,
+    "full_recording_all_keys": false,
+    "full_recording_key_ids": [1, 2]
+  }'
+```
+
+`full_recording_all_keys: true` 表示记录全部下游 Key，此时 `full_recording_key_ids` 会被清空。指定范围必须至少包含一个有效 Key；删除最后一个指定 Key 后范围保持“指定密钥且为空”，不会自动扩大到全部 Key。
+
+日志查询支持 `key_id`、`session_id`、`from`、`to`、`limit`、`full_only`、`status_code`、`model`、`path`。`from` / `to` 使用 RFC3339；普通列表默认最近 24 小时，带 `session_id` 且未传 `from` 时默认读取该会话的完整时间线。会话详情最多返回最近 5000 条记录，并通过 `truncated`、`limit` 明确表示是否截断。日志列表、会话列表、详情与导出响应均包含 `Cache-Control: no-store`。
+
+`GET /admin/api/logs/export` 最多导出最近 10000 条原始记录，响应头 `X-Export-Truncated` 表示是否达到上限，`X-Export-Record-Limit` 给出当前上限。管理页导出会话列表时使用 `session_limit`（1-1000）选择最近若干个会话，再导出这些会话内满足过滤条件的全部记录；该参数不是原始日志行数限制。
+
+会话标识按以下优先级归一化：客户端会话 Header（例如 Claude Code 的 `X-Claude-Code-Session-Id`、Codex 的 `Session-Id`）、请求体中的 `conversation` / `session_id` / `conversation_id`、客户端 metadata、`prompt_cache_key`、`Thread-Id`，最后才对首条用户消息生成稳定指纹。Responses 的 `previous_response_id` 会连接到已记录的父响应会话。
+
+协议本身的边界：Responses 支持 `conversation` 或 `previous_response_id` 管理状态；Chat Completions 需要客户端重复发送历史 `messages`，服务端接口本身是无状态的。因此没有显式会话字段、又不携带完整历史的请求无法可靠归并，只能显示为独立记录。参考 [OpenAI Conversation state](https://developers.openai.com/docs/guides/conversation-state)、[Responses API reference](https://platform.openai.com/docs/api-reference/responses/create) 和 [Claude Code session header issue](https://github.com/anthropics/claude-code/issues/40431)。
+
+安全与容量边界：常见凭据 Header 和查询参数（包括 `Auth` / `X-Auth`）会替换为 `[REDACTED]`，请求/响应正文不会做内容级脱敏；单侧正文上限为 32 MiB，超出部分标记 `request_body_truncated` / `response_body_truncated`。尚未落库的完整正文共享 64 MiB 内存预算，预算耗尽时会提前截断并标记；完整记录队列满时最多回压等待 1 秒，仍无法入队则释放已预留正文预算并累加审计丢弃计数，避免请求 goroutine 无界堆积。WebSocket 只记录握手 Header 和状态，不记录帧正文。SQLite 数据库、备份和 NDJSON 导出都应按敏感数据保护。
